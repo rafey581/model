@@ -13,12 +13,12 @@ import {
   TICK_DT,
   FOLLOW_IMPULSE,
   DRAW_IMPULSE,
-  SIDE_SPIN_IMPULSE
+  SIDE_SPIN_THROW_DEG
 } from '../constants.js'
 import type { BallState } from '../state.js'
-import type { SimEvent, SimShot, SimResult } from '../events.js'
+import type { SimEvent, SimShot, SimResult, SimKeyframe } from '../events.js'
 import type { Vec2 } from '../vec.js'
-import { sub, length, normalize, vec } from '../vec.js'
+import { sub, length, normalize, vec, clamp } from '../vec.js'
 import { reflectCushionX, reflectCushionY } from './collision.js'
 import { applyShot } from './cue.js'
 import { pocketPositions } from './layout.js'
@@ -26,7 +26,24 @@ import type { Pocket } from './layout.js'
 
 export interface SimOptions {
   maxTicks?: number
+  /**
+   * Sample ball positions for client-side playback. Off by default: the bot runs
+   * thousands of candidate simulations per shot and must not pay for the extra
+   * allocations.
+   */
+  playback?: SimPlaybackOptions
 }
+
+export interface SimPlaybackOptions {
+  /**
+   * Keyframes per second of simulated time. Sampling runs for the whole shot,
+   * so a keyframe is never skipped and the replay always reaches the final
+   * resting positions.
+   */
+  rate?: number
+}
+
+const DEFAULT_KEYFRAME_RATE = 30
 
 export function simulateStroke(initialBalls: BallState[], shot: SimShot, options: SimOptions = {}): SimResult {
   const balls = initialBalls.map(cloneBall)
@@ -37,9 +54,19 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
   applyShot(cue, shot)
 
   let firstContactId: number | null = null
+  let cueFirstContact = false
   let cuePotted = false
   const pockets = pocketPositions()
   let ticksUsed = 0
+  let settled = false
+  let simTime = 0
+
+  const keyframes: SimKeyframe[] | null = options.playback ? [] : null
+  const pots: Array<[number, number]> | null = options.playback ? [] : null
+  const sampleInterval = 1 / (options.playback?.rate ?? DEFAULT_KEYFRAME_RATE)
+  let nextSampleAt = 0
+  /** Balls potted during the current substep, mapped to their pocket centre. */
+  let justPotted: Array<[id: number, at: [number, number]]> = []
 
   for (let tick = 0; tick < maxTicks; tick++) {
     ticksUsed = tick + 1
@@ -51,7 +78,10 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
       if (speed > maxSpeed) maxSpeed = speed
       if (speed > 0) anyMoving = true
     }
-    if (!anyMoving) break
+    if (!anyMoving) {
+      settled = true
+      break
+    }
 
     const substeps = Math.max(1, Math.ceil((maxSpeed * TICK_DT) / (BALL_RADIUS * 0.25)))
     for (let step = 0; step < substeps; step++) {
@@ -66,21 +96,41 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
         for (let j = i + 1; j < balls.length; j++) {
           const b = balls[j]!
           if (b.potted) continue
+          const cue = a.isCue ? a : b.isCue ? b : null
+          const cueVelBefore = cue ? vec(cue.vel.x, cue.vel.y) : vec(0, 0)
           if (!resolveCollisionPair(a, b)) continue
           events.push({ type: 'BALL_HIT', tick, ballId: b.id, otherBallId: a.id })
-          if (firstContactId === null && (a.isCue || b.isCue)) {
-            firstContactId = a.isCue ? b.id : a.id
+          if (cue) {
+            const other = cue === a ? b : a
+            if (firstContactId === null) firstContactId = other.id
+            applySpinEffects(cue, other, !cueFirstContact, cueVelBefore)
+            cueFirstContact = true
           }
-          applySpinEffects(balls, i, j)
         }
       }
 
       for (const ball of balls) {
         if (ball.potted) continue
         reflectOffCushions(ball, events, tick)
-        checkPockets(ball, pockets, events, tick)
+        const pocket = checkPockets(ball, pockets, events, tick)
+        if (pocket) {
+          if (pots) pots.push([ball.id, round(simTime + TICK_DT, 3)])
+          justPotted.push([ball.id, [pocket.x, pocket.y]])
+        }
         if (ball.isCue && ball.potted) {
           cuePotted = true
+        }
+      }
+
+      simTime += TICK_DT
+      if (keyframes) {
+        const due = simTime >= nextSampleAt
+        // A pot always forces a sample: without one the ball would sit at the
+        // pocket lip until the replay ended and the snapshot took over.
+        if (due || justPotted.length) {
+          keyframes.push(captureKeyframe(balls, simTime, justPotted))
+          justPotted = []
+          nextSampleAt = simTime + (due ? sampleInterval : 0)
         }
       }
     }
@@ -99,9 +149,46 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
     firstContactId,
     cuePotted,
     pottedIds,
-    settled: true,
-    ticksUsed
+    settled,
+    ticksUsed,
+    // Same precision as the keyframe and pot timestamps. The client stops its
+    // clock at this value, so if it were rounded more finely a keyframe could
+    // land fractionally beyond the end of the replay and never be reached.
+    simSeconds: round(simTime, 3),
+    ...(keyframes ? { keyframes, pots: pots ?? [] } : {})
   }
+}
+
+/**
+ * Samples the balls that are still in motion. Rounding to whole millimetres
+ * costs nothing visually against a 26mm ball and roughly halves the JSON size.
+ * A ball that has come to rest keeps its last sampled position, which is within
+ * `MIN_SPEED` of its true resting place, so omitting it is safe.
+ *
+ * A ball potted in this substep is emitted at its pocket's centre rather than
+ * where it crossed the capture radius, so the replay shows it dropping in
+ * instead of stopping at the lip. The simulation state itself is left alone:
+ * this is presentation data, not a change to where the ball actually is.
+ */
+function captureKeyframe(balls: BallState[], t: number, justPotted: Array<[number, [number, number]]>): SimKeyframe {
+  const sampled: SimKeyframe['balls'] = []
+  const dropped = justPotted.length ? new Map(justPotted) : null
+  for (const ball of balls) {
+    const at = dropped?.get(ball.id)
+    if (at) {
+      sampled.push([ball.id, round(at[0]), round(at[1])])
+      continue
+    }
+    if (ball.potted) continue
+    if (ball.vel.x === 0 && ball.vel.y === 0) continue
+    sampled.push([ball.id, round(ball.pos.x), round(ball.pos.y)])
+  }
+  return { t: round(t, 3), balls: sampled }
+}
+
+function round(value: number, places = 0): number {
+  const f = 10 ** places
+  return Math.round(value * f) / f
 }
 
 function integrate(ball: BallState): void {
@@ -122,18 +209,15 @@ function integrate(ball: BallState): void {
   }
   const sx = ball.spin.x
   const sy = ball.spin.y
-  const spinMag = Math.sqrt(sx * sx + sy * sy)
-  if (spinMag > 0) {
-    const reduction = SPIN_FRICTION * TICK_DT
-    const nextSpin = spinMag - reduction
-    if (nextSpin <= 0) {
-      ball.spin.x = 0
-      ball.spin.y = 0
-    } else {
-      const f = nextSpin / spinMag
-      ball.spin.x = sx * f
-      ball.spin.y = sy * f
-    }
+  if (sx !== 0 || sy !== 0) {
+    // Spin bleeds off proportionally, not linearly. A linear ramp to zero means
+    // a shot that takes longer than (spin / SPIN_FRICTION) to reach its target
+    // cancels the spin outright, which leaves the bottom of the spin control
+    // range doing nothing at all. Proportional decay keeps the effect in
+    // proportion to the spin applied at every shot distance.
+    const retain = Math.max(0, 1 - SPIN_FRICTION * TICK_DT)
+    ball.spin.x = sx * retain
+    ball.spin.y = sy * retain
   }
   ball.pos.x += ball.vel.x * TICK_DT
   ball.pos.y += ball.vel.y * TICK_DT
@@ -172,7 +256,7 @@ function cushionDamping(ball: BallState): number {
   return Math.max(0.5, CUSHION_TANGENTIAL_DAMP + (1 - CUSHION_TANGENTIAL_DAMP) * (1 - side * 0.5))
 }
 
-function checkPockets(ball: BallState, pockets: Pocket[], events: SimEvent[], tick: number): void {
+function checkPockets(ball: BallState, pockets: Pocket[], events: SimEvent[], tick: number): Pocket | null {
   for (const pocket of pockets) {
     const dx = ball.pos.x - pocket.x
     const dy = ball.pos.y - pocket.y
@@ -187,9 +271,10 @@ function checkPockets(ball: BallState, pockets: Pocket[], events: SimEvent[], ti
         tick,
         ballId: ball.id
       })
-      return
+      return pocket
     }
   }
+  return null
 }
 
 function resolveCollisionPair(a: BallState, b: BallState): boolean {
@@ -220,27 +305,44 @@ function resolveCollisionPair(a: BallState, b: BallState): boolean {
   return true
 }
 
-function applySpinEffects(balls: BallState[], cueIndex: number, objectIndex: number): void {
-  const cue = balls[cueIndex]!
-  const object = balls[objectIndex]!
-  const direction = normalize(cue.vel)
-  const speed = length(cue.vel)
+/**
+ * Spin is only meaningful for the cue ball, so this is driven exclusively by
+ * collisions the cue ball takes part in.
+ *
+ * `cueVelBefore` is the cue ball's velocity immediately prior to the impulse,
+ * which is what follow and draw must scale against: after a full-ball hit the
+ * residual speed is a few percent of the launch speed, so scaling by it makes
+ * both effects unnoticeable. The kick is also applied along the *incoming* line
+ * of travel, because a stun shot leaves the cue ball with almost no direction
+ * of its own.
+ *
+ * `firstContact` gates the follow/draw kick: that vertical spin is transferred
+ * to the cloth at the moment of first contact and is spent, so it must not be
+ * re-applied on every later collision. Side spin (english) is a persistent
+ * property of the ball, so it keeps applying until it decays away.
+ */
+function applySpinEffects(cue: BallState, object: BallState, firstContact: boolean, cueVelBefore: Vec2): void {
+  const launchSpeed = length(cueVelBefore)
 
-  if (Math.abs(cue.spin.y) > 0.01 && speed > 0) {
+  if (firstContact && Math.abs(cue.spin.y) > 0.01 && launchSpeed > 0) {
+    const direction = normalize(cueVelBefore)
     const kick = cue.spin.y > 0
-      ? speed * cue.spin.y * FOLLOW_IMPULSE
-      : speed * cue.spin.y * DRAW_IMPULSE
-    cue.vel = { x: cue.vel.x + direction.x * kick, y: cue.vel.y + direction.y * kick }
+      ? launchSpeed * cue.spin.y * FOLLOW_IMPULSE
+      : launchSpeed * cue.spin.y * DRAW_IMPULSE
+    cue.vel = vec(cue.vel.x + direction.x * kick, cue.vel.y + direction.y * kick)
+    cue.spin = vec(cue.spin.x, 0)
   }
 
   if (Math.abs(cue.spin.x) > 0.01) {
     const contactNormal = normalize(sub(object.pos, cue.pos))
-    const perpendicular = vec(-contactNormal.y, contactNormal.x)
-    const nudge = cue.spin.x * SIDE_SPIN_IMPULSE * 0.3
-    object.vel = { x: object.vel.x + perpendicular.x * nudge * speed, y: object.vel.y + perpendicular.y * nudge * speed }
+    if (contactNormal.x === 0 && contactNormal.y === 0) return
+    const angle = (SIDE_SPIN_THROW_DEG * Math.PI / 180) * clamp(cue.spin.x, -1, 1)
+    const cos = Math.cos(angle)
+    const sin = Math.sin(angle)
+    const vx = object.vel.x
+    const vy = object.vel.y
+    object.vel = vec(vx * cos - vy * sin, vx * sin + vy * cos)
   }
-
-  cue.spin = vec(cue.spin.x * 0.5, cue.spin.y * 0.5)
 }
 
 function cloneBall(ball: BallState): BallState {

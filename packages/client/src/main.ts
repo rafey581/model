@@ -5,10 +5,12 @@ import { Scene3D } from './game/scene3d.js'
 import type { FrameSnapshotData } from './game/renderer.js'
 import { createCueController } from './game/input.js'
 import type { CueController } from './game/input.js'
-import type { ShotInput } from '@snooker/shared'
+import type { ShotInput, ShotPlayback } from '@snooker/shared'
 import { STAKE_TIERS } from '@snooker/shared'
 import type { Socket } from 'socket.io-client'
 import { playCushion, playFoul, playFrameEnd, playMatchEnd, playPot, setSoundMuted, isSoundMuted, unlockAudio } from './game/audio.js'
+import { ShotPlayer } from './game/playback.js'
+import type { PlaybackBall } from './game/playback.js'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 const toast = makeToast(document.body)
@@ -41,6 +43,10 @@ let frame: FrameSnapshotData | null = null
 let cueController: CueController | null = null
 let scene3d: Scene3D | null = null
 let myTurn = false
+/** Non-null while a streamed shot is replaying; drives what the table shows. */
+let shotPlayer: ShotPlayer | null = null
+/** Pots whose sound was deferred until the replay reached the drop. */
+let deferredPots: number[] = []
 let players: Array<{ id: string; userId: string; seat: number; user: { id: string; username: string } }> = []
 let matchFormat = 'BO3'
 let framesWon: [number, number] = [0, 0]
@@ -1307,7 +1313,7 @@ function renderGame(): void {
   const spinLabel = el('div', 'spin-label', 'Spin: 0.0 / 0.0')
 
   const bar = el('div', 'controls-bar')
-  bar.appendChild(el('div', 'muted', 'Aim: mouse or touch · Power: press & drag back · Spin: arrows · Shoot: release or Space'))
+  bar.appendChild(el('div', 'muted', 'Aim: mouse or touch · Power: press & hold to charge (or drag back) · Spin: arrows · Shoot: release or Space'))
   bar.appendChild(powerGroup)
   bar.appendChild(spinLabel)
   const soundBtn = el('button', 'ghost', isSoundMuted() ? 'Sound: off' : 'Sound: on')
@@ -1346,9 +1352,25 @@ function renderGame(): void {
   powerFill.style.width = '40%'
 }
 
-function handleGameUpdate(data: { frame: FrameSnapshotData; events?: Array<{ type: string; data: unknown }> }): void {
+interface GameUpdatePayload {
+  frame: FrameSnapshotData
+  events?: Array<{ type: string; data: unknown }>
+  playback?: ShotPlayback
+}
+
+function handleGameUpdate(data: GameUpdatePayload): void {
+  const previous = frame
   frame = data.frame
   myTurn = mySeat !== undefined && data.frame.turnIndex === mySeat
+
+  // A streamed shot replays from where the table was before the update landed,
+  // so the animation starts from the true pre-shot positions.
+  shotPlayer = null
+  deferredPots = []
+  if (data.playback && data.playback.keyframes.length && previous) {
+    shotPlayer = new ShotPlayer(data.playback, previous.balls as PlaybackBall[])
+  }
+
   const potted: number[] = []
   for (const ev of data.events ?? []) {
     if (ev.type === 'BALL_POTTED') {
@@ -1367,8 +1389,13 @@ function handleGameUpdate(data: { frame: FrameSnapshotData; events?: Array<{ typ
     }
   }
   if (potted.length) {
-    playPot(potted.length)
-    toast(`Potted: ${potted.map(ballName).join(', ')}`)
+    if (shotPlayer) {
+      // Hold the pot feedback until the replay actually drops the ball.
+      deferredPots = potted
+    } else {
+      playPot(potted.length)
+      toast(`Potted: ${potted.map(ballName).join(', ')}`)
+    }
   }
   updateHud()
 }
@@ -1396,6 +1423,9 @@ function handleSocketEvents(socket: Socket): void {
   socket.on('match:start', (data: { snapshot: FrameSnapshotData; frameIndex: number }) => {
     frameIndex = data.frameIndex
     frame = data.snapshot
+    // A new match replaces the table outright, so any replay in flight is void.
+    shotPlayer = null
+    deferredPots = []
     myTurn = mySeat !== undefined && data.snapshot.turnIndex === mySeat
     toast('Match started!')
     updateHud()
@@ -1405,9 +1435,7 @@ function handleSocketEvents(socket: Socket): void {
     handleGameUpdate({ frame: data.snapshot })
     toast(`Frame ${data.frameIndex} starting`)
   })
-  socket.on('game:update', (data: { frame: FrameSnapshotData; events?: Array<{ type: string; data: unknown }> }) =>
-    handleGameUpdate(data)
-  )
+  socket.on('game:update', (data: GameUpdatePayload) => handleGameUpdate(data))
   socket.on('match:end', (data: { winnerSeat: number; reason?: string; framesWon?: [number, number] }) => {
     if (data.framesWon) framesWon = data.framesWon
     if (activeMatchIsPractice) framesWon = [0, 0]
@@ -1479,13 +1507,16 @@ function loop(): void {
           applyCanvasSize()
         }
       }
-      const cue = frame.balls.find((b) => b.id === 0 && !b.potted)
+      // While a shot replays, the table shows sampled simulation positions; the
+      // authoritative snapshot above still drives the HUD and turn state.
+      const shown = stepShotPlayback(frame, fdt / 1000)
+      const cue = shown.balls.find((b) => b.id === 0 && !b.potted)
       if (cue) cueController?.setCuePosition(cue.x, cue.y)
       if (scene3d) {
-        scene3d.update(frame, { aim: cueController?.aim, youSeat: mySeat })
+        scene3d.update(shown, { aim: cueController?.aim, youSeat: mySeat, immediate: shotPlayer !== null })
         scene3d.render()
       } else {
-        drawTable(canvas, frame, { aim: cueController?.aim, youSeat: mySeat })
+        drawTable(canvas, shown, { aim: cueController?.aim, youSeat: mySeat, immediate: shotPlayer !== null })
       }
     }
   } catch (error) {
@@ -1497,6 +1528,36 @@ function loop(): void {
     reportFatalError(error)
   }
   requestAnimationFrame(loop)
+}
+
+/**
+ * Advances the replay clock and returns the snapshot to draw this frame.
+ */
+function stepShotPlayback(target: FrameSnapshotData, dtSeconds: number): FrameSnapshotData {
+  if (!shotPlayer) return target
+  const balls = shotPlayer.advance(dtSeconds)
+  if (deferredPots.length) {
+    const due = shotPlayer.takeDuePots()
+    if (due.length) {
+      const ids = deferredPots.filter((id) => due.includes(id))
+      if (ids.length) {
+        playPot(ids.length)
+        toast(`Potted: ${ids.map(ballName).join(', ')}`)
+      }
+      deferredPots = deferredPots.filter((id) => !due.includes(id))
+    }
+  }
+  if (shotPlayer.finished) {
+    // A pot whose timestamp never arrived would otherwise be silently dropped.
+    if (deferredPots.length) {
+      playPot(deferredPots.length)
+      toast(`Potted: ${deferredPots.map(ballName).join(', ')}`)
+    }
+    shotPlayer = null
+    deferredPots = []
+    return target
+  }
+  return { ...target, balls }
 }
 
 function reportFatalError(error: unknown): void {

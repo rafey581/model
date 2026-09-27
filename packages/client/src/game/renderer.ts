@@ -1,4 +1,5 @@
-import { TABLE_LENGTH, TABLE_WIDTH, BALL_RADIUS } from '@snooker/shared'
+import { TABLE_LENGTH, TABLE_WIDTH, BALL_RADIUS, pocketPositions } from '@snooker/shared'
+import { computeAimGuide, type AimGuide } from './aim.js'
 
 export interface DrawableBall {
   id: number
@@ -59,16 +60,15 @@ export function tableToCanvas(x: number, y: number): { x: number; y: number } {
 export interface RenderOptions {
   aim?: AimState
   youSeat?: number
+  /**
+   * Draw the given positions with no smoothing. Used while a streamed shot is
+   * playing back, where the positions are already sampled from the simulation
+   * and must not lag the replay clock.
+   */
+  immediate?: boolean
 }
 
-const POCKETS = [
-  { x: 0, y: 0 },
-  { x: TABLE_LENGTH / 2, y: 0 },
-  { x: TABLE_LENGTH, y: 0 },
-  { x: 0, y: TABLE_WIDTH },
-  { x: TABLE_LENGTH / 2, y: TABLE_WIDTH },
-  { x: TABLE_LENGTH, y: TABLE_WIDTH }
-]
+const POCKETS = pocketPositions()
 
 export function drawTable(
   canvas: HTMLCanvasElement,
@@ -121,7 +121,7 @@ export function drawTable(
   ctx.strokeRect(offsetX + 1.5, offsetY + 1.5, TABLE_LENGTH * scale - 3, TABLE_WIDTH * scale - 3)
 
   for (const pocket of POCKETS) {
-    drawPocket(ctx, offsetX + pocket.x * scale, offsetY + pocket.y * scale, scale)
+      drawPocket(ctx, offsetX + pocket.x * scale, offsetY + pocket.y * scale, scale, pocket.radius)
   }
 
   if (!snapshot) return
@@ -129,7 +129,7 @@ export function drawTable(
   const now = performance.now()
   const dt = lastInterpTime ? Math.min(0.1, (now - lastInterpTime) / 1000) : 0
   lastInterpTime = now
-  const k = dt ? 1 - Math.exp(-dt * 14) : 1
+  const k = options.immediate ? 1 : dt ? 1 - Math.exp(-dt * 14) : 1
 
   const highlightBallId = resolveHighlight(snapshot)
   const alive = new Set<number>()
@@ -160,7 +160,10 @@ export function drawTable(
       const interp = interpPos.get(0)
       const cx = interp ? interp.x : cueBall.x
       const cy = interp ? interp.y : cueBall.y
-      drawAim(ctx, offsetX + cx * scale, offsetY + cy * scale, scale, options.aim)
+      // Aimed from the cue ball's drawn position, so the guide tracks the ball
+      // while it is still settling rather than jumping to the snapshot.
+      const guide = computeAimGuide({ x: cx, y: cy, id: 0 }, options.aim.angle, snapshot.balls)
+      drawAim(ctx, offsetX + cx * scale, offsetY + cy * scale, offsetX, offsetY, scale, options.aim, guide)
     }
   }
 
@@ -224,11 +227,10 @@ function ballOnLabel(ballOn: string): string {
   return 'Ball on: colour'
 }
 
-function drawPocket(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number): void {
-  const r = 5.2 * BALL_RADIUS * scale * 0.28
+function drawPocket(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number, radius: number): void {
   ctx.fillStyle = '#0b0b0b'
   ctx.beginPath()
-  ctx.arc(x, y, Math.max(r, 4), 0, Math.PI * 2)
+  ctx.arc(x, y, Math.max(radius * scale, 4), 0, Math.PI * 2)
   ctx.fill()
 }
 
@@ -259,10 +261,28 @@ function drawBall(
   ctx.fill()
 }
 
-function drawAim(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number, aim: AimState): void {
-  const length = (40 + aim.power * 150) * scale * 0.018
-  const endX = x + Math.cos(aim.angle) * length
-  const endY = y + Math.sin(aim.angle) * length
+/**
+ * Draws the aim: a dotted line out of the cue ball that stops exactly where the
+ * cue ball would touch a ball, with a ring marking that contact point. When the
+ * line meets nothing, a short marker shows the direction instead.
+ */
+function drawAim(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  offsetX: number,
+  offsetY: number,
+  scale: number,
+  aim: AimState,
+  guide: AimGuide | null
+): void {
+  const fallback = (40 + aim.power * 150) * scale * 0.018
+  // With a ball in the way the line runs out to the exact point the cue ball
+  // touches it. On an open table it falls back to a power-scaled stub so the
+  // direction of the shot is still readable.
+  const endX = guide ? x + guide.contact.x * scale : x + Math.cos(aim.angle) * fallback
+  const endY = guide ? y + guide.contact.y * scale : y + Math.sin(aim.angle) * fallback
+
   ctx.strokeStyle = `rgba(255,255,255,${0.45 + aim.power * 0.35})`
   ctx.lineWidth = 2
   ctx.setLineDash([6, 6])
@@ -271,19 +291,20 @@ function drawAim(ctx: CanvasRenderingContext2D, x: number, y: number, scale: num
   ctx.lineTo(endX, endY)
   ctx.stroke()
   ctx.setLineDash([])
-  const glowR = 5 * scale * 0.5 * (0.8 + aim.power * 0.9)
-  const glow = ctx.createRadialGradient(endX, endY, 1, endX, endY, glowR * 2.2)
-  glow.addColorStop(0, 'rgba(255,215,120,0.55)')
-  glow.addColorStop(1, 'rgba(255,215,120,0)')
-  ctx.fillStyle = glow
-  ctx.beginPath()
-  ctx.arc(endX, endY, glowR * 2.2, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.strokeStyle = 'rgba(255,255,255,0.55)'
-  ctx.lineWidth = 1.5
-  ctx.beginPath()
-  ctx.arc(endX, endY, glowR, 0, Math.PI * 2)
-  ctx.stroke()
+
+  if (guide) {
+    drawContactMarker(ctx, offsetX, offsetY, scale, guide)
+  } else {
+    const glowR = 5 * scale * 0.5 * (0.8 + aim.power * 0.9)
+    const glow = ctx.createRadialGradient(endX, endY, 1, endX, endY, glowR * 2.2)
+    glow.addColorStop(0, 'rgba(255,215,120,0.55)')
+    glow.addColorStop(1, 'rgba(255,215,120,0)')
+    ctx.fillStyle = glow
+    ctx.beginPath()
+    ctx.arc(endX, endY, glowR * 2.2, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
   const spinX = aim.spinX ?? 0
   const spinY = aim.spinY ?? 0
   const spinMag = Math.hypot(spinX, spinY)
@@ -300,4 +321,48 @@ function drawAim(ctx: CanvasRenderingContext2D, x: number, y: number, scale: num
     ctx.lineTo(sx, sy)
     ctx.stroke()
   }
+}
+
+/**
+ * Marks the spot on the target ball that the cue ball is lined up to touch: a
+ * filled dot for the contact itself, a short tick along the line of centres to
+ * show which way the object ball will leave, and a ring around the whole ball to
+ * make it obvious which ball is being aimed at.
+ */
+function drawContactMarker(
+  ctx: CanvasRenderingContext2D,
+  offsetX: number,
+  offsetY: number,
+  scale: number,
+  guide: AimGuide
+): void {
+  // The guide works in table millimetres, so everything is offset from the table
+  // origin rather than from the cue ball.
+  const cx = offsetX + guide.contact.x * scale
+  const cy = offsetY + guide.contact.y * scale
+  // The contact point sits on the target's surface, so the target's own centre is
+  // one radius further along the line of centres.
+  const ballX = cx + guide.lineOfCentres.x * BALL_RADIUS * scale
+  const ballY = cy + guide.lineOfCentres.y * BALL_RADIUS * scale
+  const ringR = BALL_RADIUS * scale
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'
+  ctx.lineWidth = 1.5
+  ctx.beginPath()
+  ctx.arc(ballX, ballY, ringR, 0, Math.PI * 2)
+  ctx.stroke()
+
+  // A short spur off the contact point, pointing down the line of centres.
+  const spur = 22 * scale * 0.5
+  ctx.strokeStyle = 'rgba(255,215,120,0.8)'
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.moveTo(cx, cy)
+  ctx.lineTo(cx + guide.lineOfCentres.x * spur, cy + guide.lineOfCentres.y * spur)
+  ctx.stroke()
+
+  ctx.fillStyle = 'rgba(255,215,120,0.95)'
+  ctx.beginPath()
+  ctx.arc(cx, cy, 3.5 * scale * 0.5, 0, Math.PI * 2)
+  ctx.fill()
 }

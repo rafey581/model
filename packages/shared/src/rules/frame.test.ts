@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { BALL_IDS, COLOR_ORDER, COLOR_VALUES, TOTAL_REDS } from '../constants.js'
+import { BALL_IDS, COLOR_ORDER, COLOR_VALUES, TOTAL_REDS, BALL_RADIUS } from '../constants.js'
 import { colourSpotPosition, cueStartPosition } from '../physics/layout.js'
+import { vec } from '../vec.js'
 import type { FrameState } from '../state.js'
-import { applyFrameWinner, applyStroke, createFrame, createMatch, framesToWin, matchWinnerIndex, maybeEndFrame } from './frame.js'
+import { applyFrameWinner, applyStroke, createFrame, createMatch, frameSnapshot, framesToWin, matchWinnerIndex, maybeEndFrame } from './frame.js'
 import { applyResolution, isRedId, resolveStroke, respotBall, applyTimeoutFoul } from './snooker.js'
 
 function stroke(frame: FrameState, shooterIndex: number, pottedIds: number[], cuePotted: boolean, firstContactId: number | null): { frameEnded: boolean; frameWinner: number | null } {
@@ -285,6 +286,78 @@ describe('match progression', () => {
     expect(matchWinnerIndex(m)).toBe(-1)
     applyFrameWinner(m, 0)
     expect(matchWinnerIndex(m)).toBe(0)
+  })
+})
+
+describe('shot playback', () => {
+  /**
+   * The invariant the client depends on: a replay must finish on the table the
+   * rules actually settled on. The rules move balls after the simulation ends
+   * (respotting a colour potted out of turn, an in-off cue ball, a re-racked
+   * black), and any move the last keyframe does not show becomes a visible snap
+   * across the table on the final frame.
+   */
+  function expectReplayEndsOnFrameState(frame: FrameState, sim: { keyframes?: Array<{ t: number; balls: Array<[number, number, number]> }> }, label: string): void {
+    const keyframes = sim.keyframes!
+    const last = keyframes[keyframes.length - 1]!
+    for (const ball of frameSnapshot(frame).balls) {
+      if (ball.potted) continue
+      const sample = last.balls.find(([id]) => id === ball.id)
+      expect(sample, `${label}: ball ${ball.id} missing from the final keyframe`).toBeDefined()
+      // Positions are rounded to whole millimetres, so allow a rounding diagonal.
+      expect(Math.hypot(sample![1] - ball.x, sample![2] - ball.y), `${label}: ball ${ball.id} off`).toBeLessThan(1.5)
+    }
+  }
+
+  it('ends a replay on the settled state across a sweep of real shots', () => {
+    for (let i = 0; i < 60; i++) {
+      const frame = createFrame(0)
+      const outcome = applyStroke(
+        frame,
+        0,
+        {
+          aimAngle: (i / 60) * Math.PI * 2,
+          power: 0.25 + (i % 6) * 0.13,
+          spin: { x: (i % 3) - 1, y: (i % 5) - 2 }
+        },
+        { playback: { rate: 30 } }
+      )
+      expectReplayEndsOnFrameState(frame, outcome.sim, `sweep ${i}`)
+    }
+  })
+
+  it('shows the cue ball going in hand rather than leaving it in the pocket', () => {
+    // The in-off case: the sim drops the cue ball, the rules then put it back.
+    const frame = createFrame(0)
+    frame.balls = frame.balls.filter((b) => b.isCue)
+    frame.balls[0]!.pos = vec(400, 400)
+    frame.balls[0]!.vel = vec(0, 0)
+    frame.cueInHand = false
+    frame.ballOn = 'RED'
+
+    const outcome = applyStroke(
+      frame,
+      0,
+      { aimAngle: Math.atan2(-400, -400), power: 0.15, spin: { x: 0, y: 0 } },
+      { playback: { rate: 30 } }
+    )
+    expect(outcome.sim.cuePotted).toBe(true)
+    expect(frame.cueInHand).toBe(true)
+
+    const cue = frameSnapshot(frame).balls.find((b) => b.id === BALL_IDS.CUE)!
+    expect(cue.potted, 'the cue ball must be back in play').toBe(false)
+    expectReplayEndsOnFrameState(frame, outcome.sim, 'in-off')
+
+    const last = outcome.sim.keyframes![outcome.sim.keyframes!.length - 1]!
+    const sample = last.balls.find(([id]) => id === BALL_IDS.CUE)!
+    // The pocket is nowhere near where the cue ball is put back in hand.
+    expect(Math.hypot(sample[1], sample[2])).toBeGreaterThan(BALL_RADIUS * 4)
+  })
+
+  it('does not sample a frame when playback was not requested', () => {
+    const frame = createFrame(0)
+    const outcome = applyStroke(frame, 0, { aimAngle: 0.2, power: 0.5, spin: { x: 0, y: 0 } })
+    expect(outcome.sim.keyframes).toBeUndefined()
   })
 })
 

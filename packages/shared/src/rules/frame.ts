@@ -1,7 +1,8 @@
 import { BALL_IDS, BAULK_LINE_X, COLOR_ORDER, COLOR_VALUES, D_RADIUS, TABLE_WIDTH, TOTAL_REDS } from '../constants.js'
 import { layoutTableBalls } from '../physics/layout.js'
 import { simulateStroke } from '../physics/world.js'
-import type { SimResult, SimShot } from '../events.js'
+import type { SimOptions } from '../physics/world.js'
+import type { SimKeyframe, SimResult, SimShot } from '../events.js'
 import { buildInitialBalls, type FrameState, type MatchState } from '../state.js'
 import { vec } from '../vec.js'
 import { applyResolution, resolveStroke, respotBall, lowestRemainingColour, isColourId, isRedId } from './snooker.js'
@@ -31,9 +32,14 @@ export interface StrokeOutcome {
   pottedRedsCount: number
 }
 
-export function applyStroke(frame: FrameState, shooterIndex: number, shot: SimShot & { cuePos?: { x: number; y: number } }): StrokeOutcome {
+export function applyStroke(
+  frame: FrameState,
+  shooterIndex: number,
+  shot: SimShot & { cuePos?: { x: number; y: number } },
+  simOptions: SimOptions = {}
+): StrokeOutcome {
   placeCueIfInHand(frame, shot)
-  const sim = simulateStroke(frame.balls, shot)
+  const sim = simulateStroke(frame.balls, shot, simOptions)
   frame.balls = sim.balls
   const redsBefore = frame.remainingReds
   const pottedRedsCount = sim.pottedIds.filter((id) => isRedId(id)).length
@@ -48,7 +54,47 @@ export function applyStroke(frame: FrameState, shooterIndex: number, shot: SimSh
   if (sim.cuePotted) respotBall(frame, BALL_IDS.CUE)
   frame.cueInHand = sim.cuePotted
   const end = maybeEndFrame(frame)
+  alignPlaybackWithFrame(sim, frame)
   return { resolution, sim, frameEnded: end.frameEnded, frameWinner: end.frameWinner, pottedRedsCount }
+}
+
+/**
+ * Anchors the replay to the real end state.
+ *
+ * Keyframes are sampled while the simulation runs, but the rules layer then
+ * moves balls around afterwards: a colour potted out of turn is respotted, a
+ * potted cue ball goes back in hand, and a tied final black is re-racked. Any of
+ * those relocations happen after sampling, so the last keyframe describes a
+ * table position the game is no longer in, and the client snaps the ball across
+ * the table on the final frame.
+ *
+ * Appending the authoritative positions as one final keyframe makes the replay
+ * finish exactly on the state the rules settled on, whatever moved. It costs one
+ * small keyframe per shot and keeps the invariant local to the code that can
+ * break it.
+ */
+function alignPlaybackWithFrame(sim: SimResult, frame: FrameState): void {
+  const keyframes = sim.keyframes
+  if (!keyframes || keyframes.length === 0) return
+
+  const settled: SimKeyframe['balls'] = []
+  for (const ball of frame.balls) {
+    if (ball.potted) continue
+    settled.push([ball.id, Math.round(ball.pos.x), Math.round(ball.pos.y)])
+  }
+
+  const last = keyframes[keyframes.length - 1]!
+  if (sim.simSeconds > last.t) {
+    keyframes.push({ t: sim.simSeconds, balls: settled })
+    return
+  }
+  // The shot ended on its own final sample, so fold these into it rather than
+  // emitting two keyframes with the same timestamp.
+  for (const [id, x, y] of settled) {
+    const at = last.balls.findIndex(([ballId]) => ballId === id)
+    if (at >= 0) last.balls[at] = [id, x, y]
+    else last.balls.push([id, x, y])
+  }
 }
 
 function placeCueIfInHand(frame: FrameState, shot: { cuePos?: { x: number; y: number } }): void {

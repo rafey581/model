@@ -1,0 +1,98 @@
+import { BALL_RADIUS } from '@snooker/shared'
+
+/**
+ * Where the cue ball is aiming, and what it will meet.
+ *
+ * This is a drawing aid only. It answers the question a player actually has
+ * before a shot -- "am I going to clip that ball, and where?" -- and shares no
+ * code with the simulation, so it can never change how a shot is played out.
+ */
+export interface AimGuide {
+  /** The ball the cue ball will touch first. */
+  targetId: number
+  /** How far the cue ball's centre travels before the contact, in millimetres. */
+  travel: number
+  /** Where the cue ball's centre sits at the moment of contact. */
+  ghost: { x: number; y: number }
+  /**
+   * The point on the target ball's surface where the two balls touch. This is
+   * the line of centres pulled back by one ball radius, and it is where the
+   * guide should stop and the contact marker belong.
+   */
+  contact: { x: number; y: number }
+  /**
+   * The line of centres, pointing the way the target ball leaves. Kept separate
+   * from the aim line because on a cut the two are visibly different directions.
+   */
+  lineOfCentres: { x: number; y: number }
+}
+
+export interface AimGuideBall {
+  id: number
+  x: number
+  y: number
+  potted: boolean
+}
+
+/**
+ * Works out what the cue ball is lined up on.
+ *
+ * A contact happens when the two centres are one diameter apart, so the cue ball
+ * is treated as a point travelling along the aim line and the target as a circle
+ * of that diameter. Solving that ray/circle intersection gives the exact distance
+ * to the contact, which is what makes the guide land on the ball rather than
+ * stopping short of it or running past it.
+ *
+ * Returns null when the aim line touches nothing, so callers can fall back to a
+ * plain direction indicator.
+ */
+export function computeAimGuide(
+  cue: { x: number; y: number; id?: number },
+  angle: number,
+  balls: AimGuideBall[],
+  radius: number = BALL_RADIUS
+): AimGuide | null {
+  const dirX = Math.cos(angle)
+  const dirY = Math.sin(angle)
+  const contact2 = (radius * 2) * (radius * 2)
+  const cueId = cue.id ?? 0
+
+  let best: AimGuide | null = null
+
+  for (const ball of balls) {
+    if (ball.potted || ball.id === cueId) continue
+
+    // Centre of the target relative to the cue ball.
+    const mx = ball.x - cue.x
+    const my = ball.y - cue.y
+    const along = mx * dirX + my * dirY
+    // Already past the point of contact, or the line of centres points backwards.
+    if (along <= 0) continue
+
+    const perpendicularSq = mx * mx + my * my - along * along
+    // The aim line has to pass within one diameter of the centre to make contact.
+    if (perpendicularSq >= contact2) continue
+
+    const half = Math.sqrt(contact2 - perpendicularSq)
+    const travel = along - half
+    if (travel <= 0) continue
+    if (best && travel >= best.travel) continue
+
+    const ghostX = cue.x + dirX * travel
+    const ghostY = cue.y + dirY * travel
+    // The line of centres runs from the cue ball to the target at contact.
+    const nx = ball.x - ghostX
+    const ny = ball.y - ghostY
+    const length = Math.hypot(nx, ny) || 1
+
+    best = {
+      targetId: ball.id,
+      travel,
+      ghost: { x: ghostX, y: ghostY },
+      contact: { x: ball.x - (nx / length) * radius, y: ball.y - (ny / length) * radius },
+      lineOfCentres: { x: nx / length, y: ny / length }
+    }
+  }
+
+  return best
+}

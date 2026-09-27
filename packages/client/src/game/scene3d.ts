@@ -1,11 +1,11 @@
 import * as THREE from 'three'
-import { TABLE_LENGTH, TABLE_WIDTH, BALL_RADIUS, BAULK_LINE_X, D_RADIUS, BALL_DIAMETER } from '@snooker/shared'
+import { TABLE_LENGTH, TABLE_WIDTH, BALL_RADIUS, BAULK_LINE_X, D_RADIUS, POCKET_RADIUS_CORNER, POCKET_RADIUS_MIDDLE, pocketPositions } from '@snooker/shared'
 import type { FrameSnapshotData, AimState, RenderOptions } from './renderer.js'
+import { computeAimGuide, type AimGuide, type AimGuideBall } from './aim.js'
 import { setTableTransform } from './renderer.js'
 
 const HALF_L = TABLE_LENGTH / 2
 const HALF_W = TABLE_WIDTH / 2
-const POCKET_R = BALL_DIAMETER * 0.68
 const CUSHION_H = 12
 const STICK_LEN = 1500
 const tableX = (x: number): number => x - HALF_L
@@ -32,14 +32,7 @@ function cachedTexture(key: string, make: () => THREE.CanvasTexture): THREE.Canv
   }
   return tex
 }
-const POCKETS = [
-  { x: 0, y: 0 },
-  { x: TABLE_LENGTH / 2, y: 0 },
-  { x: TABLE_LENGTH, y: 0 },
-  { x: 0, y: TABLE_WIDTH },
-  { x: TABLE_LENGTH / 2, y: TABLE_WIDTH },
-  { x: TABLE_LENGTH, y: TABLE_WIDTH }
-]
+const POCKETS = pocketPositions()
 
 function feltTexture(): THREE.CanvasTexture {
   return cachedTexture('felt', () => {
@@ -269,9 +262,13 @@ export class Scene3D {
   private aimLine!: THREE.Line
   private aimDot!: THREE.Mesh
   private aimGlow!: THREE.Mesh
+  private contactRing!: THREE.Mesh
+  private contactDot!: THREE.Mesh
+  private contactLine!: THREE.Line
   private spinLine!: THREE.Line
   private stick!: THREE.Group
   private lastTime = 0
+  private immediate = false
 
   static create(canvas: HTMLCanvasElement, width: number, height: number): Scene3D | null {
     try {
@@ -384,10 +381,11 @@ export class Scene3D {
 
     const cushionMat = new THREE.MeshStandardMaterial({ color: 0x0a5a33, roughness: 0.55, side: THREE.DoubleSide })
     const noseMat = new THREE.MeshStandardMaterial({ color: 0x1b8a55, roughness: 0.5, side: THREE.DoubleSide })
-    const gapHalf = POCKET_R
+    const gapHalf = POCKET_RADIUS_CORNER
+    const midGapHalf = POCKET_RADIUS_MIDDLE
     const longSegments: Array<[number, number]> = [
-      [-HALF_L + gapHalf, -gapHalf],
-      [gapHalf, HALF_L - gapHalf]
+      [-HALF_L + gapHalf, -midGapHalf],
+      [midGapHalf, HALF_L - gapHalf]
     ]
     const addBox = (width: number, depth: number, x: number, z: number): void => {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, CUSHION_H, depth), cushionMat)
@@ -422,23 +420,33 @@ export class Scene3D {
     addNoseShort(shortLen, HALF_L)
 
     const pocketMat = new THREE.MeshStandardMaterial({ color: 0x04060a, roughness: 0.4, side: THREE.DoubleSide })
-    const discGeo = new THREE.CircleGeometry(POCKET_R, 28)
-    const holeGeo = new THREE.CylinderGeometry(POCKET_R * 0.7, POCKET_R * 0.92, 80, 24, 1, true)
     const rimMat = new THREE.MeshStandardMaterial({ color: 0xd8b15c, roughness: 0.3, metalness: 0.8 })
-    const rimGeo = new THREE.TorusGeometry(POCKET_R + 4, 3.2, 12, 32)
+    const pocketGeo = new Map<number, { disc: THREE.BufferGeometry; hole: THREE.BufferGeometry; rim: THREE.BufferGeometry }>()
+    const geoFor = (radius: number) => {
+      const cached = pocketGeo.get(radius)
+      if (cached) return cached
+      const made = {
+        disc: new THREE.CircleGeometry(radius, 28),
+        hole: new THREE.CylinderGeometry(radius * 0.7, radius * 0.92, 80, 24, 1, true),
+        rim: new THREE.TorusGeometry(radius + 4, 3.2, 12, 32)
+      }
+      pocketGeo.set(radius, made)
+      return made
+    }
     for (const p of POCKETS) {
       const x = tableX(p.x)
       const z = tableZ(p.y)
-      const disc = new THREE.Mesh(discGeo, pocketMat)
+      const geo = geoFor(p.radius)
+      const disc = new THREE.Mesh(geo.disc, pocketMat)
       disc.rotation.x = -Math.PI / 2
       disc.position.set(x, CUSHION_H + 1.2, z)
       disc.renderOrder = 5
       this.scene.add(disc)
-      const hole = new THREE.Mesh(holeGeo, pocketMat)
+      const hole = new THREE.Mesh(geo.hole, pocketMat)
       hole.position.set(x, CUSHION_H + 1.2 - 40, z)
       hole.renderOrder = 5
       this.scene.add(hole)
-      const rim = new THREE.Mesh(rimGeo, rimMat)
+      const rim = new THREE.Mesh(geo.rim, rimMat)
       rim.rotation.x = -Math.PI / 2
       rim.position.set(x, CUSHION_H + 2.2, z)
       this.scene.add(rim)
@@ -500,6 +508,31 @@ export class Scene3D {
     this.aimDot.visible = false
     this.scene.add(this.aimDot)
 
+    // Marks the exact spot the cue ball is lined up to touch on the target ball.
+    this.contactRing = new THREE.Mesh(
+      new THREE.RingGeometry(BALL_RADIUS * 0.72, BALL_RADIUS * 1.05, 32),
+      new THREE.MeshBasicMaterial({ color: 0xffd76a, transparent: true, opacity: 0.85, side: THREE.DoubleSide })
+    )
+    this.contactRing.rotation.x = -Math.PI / 2
+    this.contactRing.visible = false
+    this.scene.add(this.contactRing)
+
+    this.contactDot = new THREE.Mesh(
+      new THREE.CircleGeometry(BALL_RADIUS * 0.3, 20),
+      new THREE.MeshBasicMaterial({ color: 0xfff3d0, transparent: true, opacity: 0.95 })
+    )
+    this.contactDot.rotation.x = -Math.PI / 2
+    this.contactDot.visible = false
+    this.scene.add(this.contactDot)
+
+    this.contactLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+      new THREE.LineBasicMaterial({ color: 0xffd76a, transparent: true, opacity: 0.8 })
+    )
+    this.contactLine.visible = false
+    this.contactLine.frustumCulled = false
+    this.scene.add(this.contactLine)
+
     this.aimGlow = new THREE.Mesh(
       new THREE.PlaneGeometry(90, 90),
       new THREE.MeshBasicMaterial({ map: glowTexture(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
@@ -538,6 +571,7 @@ export class Scene3D {
   }
 
   update(snapshot: FrameSnapshotData | null, options: RenderOptions = {}): void {
+    this.immediate = options.immediate === true
     if (!snapshot) {
       for (const rig of this.balls.values()) rig.setVisible(false)
       this.hideAim()
@@ -589,7 +623,7 @@ export class Scene3D {
     const cueBall = snapshot.balls.find((b) => b.id === 0 && !b.potted)
     const myTurn = options.youSeat !== undefined && snapshot.turnIndex === options.youSeat
     if (cueBall && options.aim && myTurn) {
-      this.showAim(cueBall, options.aim)
+      this.showAim(cueBall, options.aim, snapshot.balls)
     } else {
       this.hideAim()
     }
@@ -601,13 +635,21 @@ export class Scene3D {
     return match ? Number(match[1]) : null
   }
 
-  private showAim(cueBall: { x: number; y: number }, aim: AimState): void {
+  private showAim(cueBall: { x: number; y: number }, aim: AimState, balls: AimGuideBall[]): void {
     const cx = tableX(cueBall.x)
     const cz = tableZ(cueBall.y)
     const dir = { x: Math.cos(aim.angle), z: Math.sin(aim.angle) }
-    const length = 160 + aim.power * 340
-    const ex = cx + dir.x * length
-    const ez = cz + dir.z * length
+
+    // The guide runs out to the exact point the cue ball would touch a ball; on
+    // an open table it falls back to a power-scaled stub so the line still reads.
+    const guide = computeAimGuide({ ...cueBall, id: 0 }, aim.angle, balls)
+    const length = guide ? Math.hypot(guide.contact.x - cueBall.x, guide.contact.y - cueBall.y) : 160 + aim.power * 340
+    const aimAtBall = guide !== null
+    // The line is drawn to the contact point, so its tip and the contact marker
+    // are the same spot rather than a ball's width apart.
+    const lineAngle = guide ? Math.atan2(guide.contact.y - cueBall.y, guide.contact.x - cueBall.x) : aim.angle
+    const ex = cx + Math.cos(lineAngle) * length
+    const ez = cz + Math.sin(lineAngle) * length
 
     this.setLine(this.aimLine, cx, 1.6, cz, ex, 1.6, ez)
     this.aimLine.computeLineDistances()
@@ -615,11 +657,18 @@ export class Scene3D {
     lineMat.opacity = 0.4 + aim.power * 0.5
 
     this.aimDot.position.set(ex, 2.4, ez)
-    this.aimDot.visible = true
+    this.aimDot.visible = !aimAtBall
     this.aimGlow.position.set(ex, 2.2, ez)
-    this.aimGlow.visible = true
+    this.aimGlow.visible = !aimAtBall
     const glowScale = 0.7 + aim.power * 1.1
     this.aimGlow.scale.set(glowScale, glowScale, 1)
+
+    if (guide) {
+      this.showContactMarker(guide)
+    } else {
+      this.contactRing.visible = false
+      this.contactDot.visible = false
+    }
 
     const spinX = aim.spinX ?? 0
     const spinY = aim.spinY ?? 0
@@ -640,6 +689,34 @@ export class Scene3D {
     this.stick.quaternion.setFromUnitVectors(up, target)
   }
 
+  /**
+   * Rings the target ball and drops a bright dot on the exact point the cue ball
+   * is lined up to touch, with a short spur showing which way it will leave.
+   */
+  private showContactMarker(guide: AimGuide): void {
+    // The contact point is on the target's surface, so the target's centre is one
+    // radius further along the line of centres. The ring goes round that ball.
+    const targetX = guide.contact.x + guide.lineOfCentres.x * BALL_RADIUS
+    const targetY = guide.contact.y + guide.lineOfCentres.y * BALL_RADIUS
+    this.contactRing.position.set(tableX(targetX), 1.2, tableZ(targetY))
+    this.contactRing.visible = true
+
+    this.contactDot.position.set(tableX(guide.contact.x), 1.4, tableZ(guide.contact.y))
+    this.contactDot.visible = true
+
+    // A short spur off the contact point, pointing down the line of centres, so
+    // the direction the object ball will travel is readable on a cut.
+    this.setLine(
+      this.contactLine,
+      tableX(guide.contact.x),
+      1.5,
+      tableZ(guide.contact.y),
+      tableX(guide.contact.x + guide.lineOfCentres.x * 30),
+      1.5,
+      tableZ(guide.contact.y + guide.lineOfCentres.y * 30)
+    )
+  }
+
   private setLine(line: THREE.Line, ax: number, ay: number, az: number, bx: number, by: number, bz: number): void {
     const attr = line.geometry.getAttribute('position') as THREE.BufferAttribute
     attr.setXYZ(0, ax, ay, az)
@@ -654,6 +731,9 @@ export class Scene3D {
     this.aimDot.visible = false
     this.aimGlow.visible = false
     this.spinLine.visible = false
+    this.contactRing.visible = false
+    this.contactDot.visible = false
+    this.contactLine.visible = false
     if (this.stick) this.stick.visible = false
   }
 
@@ -670,7 +750,9 @@ export class Scene3D {
     const dt = Math.min(0.05, (now - this.lastTime) / 1000)
     this.lastTime = now
     if (dt > 0) {
-      const k = 1 - Math.exp(-dt * 14)
+      // A streamed shot hands over positions that are already sampled from the
+      // simulation, so they are applied as-is instead of being smoothed again.
+      const k = this.immediate ? 1 : 1 - Math.exp(-dt * 14)
       for (const rig of this.balls.values()) {
         if (rig.group.visible && !rig.sinking) rig.group.position.lerp(rig.target, k)
       }

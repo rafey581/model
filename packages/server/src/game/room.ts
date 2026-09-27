@@ -11,10 +11,17 @@ import {
   frameSnapshot,
   seededRandom
 } from '@snooker/shared'
-import type { MatchState, FrameState, ShotInput } from '@snooker/shared'
+import type { MatchState, FrameState, ShotInput, ShotPlayback } from '@snooker/shared'
 import type { PracticeAiLevel } from '@snooker/shared'
 import { computeBotShot } from '../bot/bot.js'
 import { config } from '../config.js'
+
+/**
+ * Keyframes sent per second of simulated shot time. 30 keeps ball motion smooth
+ * at full-power break speed; a full-rack break comes to roughly 56KB of JSON
+ * (about 18KB gzipped) sent once per shot.
+ */
+const SHOT_KEYFRAME_RATE = 30
 
 export interface GameUpdateEvent {
   matchId: string
@@ -224,7 +231,7 @@ export class GameRoom {
         timestamp: 0,
         cuePos: shot.cuePos ?? undefined
       }
-      const outcome = applyStroke(frame, seat, normalized)
+      const outcome = applyStroke(frame, seat, normalized, { playback: { rate: SHOT_KEYFRAME_RATE } })
       const shotEvent = this.event('SHOT', { byIndex: seat, shot: normalized })
       const events: GameUpdateEvent[] = []
       for (const id of outcome.sim.pottedIds) {
@@ -236,32 +243,47 @@ export class GameRoom {
       if (outcome.resolution.turnSwitches) {
         events.push(this.event('TURN_CHANGE', { turnSeat: frame.turnIndex }))
       }
-      this.commit(events, frame, outcome.frameEnded, outcome.frameWinner, [shotEvent])
+      const playback: ShotPlayback | undefined = outcome.sim.keyframes?.length
+        ? {
+            duration: outcome.sim.simSeconds,
+            keyframes: outcome.sim.keyframes,
+            pots: outcome.sim.pots ?? []
+          }
+        : undefined
+      this.commit(events, frame, outcome.frameEnded, outcome.frameWinner, [shotEvent], playback)
       return { accepted: true }
     } finally {
       this.simulating = false
     }
   }
 
-  private commit(events: GameUpdateEvent[], frame: FrameState, frameEnded: boolean, frameWinner: number | null, persistOnly: GameUpdateEvent[] = []): void {
+  private commit(
+    events: GameUpdateEvent[],
+    frame: FrameState,
+    frameEnded: boolean,
+    frameWinner: number | null,
+    persistOnly: GameUpdateEvent[] = [],
+    playback?: ShotPlayback
+  ): void {
     this.noteDelivered(events)
     void this.callbacks.persist([...persistOnly, ...events])
     if (frameEnded && frameWinner !== null) {
-      void this.handleFrameEnd(frameWinner, frame)
+      void this.handleFrameEnd(frameWinner, frame, playback)
     } else {
-      this.broadcast('game:update', { frame: frameSnapshot(frame), events })
+      this.broadcast('game:update', { frame: frameSnapshot(frame), events, playback })
       this.armTurnTimer()
       this.scheduleBotIfNeeded()
     }
   }
 
-  private async handleFrameEnd(frameWinner: number, endedFrame: FrameState): Promise<void> {
+  private async handleFrameEnd(frameWinner: number, endedFrame: FrameState, playback?: ShotPlayback): Promise<void> {
     const scores = { player0: endedFrame.scores.player0, player1: endedFrame.scores.player1 }
     const frameEnd = this.event('FRAME_END', { winnerSeat: frameWinner, scores })
     this.noteDelivered([frameEnd])
     this.broadcast('game:update', {
       frame: frameSnapshot(endedFrame),
-      events: [frameEnd]
+      events: [frameEnd],
+      playback
     })
     void this.callbacks.persist([frameEnd])
     await this.callbacks.onFrameEnd(this.matchId, frameWinner, scores)

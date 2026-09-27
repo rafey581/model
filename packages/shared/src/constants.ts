@@ -13,19 +13,24 @@ export const POCKET_RADIUS_MIDDLE = BALL_RADIUS + 26
 export const CUSHION_RESTITUTION_LONG = 0.8
 export const CUSHION_RESTITUTION_SHORT = 0.75
 export const CUSHION_TANGENTIAL_DAMP = 0.92
-export const SIDE_SPIN_REBOUND_DAMP = 0.45
 
 export const BALL_RESTITUTION = 0.95
-export const BALL_MASS = 1
 
 export const ROLL_FRICTION = 90
-export const SPIN_FRICTION = 240
+// Fractional spin bleed-off per second: spin retains (1 - SPIN_FRICTION)^TICK_RATE
+// each second, i.e. about 37% per second at 1.
+export const SPIN_FRICTION = 1
 export const MIN_SPEED = 1.5
 export const MAX_CUE_SPEED = 9000
 
-export const FOLLOW_IMPULSE = 0.38
-export const DRAW_IMPULSE = 0.42
-export const SIDE_SPIN_IMPULSE = 0.3
+// Follow and draw are applied once, at the cue ball's first contact, as a
+// fraction of the cue ball's speed immediately before that contact. Scaling by
+// the post-contact residual instead makes both effects vanishingly small.
+export const FOLLOW_IMPULSE = 0.08
+export const DRAW_IMPULSE = 0.1
+// Spin-induced throw, in degrees of object-ball deflection at full side spin.
+// A bounded rotation, so it cannot add energy to the collision.
+export const SIDE_SPIN_THROW_DEG = 3
 
 export const TICK_RATE = 120
 export const TICK_DT = 1 / TICK_RATE

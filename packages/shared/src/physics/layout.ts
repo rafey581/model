@@ -1,4 +1,4 @@
-import { BALL_IDS, TOTAL_REDS, BAULK_LINE_X, D_RADIUS, TABLE_LENGTH, TABLE_WIDTH, BALL_DIAMETER } from '../constants.js'
+import { BALL_IDS, TOTAL_REDS, BAULK_LINE_X, D_RADIUS, TABLE_LENGTH, TABLE_WIDTH, BALL_DIAMETER, POCKET_RADIUS_CORNER, POCKET_RADIUS_MIDDLE } from '../constants.js'
 import { buildInitialBalls } from '../state.js'
 import type { BallState } from '../state.js'
 import type { Vec2 } from '../vec.js'
@@ -79,17 +79,17 @@ export interface Pocket {
   y: number
   radius: number
   name: string
+  kind: 'corner' | 'middle'
 }
 
 export function pocketPositions(): Pocket[] {
   const mid = TABLE_LENGTH / 2
-  const radius = BALL_DIAMETER * 0.68
   return [
-    { x: 0, y: 0, radius, name: 'tl' },
-    { x: mid, y: 0, radius, name: 'tm' },
-    { x: TABLE_LENGTH, y: 0, radius, name: 'tr' },
-    { x: 0, y: TABLE_WIDTH, radius, name: 'bl' },
-    { x: mid, y: TABLE_WIDTH, radius, name: 'bm' },
-    { x: TABLE_LENGTH, y: TABLE_WIDTH, radius, name: 'br' }
+    { x: 0, y: 0, radius: POCKET_RADIUS_CORNER, name: 'tl', kind: 'corner' },
+    { x: mid, y: 0, radius: POCKET_RADIUS_MIDDLE, name: 'tm', kind: 'middle' },
+    { x: TABLE_LENGTH, y: 0, radius: POCKET_RADIUS_CORNER, name: 'tr', kind: 'corner' },
+    { x: 0, y: TABLE_WIDTH, radius: POCKET_RADIUS_CORNER, name: 'bl', kind: 'corner' },
+    { x: mid, y: TABLE_WIDTH, radius: POCKET_RADIUS_MIDDLE, name: 'bm', kind: 'middle' },
+    { x: TABLE_LENGTH, y: TABLE_WIDTH, radius: POCKET_RADIUS_CORNER, name: 'br', kind: 'corner' }
   ]
 }
