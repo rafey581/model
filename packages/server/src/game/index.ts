@@ -6,6 +6,7 @@ import { config } from '../config.js'
 import { GameRoom } from './room.js'
 import type { GameUpdateEvent, ShotInputDto } from './room.js'
 import { ShotEnforcement } from './throttle.js'
+import { noteRejectedShot, recordFraudFlag } from '../fraud/index.js'
 import { verifyToken } from '../auth/guards.js'
 import { settleMatch, refundMatch } from '../matches/service.js'
 import { notify, setNotificationPusher } from '../notifications/service.js'
@@ -256,19 +257,27 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
       })
     })
 
+    const signalAbuse = (code: string): void => {
+      const signal = noteRejectedShot(userId, code)
+      if (signal) void recordFraudFlag(signal, userId)
+    }
+
     socket.on('shot:play', (payload: { matchId: string; input: ShotInputDto }) => {
       const { matchId, input } = payload ?? {}
       if (!shots.take(socket.id, userId)) {
         socket.emit('error', { code: 'rate_limited' })
+        signalAbuse('rate_limited')
         return
       }
       const valid = shots.validate(input)
       if (!valid.ok) {
         socket.emit('error', { code: valid.reason })
+        signalAbuse(valid.reason)
         return
       }
       if (shots.isReplay(socket.id, input)) {
         socket.emit('error', { code: 'duplicate_shot' })
+        signalAbuse('duplicate_shot')
         return
       }
       const room = getOrCreateRoom(matchId)

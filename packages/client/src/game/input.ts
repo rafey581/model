@@ -35,7 +35,7 @@ export function createCueController(options: CueControllerOptions): CueControlle
     return Math.atan2(py - target.y, px - target.x)
   }
 
-  function handleMove(event: MouseEvent): void {
+  function handleMove(event: { clientX: number; clientY: number }): void {
     aim.angle = pointerAngle(event)
     if (dragging) {
       const rect = options.canvas.getBoundingClientRect()
@@ -46,14 +46,15 @@ export function createCueController(options: CueControllerOptions): CueControlle
     options.onChange({ ...aim })
   }
 
-  const onMouseMove = (event: MouseEvent) => handleMove(event)
-  const onMouseDown = (event: MouseEvent) => {
+  const onPointerMove = (event: PointerEvent) => handleMove(event)
+  const onPointerDown = (event: PointerEvent) => {
     if (!options.enabled()) return
     dragging = true
+    options.canvas.setPointerCapture(event.pointerId)
     handleMove(event)
     event.preventDefault()
   }
-  const onMouseUp = (event: MouseEvent) => {
+  const onPointerUp = (event: PointerEvent) => {
     if (!dragging) return
     dragging = false
     if (!options.enabled()) return
@@ -93,17 +94,18 @@ export function createCueController(options: CueControllerOptions): CueControlle
     options.onChange({ ...aim })
   }
 
-  options.canvas.addEventListener('mousemove', onMouseMove)
-  options.canvas.addEventListener('mousedown', onMouseDown)
-  options.canvas.addEventListener('mouseup', onMouseUp)
+  options.canvas.style.touchAction = 'none'
+  options.canvas.addEventListener('pointermove', onPointerMove)
+  options.canvas.addEventListener('pointerdown', onPointerDown)
+  options.canvas.addEventListener('pointerup', onPointerUp)
   window.addEventListener('keydown', onKeyDown)
 
   return {
     aim,
     destroy: () => {
-      options.canvas.removeEventListener('mousemove', onMouseMove)
-      options.canvas.removeEventListener('mousedown', onMouseDown)
-      options.canvas.removeEventListener('mouseup', onMouseUp)
+      options.canvas.removeEventListener('pointermove', onPointerMove)
+      options.canvas.removeEventListener('pointerdown', onPointerDown)
+      options.canvas.removeEventListener('pointerup', onPointerUp)
       window.removeEventListener('keydown', onKeyDown)
     },
     setCuePosition: (x: number, y: number) => {

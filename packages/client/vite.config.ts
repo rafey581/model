@@ -13,5 +13,16 @@ export default defineConfig({
         ws: true
       }
     }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id: string): string | undefined {
+          if (id.includes('node_modules/three') || id.includes('node_modules\\three')) return 'three'
+          if (id.includes('socket.io-client')) return 'socketio'
+          return undefined
+        }
+      }
+    }
   }
 })

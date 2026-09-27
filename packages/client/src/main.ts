@@ -8,7 +8,7 @@ import type { CueController } from './game/input.js'
 import type { ShotInput } from '@snooker/shared'
 import { STAKE_TIERS } from '@snooker/shared'
 import type { Socket } from 'socket.io-client'
-import { renderAdminPanel } from './admin.js'
+import { playCushion, playFoul, playFrameEnd, playMatchEnd, playPot, setSoundMuted, isSoundMuted, unlockAudio } from './game/audio.js'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 const toast = makeToast(document.body)
@@ -52,6 +52,14 @@ let tournamentTimer: number | undefined
 let maintenanceMode = false
 let maintenanceEl: HTMLElement | null = null
 let opponentGone = false
+let gameResizeObserver: ResizeObserver | null = null
+let rgCanvas: HTMLCanvasElement | null = null
+let netOverlayEl: HTMLElement | null = null
+let dprCap = 2
+let frameEma = 0
+let lastFrameTime = 0
+let slowFrames = 0
+let lastDprUpAt = 0
 
 const BALL_NAMES: Record<number, string> = {
   16: 'yellow',
@@ -77,6 +85,7 @@ function header(): HTMLElement {
     right.appendChild(el('span', 'user-chip', `${currentUser.username} · ${wallet.balance} CR (${wallet.locked} locked)`))
     const conn = el('span', connected ? 'chip-ok' : 'chip-bad', connected ? 'online' : 'reconnecting…')
     conn.id = 'conn-chip'
+    conn.setAttribute('role', 'status')
     right.appendChild(conn)
     right.appendChild(renderBell())
     if (currentUser.role === 'ADMIN' || currentUser.role === 'SUPERADMIN') {
@@ -706,10 +715,16 @@ function render(): void {
   } else if (activeTournamentId) {
     void renderTournament()
   } else if (adminOpen) {
-    renderAdminPanel(app, toast)
+    void mountAdminPanel()
   } else {
     void renderLobby()
   }
+}
+
+async function mountAdminPanel(): Promise<void> {
+  const { renderAdminPanel } = await import('./admin.js')
+  if (!adminOpen || currentUser === null) return
+  renderAdminPanel(app, toast)
 }
 
 function renderAuth(): void {
@@ -1197,6 +1212,29 @@ function enterMatch(matchId: string, isPractice = false): void {
   void loadMatchMeta(matchId)
 }
 
+function applyCanvasSize(): void {
+  const canvas = rgCanvas
+  if (!canvas) return
+  const frame = canvas.parentElement
+  if (!frame) return
+  const dpr = Math.min(dprCap, window.devicePixelRatio || 1)
+  const w = Math.max(320, Math.floor(frame.clientWidth * dpr))
+  const h = Math.max(180, Math.floor(w * (640 / 1200)))
+  canvas.width = w
+  canvas.height = h
+  scene3d?.resize(w, h)
+}
+
+function updateNetOverlay(): void {
+  if (!netOverlayEl) return
+  const show = activeMatchId !== null && (!connected || !navigator.onLine)
+  netOverlayEl.style.display = show ? 'flex' : 'none'
+  const text = netOverlayEl.querySelector('p')
+  if (text) {
+    text.textContent = !navigator.onLine ? 'You are offline — reconnecting…' : 'Connection lost — reconnecting…'
+  }
+}
+
 function renderGame(): void {
   app.innerHTML = ''
   app.appendChild(header())
@@ -1209,6 +1247,8 @@ function renderGame(): void {
   leftCol.appendChild(youEl)
   const turnEl = el('div', 'turn-name', myTurn ? 'YOUR TURN' : 'WAITING')
   turnEl.id = 'hud-turn'
+  turnEl.setAttribute('aria-live', 'polite')
+  turnEl.setAttribute('role', 'status')
   leftCol.appendChild(turnEl)
   strip.appendChild(leftCol)
 
@@ -1236,10 +1276,23 @@ function renderGame(): void {
   const tableFrame = el('div', 'table-frame')
   const canvas = el('canvas') as HTMLCanvasElement
   canvas.id = 'game-canvas'
-  canvas.width = 1200
-  canvas.height = 640
+  canvas.setAttribute('role', 'img')
+  canvas.setAttribute('aria-label', 'Snooker table — aim with pointer or touch, arrows for spin, Space to shoot')
+  rgCanvas = canvas
   tableFrame.appendChild(canvas)
+  const overlay = el('div', 'net-overlay')
+  overlay.appendChild(el('p', undefined, 'Connection lost — reconnecting…'))
+  tableFrame.appendChild(overlay)
+  netOverlayEl = overlay
+  updateNetOverlay()
   container.appendChild(tableFrame)
+  applyCanvasSize()
+  gameResizeObserver?.disconnect()
+  gameResizeObserver = new ResizeObserver(() => applyCanvasSize())
+  gameResizeObserver.observe(tableFrame)
+  dprCap = 2
+  frameEma = 0
+  slowFrames = 0
 
   scene3d?.dispose()
   scene3d = Scene3D.create(canvas, canvas.width, canvas.height)
@@ -1254,9 +1307,16 @@ function renderGame(): void {
   const spinLabel = el('div', 'spin-label', 'Spin: 0.0 / 0.0')
 
   const bar = el('div', 'controls-bar')
-  bar.appendChild(el('div', 'muted', 'Aim: mouse · Power: click cue & drag down · Spin: arrows · Shoot: release or Space'))
+  bar.appendChild(el('div', 'muted', 'Aim: mouse or touch · Power: press & drag back · Spin: arrows · Shoot: release or Space'))
   bar.appendChild(powerGroup)
   bar.appendChild(spinLabel)
+  const soundBtn = el('button', 'ghost', isSoundMuted() ? 'Sound: off' : 'Sound: on')
+  soundBtn.onclick = () => {
+    const next = !isSoundMuted()
+    setSoundMuted(next)
+    soundBtn.textContent = next ? 'Sound: off' : 'Sound: on'
+  }
+  bar.appendChild(soundBtn)
   const concedeBtn = el('button', 'danger', activeMatchIsPractice ? 'Finish practice' : 'Concede')
   concedeBtn.onclick = () => {
     if (activeMatchIsPractice) void finishPractice()
@@ -1294,16 +1354,20 @@ function handleGameUpdate(data: { frame: FrameSnapshotData; events?: Array<{ typ
     if (ev.type === 'BALL_POTTED') {
       const d = ev.data as { ballId: number }
       potted.push(d.ballId)
+      playCushion()
     } else if (ev.type === 'FOUL') {
       const d = ev.data as { penalty: number; reason?: string }
+      playFoul()
       toast(d.reason ? `Foul: ${d.reason} (-${d.penalty})` : `Foul! -${d.penalty}`, 'error')
     } else if (ev.type === 'FRAME_END') {
       const d = ev.data as { winnerSeat: number }
       framesWon = d.winnerSeat === 0 ? [framesWon[0] + 1, framesWon[1]] : [framesWon[0], framesWon[1] + 1]
+      playFrameEnd()
       toast(`Frame ${frameIndex} won by ${seatName(d.winnerSeat)}`)
     }
   }
   if (potted.length) {
+    playPot(potted.length)
     toast(`Potted: ${potted.map(ballName).join(', ')}`)
   }
   updateHud()
@@ -1313,11 +1377,13 @@ function handleSocketEvents(socket: Socket): void {
   socket.on('connect', () => {
     connected = true
     updateConnChip()
+    updateNetOverlay()
     if (activeMatchId) socket.emit('match:join', { matchId: activeMatchId })
   })
   socket.on('disconnect', () => {
     connected = false
     updateConnChip()
+    updateNetOverlay()
   })
 
   socket.on('match:joined', (data: { matchId: string; seat: number; snapshot: FrameSnapshotData | null }) => {
@@ -1346,6 +1412,7 @@ function handleSocketEvents(socket: Socket): void {
     if (data.framesWon) framesWon = data.framesWon
     if (activeMatchIsPractice) framesWon = [0, 0]
     myTurn = false
+    playMatchEnd()
     updateHud()
     void finishMatch(data.winnerSeat, data.reason)
   })
@@ -1391,17 +1458,60 @@ function handleSocketEvents(socket: Socket): void {
 
 function loop(): void {
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement | null
-  if (canvas && frame) {
-    const cue = frame.balls.find((b) => b.id === 0 && !b.potted)
-    if (cue) cueController?.setCuePosition(cue.x, cue.y)
-    if (scene3d) {
-      scene3d.update(frame, { aim: cueController?.aim, youSeat: mySeat })
-      scene3d.render()
-    } else {
-      drawTable(canvas, frame, { aim: cueController?.aim, youSeat: mySeat })
+  try {
+    if (canvas && frame) {
+      const now = performance.now()
+      const fdt = Math.min(200, now - lastFrameTime)
+      lastFrameTime = now
+      if (scene3d) {
+        frameEma = frameEma === 0 ? fdt : frameEma * 0.92 + fdt * 0.08
+        if (frameEma > 28) slowFrames++
+        else slowFrames = 0
+        if (slowFrames > 90 && dprCap > 1) {
+          dprCap = dprCap === 2 ? 1.5 : 1
+          slowFrames = 0
+          applyCanvasSize()
+          toast('Lowered graphics quality for smoother play', 'info')
+        }
+        if (frameEma < 14 && dprCap < 2 && now - lastDprUpAt > 20000) {
+          lastDprUpAt = now
+          dprCap = dprCap === 1 ? 1.5 : 2
+          applyCanvasSize()
+        }
+      }
+      const cue = frame.balls.find((b) => b.id === 0 && !b.potted)
+      if (cue) cueController?.setCuePosition(cue.x, cue.y)
+      if (scene3d) {
+        scene3d.update(frame, { aim: cueController?.aim, youSeat: mySeat })
+        scene3d.render()
+      } else {
+        drawTable(canvas, frame, { aim: cueController?.aim, youSeat: mySeat })
+      }
     }
+  } catch (error) {
+    if (scene3d) {
+      scene3d?.dispose()
+      scene3d = null
+      toast('Graphics error — switched to fallback renderer', 'error')
+    }
+    reportFatalError(error)
   }
   requestAnimationFrame(loop)
+}
+
+function reportFatalError(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  const chip = document.getElementById('err-chip')
+  if (!chip) return
+  chip.textContent = message.length > 140 ? message.slice(0, 140) : message
+  const prev = Number(chip.dataset.timer)
+  if (prev) window.clearTimeout(prev)
+  chip.dataset.timer = String(
+    window.setTimeout(() => {
+      chip.textContent = ''
+      delete chip.dataset.timer
+    }, 8000)
+  )
 }
 
 async function refreshMaintenance(): Promise<void> {
@@ -1433,6 +1543,27 @@ function renderMaintenance(): void {
 }
 
 async function init(): Promise<void> {
+  const chip = document.createElement('div')
+  chip.id = 'err-chip'
+  chip.className = 'err-chip'
+  chip.setAttribute('role', 'status')
+  chip.setAttribute('aria-live', 'polite')
+  document.body.appendChild(chip)
+  window.addEventListener('error', (event) => reportFatalError(event.error ?? event.message))
+  window.addEventListener('unhandledrejection', (event) => reportFatalError(event.reason))
+  const online = (): void => {
+    updateNetOverlay()
+    updateConnChip()
+  }
+  window.addEventListener('online', online)
+  window.addEventListener('offline', online)
+  const unlock = (): void => {
+    unlockAudio()
+    document.removeEventListener('pointerdown', unlock)
+    window.removeEventListener('keydown', unlock)
+  }
+  document.addEventListener('pointerdown', unlock)
+  window.addEventListener('keydown', unlock)
   if (token) {
     const socket = connectSocket(token)
     handleSocketEvents(socket)

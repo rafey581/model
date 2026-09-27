@@ -45,6 +45,8 @@ interface TableTransform {
 }
 
 let currentTransform: TableTransform = { offsetX: 0, offsetY: 0, scale: 0 }
+let lastInterpTime = 0
+const interpPos = new Map<number, { x: number; y: number }>()
 
 export function setTableTransform(transform: TableTransform): void {
   currentTransform = transform
@@ -124,18 +126,41 @@ export function drawTable(
 
   if (!snapshot) return
 
+  const now = performance.now()
+  const dt = lastInterpTime ? Math.min(0.1, (now - lastInterpTime) / 1000) : 0
+  lastInterpTime = now
+  const k = dt ? 1 - Math.exp(-dt * 14) : 1
+
   const highlightBallId = resolveHighlight(snapshot)
+  const alive = new Set<number>()
 
   for (const ball of snapshot.balls) {
     if (ball.potted) continue
-    drawBall(ctx, offsetX + ball.x * scale, offsetY + ball.y * scale, scale, ball.id, ball.id === highlightBallId)
+    alive.add(ball.id)
+    const tx = ball.x
+    const ty = ball.y
+    const prev = interpPos.get(ball.id)
+    let px = tx
+    let py = ty
+    if (prev) {
+      px = prev.x + (tx - prev.x) * k
+      py = prev.y + (ty - prev.y) * k
+    }
+    interpPos.set(ball.id, { x: px, y: py })
+    drawBall(ctx, offsetX + px * scale, offsetY + py * scale, scale, ball.id, ball.id === highlightBallId)
+  }
+  for (const id of [...interpPos.keys()]) {
+    if (!alive.has(id)) interpPos.delete(id)
   }
 
   const cueBall = snapshot.balls.find((b) => b.id === 0 && !b.potted)
   if (options.aim && options.youSeat !== undefined && cueBall) {
     const myTurn = snapshot.turnIndex === options.youSeat
     if (myTurn) {
-      drawAim(ctx, offsetX + cueBall.x * scale, offsetY + cueBall.y * scale, scale, options.aim)
+      const interp = interpPos.get(0)
+      const cx = interp ? interp.x : cueBall.x
+      const cy = interp ? interp.y : cueBall.y
+      drawAim(ctx, offsetX + cx * scale, offsetY + cy * scale, scale, options.aim)
     }
   }
 
@@ -238,7 +263,7 @@ function drawAim(ctx: CanvasRenderingContext2D, x: number, y: number, scale: num
   const length = (40 + aim.power * 150) * scale * 0.018
   const endX = x + Math.cos(aim.angle) * length
   const endY = y + Math.sin(aim.angle) * length
-  ctx.strokeStyle = 'rgba(255,255,255,0.8)'
+  ctx.strokeStyle = `rgba(255,255,255,${0.45 + aim.power * 0.35})`
   ctx.lineWidth = 2
   ctx.setLineDash([6, 6])
   ctx.beginPath()
@@ -246,10 +271,18 @@ function drawAim(ctx: CanvasRenderingContext2D, x: number, y: number, scale: num
   ctx.lineTo(endX, endY)
   ctx.stroke()
   ctx.setLineDash([])
+  const glowR = 5 * scale * 0.5 * (0.8 + aim.power * 0.9)
+  const glow = ctx.createRadialGradient(endX, endY, 1, endX, endY, glowR * 2.2)
+  glow.addColorStop(0, 'rgba(255,215,120,0.55)')
+  glow.addColorStop(1, 'rgba(255,215,120,0)')
+  ctx.fillStyle = glow
+  ctx.beginPath()
+  ctx.arc(endX, endY, glowR * 2.2, 0, Math.PI * 2)
+  ctx.fill()
   ctx.strokeStyle = 'rgba(255,255,255,0.55)'
   ctx.lineWidth = 1.5
   ctx.beginPath()
-  ctx.arc(endX, endY, 5 * scale * 0.5, 0, Math.PI * 2)
+  ctx.arc(endX, endY, glowR, 0, Math.PI * 2)
   ctx.stroke()
   const spinX = aim.spinX ?? 0
   const spinY = aim.spinY ?? 0

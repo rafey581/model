@@ -5,7 +5,8 @@ import { config } from '../src/config.js'
 const prisma = new PrismaClient()
 
 async function main(): Promise<void> {
-  const passwordHash = bcrypt.hashSync('admin123', 10)
+  const seedPassword = process.env.SEED_ADMIN_PASSWORD ?? 'admin123'
+  const passwordHash = bcrypt.hashSync(seedPassword, 10)
 
   const admin = await prisma.user.upsert({
     where: { email: 'admin@snooker.test' },
@@ -43,7 +44,7 @@ async function main(): Promise<void> {
     }
   })
 
-  console.log('seeded:', { admin: admin.username, player: player.username, player2: player2.username, password: 'admin123' })
+  console.log('seeded:', { admin: admin.username, player: player.username, player2: player2.username, usesDefaultPassword: seedPassword === 'admin123' })
 }
 
 main()

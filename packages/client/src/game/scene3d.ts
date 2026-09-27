@@ -22,6 +22,16 @@ const BALL_COLORS: Record<number, number> = {
 }
 
 const RED = 0xd62828
+const textureCache = new Map<string, THREE.CanvasTexture>()
+
+function cachedTexture(key: string, make: () => THREE.CanvasTexture): THREE.CanvasTexture {
+  let tex = textureCache.get(key)
+  if (!tex) {
+    tex = make()
+    textureCache.set(key, tex)
+  }
+  return tex
+}
 const POCKETS = [
   { x: 0, y: 0 },
   { x: TABLE_LENGTH / 2, y: 0 },
@@ -32,93 +42,180 @@ const POCKETS = [
 ]
 
 function feltTexture(): THREE.CanvasTexture {
-  const w = 2048
-  const h = 1024
-  const canvas = document.createElement('canvas')
-  canvas.width = w
-  canvas.height = h
-  const ctx = canvas.getContext('2d')!
-  ctx.fillStyle = '#0f8650'
-  ctx.fillRect(0, 0, w, h)
-  ctx.strokeStyle = 'rgba(255,255,255,0.05)'
-  ctx.lineWidth = 1
-  for (let i = 0; i < w; i += 20) {
+  return cachedTexture('felt', () => {
+    const w = 2048
+    const h = 1024
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = '#0f8650'
+    ctx.fillRect(0, 0, w, h)
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)'
+    ctx.lineWidth = 1
+    for (let i = 0; i < w; i += 20) {
+      ctx.beginPath()
+      ctx.moveTo(i, 0)
+      ctx.lineTo(i, h)
+      ctx.stroke()
+    }
+    const shade = ctx.createRadialGradient(w * 0.5, h * 0.42, w * 0.08, w * 0.5, h * 0.5, w * 0.7)
+    shade.addColorStop(0, 'rgba(40,160,95,0.28)')
+    shade.addColorStop(1, 'rgba(0,0,0,0.30)')
+    ctx.fillStyle = shade
+    ctx.fillRect(0, 0, w, h)
+
+    const vignette = ctx.createRadialGradient(w / 2, h / 2, w * 0.62, w / 2, h / 2, w * 0.82)
+    vignette.addColorStop(0, 'rgba(0,0,0,0)')
+    vignette.addColorStop(1, 'rgba(0,0,0,0.26)')
+    ctx.fillStyle = vignette
+    ctx.fillRect(0, 0, w, h)
+
+    const mark = (tableXmm: number, tableYmm: number): void => {
+      const u = (tableXmm / TABLE_LENGTH) * w
+      const v = (tableYmm / TABLE_WIDTH) * h
+      ctx.fillStyle = '#e6d9ae'
+      ctx.beginPath()
+      ctx.arc(u, v, 4, 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    const bx = (BAULK_LINE_X / TABLE_LENGTH) * w
+    const mid = h / 2
+    ctx.strokeStyle = '#d8b15c'
+    ctx.lineWidth = 3
     ctx.beginPath()
-    ctx.moveTo(i, 0)
-    ctx.lineTo(i, h)
+    ctx.moveTo(bx, 0)
+    ctx.lineTo(bx, h)
     ctx.stroke()
-  }
-  const shade = ctx.createRadialGradient(w * 0.5, h * 0.42, w * 0.08, w * 0.5, h * 0.5, w * 0.7)
-  shade.addColorStop(0, 'rgba(40,160,95,0.28)')
-  shade.addColorStop(1, 'rgba(0,0,0,0.30)')
-  ctx.fillStyle = shade
-  ctx.fillRect(0, 0, w, h)
-
-  const mark = (tableXmm: number, tableYmm: number): void => {
-    const u = (tableXmm / TABLE_LENGTH) * w
-    const v = (tableYmm / TABLE_WIDTH) * h
-    ctx.fillStyle = '#e6d9ae'
     ctx.beginPath()
-    ctx.arc(u, v, 4, 0, Math.PI * 2)
-    ctx.fill()
-  }
+    ctx.arc(bx, mid, (D_RADIUS / TABLE_WIDTH) * h, Math.PI * 0.5, Math.PI * 1.5)
+    ctx.stroke()
 
-  const bx = (BAULK_LINE_X / TABLE_LENGTH) * w
-  const mid = h / 2
-  ctx.strokeStyle = '#d8b15c'
-  ctx.lineWidth = 3
-  ctx.beginPath()
-  ctx.moveTo(bx, 0)
-  ctx.lineTo(bx, h)
-  ctx.stroke()
-  ctx.beginPath()
-  ctx.arc(bx, mid, (D_RADIUS / TABLE_WIDTH) * h, Math.PI * 0.5, Math.PI * 1.5)
-  ctx.stroke()
+    mark(BAULK_LINE_X, TABLE_WIDTH / 2 + D_RADIUS * 0.9)
+    mark(BAULK_LINE_X, TABLE_WIDTH / 2 - D_RADIUS * 0.9)
+    mark(BAULK_LINE_X, TABLE_WIDTH / 2)
+    mark(TABLE_LENGTH / 2, TABLE_WIDTH / 2)
+    mark(TABLE_LENGTH * 0.75, TABLE_WIDTH / 2)
+    mark(TABLE_LENGTH - 324, TABLE_WIDTH / 2)
 
-  mark(BAULK_LINE_X, TABLE_WIDTH / 2 + D_RADIUS * 0.9)
-  mark(BAULK_LINE_X, TABLE_WIDTH / 2 - D_RADIUS * 0.9)
-  mark(BAULK_LINE_X, TABLE_WIDTH / 2)
-  mark(TABLE_LENGTH / 2, TABLE_WIDTH / 2)
-  mark(TABLE_LENGTH * 0.75, TABLE_WIDTH / 2)
-  mark(TABLE_LENGTH - 324, TABLE_WIDTH / 2)
-
-  const texture = new THREE.CanvasTexture(canvas)
-  texture.colorSpace = THREE.SRGBColorSpace
-  texture.anisotropy = 4
-  return texture
+    const texture = new THREE.CanvasTexture(canvas)
+    texture.colorSpace = THREE.SRGBColorSpace
+    texture.anisotropy = 4
+    return texture
+  })
 }
 
 function contactShadowTexture(): THREE.CanvasTexture {
-  const size = 128
-  const canvas = document.createElement('canvas')
-  canvas.width = size
-  canvas.height = size
-  const ctx = canvas.getContext('2d')!
-  const grad = ctx.createRadialGradient(size / 2, size / 2, 4, size / 2, size / 2, size / 2)
-  grad.addColorStop(0, 'rgba(0,0,0,0.55)')
-  grad.addColorStop(0.6, 'rgba(0,0,0,0.18)')
-  grad.addColorStop(1, 'rgba(0,0,0,0)')
-  ctx.fillStyle = grad
-  ctx.fillRect(0, 0, size, size)
-  return new THREE.CanvasTexture(canvas)
+  return cachedTexture('shadow', () => {
+    const size = 128
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')!
+    const grad = ctx.createRadialGradient(size / 2, size / 2, 4, size / 2, size / 2, size / 2)
+    grad.addColorStop(0, 'rgba(0,0,0,0.55)')
+    grad.addColorStop(0.6, 'rgba(0,0,0,0.18)')
+    grad.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = grad
+    ctx.fillRect(0, 0, size, size)
+    return new THREE.CanvasTexture(canvas)
+  })
+}
+
+function glowTexture(): THREE.CanvasTexture {
+  return cachedTexture('glow', () => {
+    const size = 128
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')!
+    const grad = ctx.createRadialGradient(size / 2, size / 2, 2, size / 2, size / 2, size / 2)
+    grad.addColorStop(0, 'rgba(255,220,140,0.9)')
+    grad.addColorStop(0.35, 'rgba(255,200,110,0.35)')
+    grad.addColorStop(1, 'rgba(255,200,110,0)')
+    ctx.fillStyle = grad
+    ctx.fillRect(0, 0, size, size)
+    return new THREE.CanvasTexture(canvas)
+  })
+}
+
+function woodTexture(): THREE.CanvasTexture {
+  return cachedTexture('wood', () => {
+    const size = 256
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = '#6b4526'
+    ctx.fillRect(0, 0, size, size)
+    for (let y = 0; y < size; y += 4) {
+      const tone = 60 + Math.random() * 40
+      ctx.fillStyle = `rgb(${Math.round(tone)}, ${Math.round(tone * 0.66)}, ${Math.round(tone * 0.4)})`
+      ctx.fillRect(0, y, size, 2)
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'
+    for (let i = 0; i < 26; i++) {
+      const x = Math.random() * size
+      const y = Math.random() * size
+      ctx.fillRect(x, y, 60, 1)
+    }
+    const texture = new THREE.CanvasTexture(canvas)
+    texture.colorSpace = THREE.SRGBColorSpace
+    return texture
+  })
+}
+
+function envTexture(): THREE.CanvasTexture {
+  return cachedTexture('env', () => {
+    const w = 1024
+    const h = 512
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')!
+    const grad = ctx.createLinearGradient(0, 0, 0, h)
+    grad.addColorStop(0, '#0d1117')
+    grad.addColorStop(0.42, '#262c36')
+    grad.addColorStop(0.5, '#b8a57f')
+    grad.addColorStop(0.58, '#3f2f20')
+    grad.addColorStop(1, '#15181d')
+    ctx.fillStyle = grad
+    ctx.fillRect(0, 0, w, h)
+    ctx.fillStyle = 'rgba(255,244,214,0.85)'
+    ctx.fillRect(w * 0.28, h * 0.36, w * 0.44, 6)
+    ctx.fillRect(w * 0.3, h * 0.4, w * 0.4, 4)
+    ctx.fillStyle = 'rgba(120,90,60,0.9)'
+    ctx.fillRect(0, h * 0.6, w, 26)
+    const texture = new THREE.CanvasTexture(canvas)
+    texture.colorSpace = THREE.SRGBColorSpace
+    texture.mapping = THREE.EquirectangularReflectionMapping
+    return texture
+  })
 }
 
 class BallRig {
   group = new THREE.Group()
   sphere: THREE.Mesh
-  material: THREE.MeshStandardMaterial
+  material: THREE.MeshPhysicalMaterial
   blob: THREE.Mesh
   target = new THREE.Vector3()
   firstSeen = true
+  sinking = false
+  sinkT = 0
+  sinkStart = new THREE.Vector3()
+  sinkTarget = new THREE.Vector3()
 
   constructor(radius: number, color: number, shadowTex: THREE.CanvasTexture) {
-    this.material = new THREE.MeshStandardMaterial({
+    this.material = new THREE.MeshPhysicalMaterial({
       color,
-      roughness: 0.16,
-      metalness: 0.08,
+      roughness: 0.14,
+      metalness: 0.06,
+      clearcoat: 0.7,
+      clearcoatRoughness: 0.2,
       emissive: 0x000000
     })
-    this.sphere = new THREE.Mesh(new THREE.SphereGeometry(radius, 40, 24), this.material)
+    this.sphere = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 28), this.material)
     this.sphere.castShadow = true
     this.group.add(this.sphere)
     const blobMat = new THREE.MeshBasicMaterial({
@@ -135,6 +232,13 @@ class BallRig {
 
   setVisible(visible: boolean): void {
     this.group.visible = visible
+  }
+
+  startSink(targetX: number, targetZ: number): void {
+    this.sinking = true
+    this.sinkT = 0
+    this.sinkStart.copy(this.group.position)
+    this.sinkTarget.set(targetX, this.group.position.y - 8, targetZ)
   }
 
   aim(targetX: number, targetZ: number, highlight: boolean, reset: boolean): void {
@@ -159,11 +263,12 @@ export class Scene3D {
   private scene = new THREE.Scene()
   private camera: THREE.PerspectiveCamera
   private balls = new Map<number, BallRig>()
-  private shadowTex: THREE.CanvasTexture | null = null
+  private shadowTexCache: THREE.CanvasTexture | null = null
   private cvw: number
   private cvh: number
   private aimLine!: THREE.Line
   private aimDot!: THREE.Mesh
+  private aimGlow!: THREE.Mesh
   private spinLine!: THREE.Line
   private stick!: THREE.Group
   private lastTime = 0
@@ -196,6 +301,10 @@ export class Scene3D {
     this.buildLighting()
     this.buildTable()
     this.buildAim()
+
+    const pmrem = new THREE.PMREMGenerator(this.renderer)
+    this.scene.environment = pmrem.fromEquirectangular(envTexture()).texture
+    pmrem.dispose()
   }
 
   private buildLighting(): void {
@@ -232,19 +341,44 @@ export class Scene3D {
 
     const apron = new THREE.Mesh(
       new THREE.BoxGeometry(TABLE_LENGTH + pad, 130, TABLE_WIDTH + pad),
-      new THREE.MeshStandardMaterial({ color: 0x3c2415, roughness: 0.7 })
+      new THREE.MeshStandardMaterial({ map: woodTexture(), roughness: 0.55 })
     )
     apron.position.y = -66
     apron.castShadow = true
     this.scene.add(apron)
 
     const legGeo = new THREE.BoxGeometry(90, 470, 90)
-    const legMat = new THREE.MeshStandardMaterial({ color: 0x2a180c, roughness: 0.8 })
+    const legMat = new THREE.MeshStandardMaterial({ map: woodTexture(), roughness: 0.7 })
     for (const sx of [-1, 1]) {
       for (const sz of [-1, 1]) {
         const leg = new THREE.Mesh(legGeo, legMat)
         leg.position.set(sx * (HALF_L + pad / 2 - 80), -308, sz * (HALF_W + pad / 2 - 80))
         this.scene.add(leg)
+      }
+    }
+
+    const brassMat = new THREE.MeshStandardMaterial({ color: 0xc9a227, roughness: 0.25, metalness: 0.85 })
+    const halfInner = pad / 2 - 10
+    const trimDepth = 12
+    const trimSpecs: Array<[number, number, number, number, number]> = [
+      [TABLE_LENGTH + pad - 14, 14, trimDepth, 0, -HALF_W - halfInner],
+      [TABLE_LENGTH + pad - 14, 14, trimDepth, 0, HALF_W + halfInner],
+      [trimDepth, 14, TABLE_WIDTH + pad - 14, -HALF_L - halfInner, 0],
+      [trimDepth, 14, TABLE_WIDTH + pad - 14, HALF_L + halfInner, 0]
+    ]
+    const trimGeo = new THREE.BoxGeometry(1, 1, 1)
+    for (const [tw, th, td, tx, tz] of trimSpecs) {
+      const trim = new THREE.Mesh(trimGeo, brassMat)
+      trim.scale.set(tw, th, td)
+      trim.position.set(tx, 2.5, tz)
+      this.scene.add(trim)
+    }
+    const cornerGeo = new THREE.CylinderGeometry(26, 26, 8, 24)
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const corner = new THREE.Mesh(cornerGeo, brassMat)
+        corner.position.set(sx * (HALF_L + halfInner), 5, sz * (HALF_W + halfInner))
+        this.scene.add(corner)
       }
     }
 
@@ -290,6 +424,8 @@ export class Scene3D {
     const pocketMat = new THREE.MeshStandardMaterial({ color: 0x04060a, roughness: 0.4, side: THREE.DoubleSide })
     const discGeo = new THREE.CircleGeometry(POCKET_R, 28)
     const holeGeo = new THREE.CylinderGeometry(POCKET_R * 0.7, POCKET_R * 0.92, 80, 24, 1, true)
+    const rimMat = new THREE.MeshStandardMaterial({ color: 0xd8b15c, roughness: 0.3, metalness: 0.8 })
+    const rimGeo = new THREE.TorusGeometry(POCKET_R + 4, 3.2, 12, 32)
     for (const p of POCKETS) {
       const x = tableX(p.x)
       const z = tableZ(p.y)
@@ -302,6 +438,10 @@ export class Scene3D {
       hole.position.set(x, CUSHION_H + 1.2 - 40, z)
       hole.renderOrder = 5
       this.scene.add(hole)
+      const rim = new THREE.Mesh(rimGeo, rimMat)
+      rim.rotation.x = -Math.PI / 2
+      rim.position.set(x, CUSHION_H + 2.2, z)
+      this.scene.add(rim)
     }
 
     const floor = new THREE.Mesh(
@@ -360,6 +500,15 @@ export class Scene3D {
     this.aimDot.visible = false
     this.scene.add(this.aimDot)
 
+    this.aimGlow = new THREE.Mesh(
+      new THREE.PlaneGeometry(90, 90),
+      new THREE.MeshBasicMaterial({ map: glowTexture(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
+    )
+    this.aimGlow.rotation.x = -Math.PI / 2
+    this.aimGlow.visible = false
+    this.aimGlow.renderOrder = 2
+    this.scene.add(this.aimGlow)
+
     this.spinLine = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
       new THREE.LineBasicMaterial({ color: 0xffb84a, transparent: true, opacity: 0.95 })
@@ -395,23 +544,40 @@ export class Scene3D {
       return
     }
 
-    if (!this.shadowTex) this.shadowTex = contactShadowTexture()
+    if (!this.shadowTexCache) this.shadowTexCache = contactShadowTexture()
     const highlightId = this.resolveHighlight(snapshot)
     const seen = new Set<number>()
     for (const ball of snapshot.balls) {
       seen.add(ball.id)
       let rig = this.balls.get(ball.id)
       if (!rig) {
-        rig = new BallRig(BALL_RADIUS, BALL_COLORS[ball.id] ?? RED, this.shadowTex)
+        rig = new BallRig(BALL_RADIUS, BALL_COLORS[ball.id] ?? RED, contactShadowTexture())
         this.balls.set(ball.id, rig)
         this.scene.add(rig.group)
       }
-      rig.setVisible(!ball.potted)
+      rig.setVisible(!ball.potted || rig.sinking)
       if (!ball.potted) {
         const x = tableX(ball.x)
         const z = tableZ(ball.y)
         const moved = Math.hypot(rig.group.position.x - x, rig.group.position.z - z)
         rig.aim(x, z, ball.id === highlightId, rig.firstSeen || moved > 500)
+      } else if (rig.group.visible && !rig.sinking) {
+        const px = tableX(ball.x)
+        const pz = tableZ(ball.y)
+        let best = Infinity
+        let targetX = px
+        let targetZ = pz
+        for (const p of POCKETS) {
+          const dx = tableX(p.x) - px
+          const dz = tableZ(p.y) - pz
+          const d2 = dx * dx + dz * dz
+          if (d2 < best) {
+            best = d2
+            targetX = tableX(p.x)
+            targetZ = tableZ(p.y)
+          }
+        }
+        rig.startSink(targetX, targetZ)
       } else {
         rig.firstSeen = true
       }
@@ -443,16 +609,17 @@ export class Scene3D {
     const ex = cx + dir.x * length
     const ez = cz + dir.z * length
 
-    this.aimLine.geometry.dispose()
-    this.aimLine.geometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(cx, 1.6, cz),
-      new THREE.Vector3(ex, 1.6, ez)
-    ])
+    this.setLine(this.aimLine, cx, 1.6, cz, ex, 1.6, ez)
     this.aimLine.computeLineDistances()
-    this.aimLine.visible = true
+    const lineMat = this.aimLine.material as THREE.LineDashedMaterial
+    lineMat.opacity = 0.4 + aim.power * 0.5
 
     this.aimDot.position.set(ex, 2.4, ez)
     this.aimDot.visible = true
+    this.aimGlow.position.set(ex, 2.2, ez)
+    this.aimGlow.visible = true
+    const glowScale = 0.7 + aim.power * 1.1
+    this.aimGlow.scale.set(glowScale, glowScale, 1)
 
     const spinX = aim.spinX ?? 0
     const spinY = aim.spinY ?? 0
@@ -460,12 +627,7 @@ export class Scene3D {
       const px = -Math.sin(aim.angle)
       const py = Math.cos(aim.angle)
       const off = spinX * 40 + spinY * 16
-      this.spinLine.geometry.dispose()
-      this.spinLine.geometry = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(ex, 2.4, ez),
-        new THREE.Vector3(ex + px * off, 2.4, ez + py * off)
-      ])
-      this.spinLine.visible = true
+      this.setLine(this.spinLine, ex, 2.4, ez, ex + px * off, 2.4, ez + py * off)
     } else {
       this.spinLine.visible = false
     }
@@ -478,11 +640,29 @@ export class Scene3D {
     this.stick.quaternion.setFromUnitVectors(up, target)
   }
 
+  private setLine(line: THREE.Line, ax: number, ay: number, az: number, bx: number, by: number, bz: number): void {
+    const attr = line.geometry.getAttribute('position') as THREE.BufferAttribute
+    attr.setXYZ(0, ax, ay, az)
+    attr.setXYZ(1, bx, by, bz)
+    attr.needsUpdate = true
+    line.geometry.computeBoundingSphere()
+    line.visible = true
+  }
+
   private hideAim(): void {
     this.aimLine.visible = false
     this.aimDot.visible = false
+    this.aimGlow.visible = false
     this.spinLine.visible = false
     if (this.stick) this.stick.visible = false
+  }
+
+  resize(width: number, height: number): void {
+    this.cvw = width
+    this.cvh = height
+    this.renderer.setSize(width, height, false)
+    this.camera.aspect = width / height
+    this.camera.updateProjectionMatrix()
   }
 
   render(): void {
@@ -492,7 +672,26 @@ export class Scene3D {
     if (dt > 0) {
       const k = 1 - Math.exp(-dt * 14)
       for (const rig of this.balls.values()) {
-        if (rig.group.visible) rig.group.position.lerp(rig.target, k)
+        if (rig.group.visible && !rig.sinking) rig.group.position.lerp(rig.target, k)
+      }
+      for (const rig of this.balls.values()) {
+        if (!rig.sinking) continue
+        rig.sinkT += dt * 3.4
+        const t = Math.min(1, rig.sinkT)
+        const eased = t * t
+        rig.group.position.set(
+          rig.sinkStart.x + (rig.sinkTarget.x - rig.sinkStart.x) * eased,
+          rig.sinkStart.y - eased * 34,
+          rig.sinkStart.z + (rig.sinkTarget.z - rig.sinkStart.z) * eased
+        )
+        const s = 1 - eased * 0.55
+        rig.group.scale.set(s, s, s)
+        if (t >= 1) {
+          rig.sinking = false
+          rig.setVisible(false)
+          rig.group.scale.set(1, 1, 1)
+          rig.firstSeen = true
+        }
       }
     }
     this.camera.updateMatrixWorld(true)
@@ -526,6 +725,5 @@ export class Scene3D {
     })
     for (const rig of this.balls.values()) rig.dispose()
     this.balls.clear()
-    if (this.shadowTex) this.shadowTex.dispose()
   }
 }

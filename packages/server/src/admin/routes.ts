@@ -5,6 +5,7 @@ import { prisma } from '../db/index.js'
 import { requireRole } from '../auth/guards.js'
 import { runInTransaction, ledger } from '../wallet/service.js'
 import { invalidateSettingsCache } from '../settings/index.js'
+import { listFraudFlags, checkLedgerInvariance } from '../fraud/index.js'
 
 const adjustSchema = z.object({
   userId: z.string(),
@@ -159,8 +160,13 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   })
 
   app.get('/api/admin/fraud', { preHandler: adminGuard }, async (_request, reply) => {
-    const flags = await prisma.fraudFlag.findMany({ orderBy: { createdAt: 'desc' }, take: 100 })
+    const flags = await listFraudFlags()
     return reply.send({ ok: true, data: flags })
+  })
+
+  app.get('/api/admin/ledger/invariance', { preHandler: adminGuard }, async (_request, reply) => {
+    const result = await checkLedgerInvariance()
+    return reply.send({ ok: true, data: result })
   })
 
   app.get('/api/admin/actions', { preHandler: adminGuard }, async (_request, reply) => {

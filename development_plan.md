@@ -775,10 +775,17 @@ Acceptance per milestone = automated tests pass + feature demo-able.
 
 ## 15. Environment / Config
 
+Loaded from `packages/server/.env` (see `.env.example`). `DATABASE_URL`, `JWT_SECRET`
+and `COOKIE_SECRET` are required (>=16 chars for the secrets); the server refuses to
+start without them.
+
 ```env
-DATABASE_URL=...
-JWT_SECRET=...
-COOKIE_SECRET=...
+DATABASE_URL=postgresql://snooker:snooker@localhost:5432/snooker
+JWT_SECRET=<random, >=16 chars, required>
+COOKIE_SECRET=<random, >=16 chars, required>
+PORT=4000
+CLIENT_ORIGIN=http://localhost:5173
+LOG_LEVEL=info
 CR_START_BALANCE=1000
 MATCH_TURN_TIMEOUT_SEC=60
 MATCH_RECONNECT_GRACE_SEC=120
@@ -786,7 +793,6 @@ COMMISSION_PCT=0.10
 MIN_STAKE=100   # lowest stake tier ($1 table -> 100 CR)
 MAX_STAKE=1000  # highest stake tier ($10 table -> 1000 CR)
 REAL_MONEY_ENABLED=false
-CORS_ORIGIN=http://localhost:5173
 ```
 
 ---

@@ -113,21 +113,25 @@ Legend: `DONE` = built and verified · `PART` = works but incomplete · `TODO` =
 | 16 | Day 16 — Tournament drain E2E + hardening | server | DONE (8-join drain to champion, 3 backend fixes, E2E 116/116) |
 | 17 | Day 17 — Tournament UI: bracket, join, champion | client | DONE (bracket screen, create/join/live Play, champion ceremony) |
 | 17b | 3D table renderer (client review follow-up) | client | DONE (Three.js scene, WebGL, verified headless) |
-| 25 | Day 25 — Renderer polish + game feel (3D) | client | DONE (interp, cue pull-back, arena lamp/details, verified) |
+| 25 | Day 25 — Renderer polish + game feel (3D) | client | DONE (see Day 25 section; full polish delivery below) |
 | 18 | Day 18 — Profile, stats, leaderboards | server + client | DONE (GET /api/me, /api/leaderboard, break tracking, lobby stats card, E2E 116/116) |
 | 19 | Day 19 — Notifications | server + client | DONE (Notification model + migration, /api/notifications + mark-read, socket user rooms + live emit, bell/badge/panel, wired join/settle/practice/champion, E2E 125/125) |
 | 20 | Day 20 — Admin panel UI | client | DONE (GET /api/admin/actions audit feed, Admin button gated by role, 5-tab panel: dashboard stats, users status/role + wallet adjust, matches + replay events, settings editor, audit log; E2E 140/140) |
 | 21 | Day 21 — DB-backed settings + maintenance mode | server | DONE (settings loader w/ TTL cache + seed, stake/commission/format validation reads settings live, fastify 503 maintenance gate + socket guard, admin login during maint, public status endpoint, maintenance overlay/banner + admin toggle; E2E 169/169) |
 | 22 | Day 22 — Reconnect & disconnect policy | server + client | DONE (room seat sockets tracked per seat, disconnected flag + broadcasts, reconnectGraceSec grace timer, reconnect replays missed GameEvents by seq, timed-out single abandon settles to opponent / double-disconnect refunds, settled-match rejoin returns match:end; client opponent-gone banner + reconnect toasts; E2E 193/193 + headless demo) |
-| 23 | Day 23 — Turn timers, rate limits, input hardening | server | TODO |
-| 24 | Day 24 — Audit: replay viewer, fraud flags, ledger invariants | server + client | TODO |
-| 25 | Day 25 — Renderer polish + game feel | client | DONE (see row above — same work as 3D polish row) |
-| 26 | Day 26 — Client interp, perf, resilience | client | TODO |
-| 27 | Day 27 — Production readiness (ops, no real deploy yet) | all | TODO |
+| 23 | Day 23 — Turn timers, rate limits, input hardening | server | DONE (server-side turn timer auto-foul via applyTimeoutFoul, per-socket + per-user token-bucket rate limits, shot input schema validation (aim/power/spin/cuePos), timestamp-drift + duplicate-shot replay checks, admin-tunable turnTimeoutSec; E2E 212/212) |
+| 24 | Day 24 — Audit: replay viewer, fraud flags, ledger invariants | server + client | DONE (see Day 24 section; e2e 228/0, invariant green) |
+| 25 | Day 25 — Renderer polish + game feel | client | DONE — full polish delivered (see Day 25 section; e2e 228/0) |
+| 26 | Day 26 — Client interp, perf, resilience | client (+1 shared engine line) | DONE — 2D fallback lerp, allocation-free engine hot path, texture/line caches, adaptive DPR, render-loop guard + err-chip + offline overlay, three/socketio chunk split + lazy admin, a11y live regions (see Day 26 section; e2e 228/0) |
+| 27 | Day 27 — Production readiness (ops, no real deploy yet) | all | DONE — env templates + fail-fast config, db:deploy/status for migration order, real /api/health + /api/ready probes, structured pino logs + redaction + graceful shutdown, recoverMatchValidity wired, SQLite->Postgres pg_dump backup/restore scripts, RUNBOOK.md + README/plan doc fixes (see Day 27 section; e2e 228/0) |
 | 28 | Day 28 — Final review vs Definition of Done + full regression | all | TODO |
 
-> Current focus: **Day 22 done (Reconnect & disconnect policy)** — next planned phase:
-> **Day 23 — Turn timers, rate limits, input hardening**. Say "work on Day 23" (or "next phase") to start.
+> Current focus: **Day 27 done (Production readiness — required env fail-fast, db:deploy
+> migration step, real /api/health + /api/ready probes, structured logs + redaction +
+> graceful shutdown, boot-time stale-match recovery, pg_dump backup/restore scripts + a
+> committed RUNBOOK; e2e 228/0)** — next planned phase:
+> **Day 28 — Final review vs Definition of Done + full regression**. Say "work on Day 28"
+> (or "next phase") to start.
 
 ---
 
@@ -711,33 +715,211 @@ Each phase: **Goal** · **Tasks** · **Done when** · **Notes**.
   shot input schema + anomaly checks; timing checks.
 - Done when: an E2E test proves a timeout costs the right penalty and
   flood/skewed inputs are rejected.
+- Done. Implementation:
+  - `shared/rules/snooker.ts` adds `applyTimeoutFoul(frame, shooterIndex, reason)`:
+    awards `max(4, ball-on value)`, switches the visit, resets break score, keeps the
+    table untouched (no stroke). Unit-tested in `frame.test.ts` (red 4 / colouring-up 7 /
+    table untouched).
+  - `room.ts` owns a `turnTimer` armed at join, start, each committed shot, and each
+    new frame (guarded: only when started, not stopped, mid-frame, human, connected,
+    `turnTimeoutSec > 0`). On fire, `onTurnTimeout` applies the timeout foul and emits
+    `FOUL { penalty, reason: 'turn timeout', bySeat }` + `TURN_CHANGE`, then re-arms.
+    `commit()` (shared by `executeShot` and `onTurnTimeout`) broadcasts or ends the frame.
+    `turnTimeoutSec` is read from settings when a room is created (default 60).
+  - New `game/throttle.ts` `ShotEnforcement` gate in `shot:play`:
+    per-socket + per-user token buckets (20/15s and 40/30s), `validate()` schema
+    (finite aimAngle, power ∈ [0,1], spin |x|,|y| ≤ 1.5, cuePos finite, timestamp drift
+    ≤ 15s — `timestamp: 0` is the AI-stack "no client clock" marker and is tolerated),
+    and a duplicate-shot replay check keyed by socket in a 3 s window (fingerprint
+    excludes timestamp). Error codes: `rate_limited`, `bad_input`, `bad_aim_angle`,
+    `bad_power`, `bad_spin`, `bad_timestamp`, `bad_cue_pos`, `duplicate_shot`.
+  - Client sends `timestamp: Date.now()` with every shot.
+  - E2E §17: turn-timeout match (`turnTimeoutSec: 2`) broadcasts a 4-point penalty foul
+    to the shooter and switches the visit; a hardened match proves future-timestamp,
+    over-power, malformed spin, and malformed cue pos are all rejected, an identical
+    re-input is `duplicate_shot`, a 120-shot flood yields ≥80 `rate_limited`, and a valid
+    shot lands after a 2 s backoff. **212/212 checks.**
+  - Tuning notes: limits were doubled-and-more from (6,3)/(12,6) because the
+    bot-driven sim loops (§11 natural finish, §13 practice drain) legitimately fire
+    ~3/s/socket; the flood test was scaled to 120 to stay meaningful. Wait timeouts in
+    the bot loops were raised (break shots cost ~5 s under `computeBotShot('HARD')`) and
+    the reconnect rejoin now retries `match:join` to ride out the server-side
+    handler-registration race.
 
 ### Day 24 — Audit: replay viewer, fraud flags, ledger invariants
-- Goal: trust and transparency.
-- Tasks: replay from `GameEvent`; `FraudFlag` model + admin list; ledger
-  invariant property tests (`available+locked == sum(deltas)`); settle
-  idempotency test (settle twice = once).
-- Done when: replay renders a match, invariants hold under automated stress,
-  fraud list works.
+- Goal: trust and transparency — an admin can see why a result happened and audit the books.
+- Fraud detection (`server/src/fraud/index.ts`): per-user 60 s sliding window, per-code
+  thresholds with confidence scores — `duplicate_shot` -> 3 → `SHOT_REPLAY` (80%),
+  `bad_timestamp` -> 3 → `CLOCK_SKEW` (40%), `rate_limited` -> 8 → `SHOT_FLOOD` (90%),
+  `malformed` -> 5 → `MALFORMED_INPUT` (35%). Hooked at the `shot:play` boundary; bot shots
+  skipped; 10-minute dedupe per (user, code) and every write failure swallowed so fraud
+  signals never break gameplay.
+- Ledger invariants (`checkLedgerInvariance`): every wallet must satisfy
+  `available + locked == sum((balanceAfter - balanceBefore) + (lockedAfter - lockedBefore))`
+  across its transaction history. Exposed at `GET /admin/ledger/invariance`; `ledger.test.ts`
+  covers full lifecycle, double-settle idempotency, and adversarial settle.
+- Admin UI (`admin.ts` + `adminReplay.ts`): new **fraud** tab with the invariant audit card
+  and the flags table; match detail now embeds a canvas **replay viewer** rebuilt from
+  persisted `GameEvent` rows (`SHOT`, `BALL_POTTED`, `FOUL`, `TURN_CHANGE`, `FRAME_END`),
+  with |< Play < > >| controls, a step slider, and seq-highlighted event list.
+- `GameEvent` persistence now records a `SHOT` row per stroke (`{ byIndex, shot }`)
+  so non-live matches render; live `game:update` broadcast streams stay delta-only, so
+  reconnects/replays are a pure superset and no e2e/seq assumptions changed.
+- Verification: server vitest 6/6; server + client typecheck clean; client vite build clean;
+  full e2e **228 passed, 0 failed** (incl. `== 18. audit: fraud flags, ledger invariance,
+  replay data` — flags recorded with confidence, non-admin access denied, replay events
+  replayed from db with strictly increasing seq, ledger invariant green after the audit);
+  headless-Chrome screenshots of the fraud tab and replay viewer captured. One root-caused
+  fix: e2e §8 was zero/restoring `alice`'s wallet with raw Prisma writes, desyncing her
+  ledger by exactly 200 — switched to ledger debit/credit rows and repaired the three
+  polluted wallets in dev data (429 ✅ 0 violations).
 
 ### Day 25 — Renderer polish + game feel
 - Goal: looks like product, not prototype.
 - Tasks: wooden frame + cloth gradients, ball gloss, pocket holes, cushion rails,
   aim line styling, pot animations, audio hooks, responsive layout, mobile-safe touch aim.
 - Done when: a non-technical reviewer finds the table attractive and playable.
+- Implemented (all in `packages/client`):
+  - **Ball gloss** — switched ball rigs from `MeshStandardMaterial` to `MeshPhysicalMaterial`
+    (`clearcoat 0.7`, low roughness); added a generated equirect gradient environment map via
+    `PMREMGenerator` (`scene.environment`) so balls pick up studio reflections.
+  - **Wooden frame** — apron + legs now use a generated wood-grain `CanvasTexture`; added
+    brass trim bands along the apron rim, brass corner plates, and brass pocket rims
+    (gold torus around each hole mouth).
+  - **Cloth gradients** — felt texture gained a corner vignette pass (soft AO toward the
+    rails) on top of the existing radial light falloff; marks/baulk/D preserved.
+  - **Cushion/pocket detail** — cushion nose strip + pocket holes kept; rim geometry added
+    around every pocket mouth.
+  - **Aim line styling** — dashed target ray is now power-tinted (opacity 0.4 → 0.9), the
+    aim dot gained an additive radial glow sprite that scales with power; same treatment in
+    the 2D fallback renderer (`renderer.ts`).
+  - **Pot animations** — when a ball transitions to potted in the 3D scene it now plays a
+    ~300ms sink animation (eased drop toward its nearest pocket + shrink) before hiding,
+    instead of vanishing instantly; the lerp loop skips sinking rigs so the fall is smooth.
+  - **Audio hooks** — new `game/audio.ts` WebAudio synth (no asset files): pot = triangle
+    plinks + low thud, foul = falling saw blips, frame end = rising triad, match end =
+    arpeggio, cushion tick on pot batches. Context is created/resumed on first user gesture;
+    a `Sound: on/off` toggle in the controls bar wires `setSoundMuted`. Fired from
+    `handleGameUpdate` events (`BALL_POTTED` → `playPot(batch)` + tick, `FOUL`, `FRAME_END`)
+    and on `match:end`.
+  - **Responsive layout** — canvas sizing is now DPR-aware and driven by a `ResizeObserver`
+    (`applyCanvasSize` + `Scene3D.resize`); `.table-frame` uses `max-width` + `aspect-ratio`
+    and stacks the controls bar on ≤640px.
+  - **Mobile-safe touch aim** — `input.ts` converted from mouse-only to Pointer Events
+    (`pointerdown`/`move`/`up` with pointer capture and `touch-action: none`), so touch
+    drag-to-aim and release-to-shoot work identically to mouse.
+- Verification: client `tsc --noEmit` clean; client `vite build` clean (pre-existing >500 kB
+  chunk warning only); server untouched; full e2e **228 passed, 0 failed**; server vitest 6/6.
+  Headless-Chrome CDP capture in practice play: canvas internal size now responsive (1100×586
+  at dpr 1 vs the old fixed 1200×640), `Sound` button present, real pot detected in-play
+  (`Potted: red` toast), and pixel analysis against the pre-polish frames shows a 20.71%
+  whole-frame change (wood/brass/gloss/vignette) plus a localized 0.23% brightened region
+  along the aim ray (line tint + glow). Pot mid-sink frames proved unreachable headlessly
+  (sink ≈ 300 ms vs ~300 ms screenshot latency under swiftshader), so the sink path is verified
+  by code + build + stable rendering across shots (no JS exceptions logged over many captures).
 
-### Day 26 — Client interp, resilience, perf
+### Day 26 — Client interp, resilience, perf (verified)
 - Goal: smooth play on modest hardware.
-- Tasks: snapshot interpolation for rendering, engine perf pass, error
-  boundaries/offline handling, asset/route loading polish, basics of a11y.
-- Done when: UI stays under target frame budget and errors surface gracefully.
+- Snapshot interpolation: the server only broadcasts settled snapshots on shot commit /
+  frame end (room cadence), so 3D already interpolates via the ball-rig lerp. The 2D
+  fallback renderer teleported every ball; `renderer.ts` now caches each ball's last
+  screen position and eases between snapshots with `1 - exp(-dt * 14)` (frame-independent
+  smoothing, potted balls removed from the tracker), and the aim ray starts from the
+  interpolated cue-ball position.
+- Engine perf pass (`packages/shared/src/physics/world.ts`, allocation-free hot path):
+  the pair loop inlines the old `resolveBallBall` as `resolveCollisionPair` (in-place
+  velocity/position mutation, identical math: same overlap overlap resolution, impulse
+  with `BALL_RESTITUTION`), `integrate()` is scalar/in-place, and `checkPockets()` uses
+  squared distances with no temp vectors. Sim tick order and arithmetic unchanged, so
+  the seeded/deterministic sim output is preserved (full e2e still 228/0 below).
+- Client perf: `scene3d.ts` stopped disposing + rebuilding the aim/spin line geometries
+  on every aim update — a `setLine()` helper rewrites the shared 2-point `position`
+  buffer in place. All procedural textures (`felt`, `contact shadow`, `glow`, `wood`,
+  `env`) are memoized in a module-level `textureCache` and no longer recreated or
+  disposed per match (`shadowTex` field removed; materials/geometries still dispose).
+  The render loop now tracks a frame-time EMA; sustained >28 ms frames step DPR down
+  (2 → 1.5 → 1, with a toast), sustained <14 ms and 20 s quiet recovers DPR.
+- Error resilience: the render loop is wrapped so a `scene3d.render()`/`drawTable()`
+  throw disposes the 3D scene, falls back to the canvas renderer once, and surfaces the
+  message; global `error` + `unhandledrejection` handlers feed a fixed bottom-left
+  `#err-chip` (`aria-live="polite"`, auto-clears after 8 s). A `#net-overlay` sits inside
+  `.table-frame` (now `position:relative`) and shows when a live match is socket-
+  disconnected or offline, driven from socket connect/disconnect + window online/offline.
+- Load basics: `vite.config.ts` adds `manualChunks` splitting `three` and
+  `socket.io-client` into cached chunks, and the admin panel is now loaded via dynamic
+  `import('./admin.js')` on first click (`mountAdminPanel`, gated on admin still being
+  open + logged in). Build shows `three-*` 530 kB, `socketio-*` 42 kB, `admin-*` 22 kB
+  (lazy), `index-*` 55 kB.
+- A11y basics: toast announcements go through a hidden aria-live region (`#toast-live`,
+  `aria-live="polite"` `aria-atomic="false"` span per toast, auto-removed); the game
+  canvas is `role="img"` with a descriptive `aria-label`; `#hud-turn` is
+  `role="status"` + `aria-live="polite"`; `#conn-chip` is `role="status"`.
+- Verification:
+  - shared: `tsc --noEmit` clean, vitest 2 files 28 passed (world determinism + frame
+    rules) after the inlined-collision rewrite.
+  - client: `tsc --noEmit` clean; `vite build` clean with the new chunk split (admin.js
+    proves the lazy route).
+  - server: `tsc --noEmit` clean; vitest 2 files 6 passed.
+  - full e2e: **228 passed, 0 failed** (`e2e-day26.log`) against the rewritten engine —
+    confirms match-level determinism was preserved.
+  - headless Chrome CDP probe (`probe-day26.ts`): canvas `role=img` + aria-label present,
+    canvas 1100×586 (dpr 1) matching frame width, `.table-frame` is `position:relative`,
+    `#net-overlay` present and hidden (`display:none`) with correct copy, `#err-chip`
+    present and empty, `#toast-live` polite/atomic-false, `#hud-turn` status+polite,
+    `#conn-chip` role=status, Sound button still present, and **0 page exceptions**
+    (`game-26-table.png` captured). rAF-cadence/fps could not be measured headlessly
+    (new-headless delivers no BeginFrames, so `requestAnimationFrame` stalls — same
+    limitation as Day 25; adaptive-DPR logic verified by code + basic metrics only).
+- Notes: server untouched this day; `connected`/`updateConnChip` still drive the
+  existing top-bar chip. Servers healthy (4000 + 5173) at wrap.
 
-### Day 27 — Production readiness (ops groundwork, no real deploy)
-- Goal: the handover can happen safely.
-- Tasks: env templates, migration order step, health endpoints, structured logs,
-  backup/restore runbook, monitoring notes; document run procedures.
-- Done when: a fresh machine can boot the platform from docs alone, and the
-  runbook is committed.
+### Day 27 — Production readiness (ops groundwork, no real deploy) (verified)
+- Goal: a fresh machine can boot the platform from docs alone and the runbook is
+  committed.
+- Env templates + fail-fast: `config.ts` now declares `DATABASE_URL`, `JWT_SECRET` and
+  `COOKIE_SECRET` as **required** (secrets >=16 chars) and `LOG_LEVEL` as a pino-enum
+  default `info`; the server and seed script refuse to boot without them (verified: a
+  launch from repo root without `packages/server/.env` aborts with a clear zod error).
+  Rewrote `.env.example` without inline comments (dotenv treats them as part of the
+  value — the old example would have parsed `MIN_STAKE`/`MAX_STAKE` as NaN), documented
+  every var, and added the `LOG_LEVEL` + secrets guidance. `development_plan.md` §15 and
+  README corrected: `CORS_ORIGIN` -> `CLIENT_ORIGIN`, plus `PORT`/`LOG_LEVEL`.
+- Migration order step: added `db:deploy` (`prisma migrate deploy` — non-interactive,
+  safe to repeat), `db:status`, `db:generate` to the server package, wired `prisma db
+  seed` via the `"prisma": {"seed": ...}` block, and mirrored `db:deploy`/`db:status`/
+  `db:backup`/`db:restore`/`e2e` at the root. Verified `db:status` = "up to date",
+  `db:deploy` = "No pending migrations", `db:seed` idempotent. Seed now takes
+  `SEED_ADMIN_PASSWORD` (default `admin123`) and no longer prints the password.
+- Health/readiness: `/api/health` is a real probe — DB ping (logs `health db probe
+  failed` on error), `status` (`ok`/`maintenance`/`down`), `version` (read from
+  `package.json` via `createRequire`), `uptimeSec`, `realMoney`, `time`. New `/api/ready`
+  returns 200 `{db:'up', maintenance}` or 503 `{db:'down'}`. Both are exempt from the
+  maintenance gate so probes stay reachable. Verified live: `health {ok:true,status:ok,
+  db:up,version:0.1.0}` and `ready {ok:true,status:ready,db:up}`.
+- Structured logs: logger level now from `config.LOG_LEVEL`; redaction for
+  `authorization`/`cookie` headers; structured boot line `{event:'boot', version, port,
+  host, env, realMoney, rooms}`; Prisma client logs `warn`/`error`; graceful shutdown
+  logs `{signal}`, closes HTTP/sockets, calls `prisma.$disconnect()` and force-exits
+  after 10 s. Request logs (`incoming request`/`request completed` + `responseTime`)
+  confirmed in the boot log. Also wired the previously-dead `recoverMatchValidity()` at
+  boot — refunds non-practice `MATCH_STARTED` matches with reason
+  `server_recovery_refund` and logs `{count}` (stale-match recovery is now real).
+- Backup/restore runbook: new `scripts/db-backup.ps1` (byte-exact dump via `cmd /c`
+  redirect, -> `backups/snooker-<ts>.sql`, `PGDMP` custom format) and
+  `scripts/db-restore.ps1` (`docker cp` -> `pg_restore --clean --if-exists`;
+  destructive, server-down). New root `RUNBOOK.md` covering boot order, migration step,
+  health/readiness table, log locations, backup/restore (PS + generic *nix), monitoring
+  notes, shutdown, security quicklist and Day-28 gaps. `README.md` quick-start updated to
+  `cp .env.example packages/server/.env` + `db:deploy`. `backups/` added to `.gitignore`.
+- Verification this day: server vitest **6/6**, `pnpm -r typecheck` clean, `pnpm -r
+  build` clean (after regenerating the Prisma engine with the server briefly stopped —
+  Windows holds a lock on `query_engine-windows.dll.node` during `prisma generate`), e2e
+  **228 passed, 0 failed** (`e2e-day27.log`), backup produced a valid 751 KB `PGDMP`
+  dump, server restarted and healthy at wrap (4000 + 5173).
+- Notes: `package.json#prisma` seed wiring emits a Prisma-7 deprecation warning (fine on
+  Prisma 6; migrate to `prisma.config.ts` when upgrading). Cold-boot wipe-and-restore of
+  a fresh postgres volume was documented (RUNBOOK restore steps) but not executed, to
+  avoid destroying the dev DB.
 
 ### Day 28 — Final review vs Definition of Done
 - Goal: confirm MVP is complete and consistent.

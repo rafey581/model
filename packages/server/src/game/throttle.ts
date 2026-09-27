@@ -39,8 +39,8 @@ function fingerprint(input: ShotInputDto): string {
 type ShotEnforcementResult = { ok: true } | { ok: false; reason: string }
 
 export class ShotEnforcement {
-  private perSocket = new BucketLimiter(6, 3)
-  private perUser = new BucketLimiter(12, 6)
+  private perSocket = new BucketLimiter(20, 15)
+  private perUser = new BucketLimiter(40, 30)
   private lastAccepted = new Map<string, { sig: string; at: number }>()
 
   take(socketId: string, userId: string): boolean {

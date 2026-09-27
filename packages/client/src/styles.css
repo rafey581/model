@@ -6,6 +6,7 @@
   --muted: #8b949e;
   --accent: #238636;
   --accent-2: #2ea043;
+  --ok: #2ea043;
   --danger: #da3633;
   --border: #30363d;
   --felt: #0a6e3e;
@@ -170,6 +171,7 @@ th {
 
 #game-canvas {
   width: 100%;
+  height: 100%;
   border-radius: 10px;
   display: block;
 }
@@ -183,10 +185,61 @@ th {
 }
 
 .table-frame {
+  position: relative;
   background: radial-gradient(circle at 50% 30%, #4a2c16, #2a1709);
   padding: 22px;
   border-radius: 18px;
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  aspect-ratio: 1200 / 640;
+}
+
+.net-overlay {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 16, 0.72);
+  border-radius: 18px;
+  color: #e8e3d0;
+  font-size: 1.1rem;
+  letter-spacing: 0.04em;
+  z-index: 5;
+  text-align: center;
+}
+
+.err-chip {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  max-width: min(480px, calc(100vw - 32px));
+  background: #7a1f1f;
+  color: #ffe9e9;
+  border: 1px solid #c65c5c;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  z-index: 60;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.err-chip:empty {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .table-frame {
+    padding: 10px;
+  }
+  .controls-bar {
+    justify-content: center;
+  }
 }
 
 .toast {
@@ -891,4 +944,88 @@ button.mini {
   color: var(--muted);
   min-width: 40px;
   text-align: right;
+}
+
+.replay {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.replay canvas {
+  width: 100%;
+  max-width: 560px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #10241b;
+}
+
+.replay-controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.replay-controls input[type='range'] {
+  flex: 1;
+  min-width: 160px;
+  accent-color: var(--accent);
+}
+
+.replay-status {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+}
+
+.replay-events {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 12px;
+}
+
+.replay-event {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.replay-event.active {
+  background: rgba(210, 153, 34, 0.22);
+}
+
+.replay-event.dimmed {
+  color: var(--muted);
+  opacity: 0.65;
+}
+
+.ledger-audit {
+  margin-bottom: 14px;
+  max-width: 560px;
+}
+
+.ledger-ok {
+  font-weight: 700;
+  color: var(--ok);
+}
+
+.ledger-bad {
+  font-weight: 700;
+  color: var(--danger);
+}
+
+.flag-confidence {
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 12px;
 }

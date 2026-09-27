@@ -225,6 +225,7 @@ export class GameRoom {
         cuePos: shot.cuePos ?? undefined
       }
       const outcome = applyStroke(frame, seat, normalized)
+      const shotEvent = this.event('SHOT', { byIndex: seat, shot: normalized })
       const events: GameUpdateEvent[] = []
       for (const id of outcome.sim.pottedIds) {
         events.push(this.event('BALL_POTTED', { ballId: id, bySeat: seat }))
@@ -235,16 +236,16 @@ export class GameRoom {
       if (outcome.resolution.turnSwitches) {
         events.push(this.event('TURN_CHANGE', { turnSeat: frame.turnIndex }))
       }
-      this.commit(events, frame, outcome.frameEnded, outcome.frameWinner)
+      this.commit(events, frame, outcome.frameEnded, outcome.frameWinner, [shotEvent])
       return { accepted: true }
     } finally {
       this.simulating = false
     }
   }
 
-  private commit(events: GameUpdateEvent[], frame: FrameState, frameEnded: boolean, frameWinner: number | null): void {
+  private commit(events: GameUpdateEvent[], frame: FrameState, frameEnded: boolean, frameWinner: number | null, persistOnly: GameUpdateEvent[] = []): void {
     this.noteDelivered(events)
-    void this.callbacks.persist(events)
+    void this.callbacks.persist([...persistOnly, ...events])
     if (frameEnded && frameWinner !== null) {
       void this.handleFrameEnd(frameWinner, frame)
     } else {

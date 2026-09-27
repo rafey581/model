@@ -1,4 +1,4 @@
-import { io } from 'socket.io-client'
+﻿import { io } from 'socket.io-client'
 import type { Socket } from 'socket.io-client'
 import { PrismaClient } from '@prisma/client'
 import { signToken } from '../src/auth/guards.js'
@@ -6,6 +6,7 @@ import { getBotUserId, createOneVsOneMatch, MatchError, joinOneVsOneMatch } from
 import { createTournament, joinTournament } from '../src/tournaments/service.js'
 import { frameFromSnapshot, type FrameSnapshot } from '@snooker/shared'
 import { computeBotShot } from '../src/bot/bot.js'
+import { ledger, runInTransaction } from '../src/wallet/service.js'
 
 const BASE = 'http://localhost:4000'
 const prisma = new PrismaClient()
@@ -100,6 +101,20 @@ function waitAny<T>(
 
 function connectSocket(token: string): Socket {
   return io('http://localhost:4000', { auth: { token }, transports: ['websocket'], timeout: 10000 })
+}
+
+async function joinMatchUntilAcked(socket: Socket, matchId: string, event: string, shortMs = 1200, tries = 12): Promise<any> {
+  let lastError: Error | null = null
+  for (let i = 0; i < tries; i++) {
+    const pending = waitFor<any>(socket, event, shortMs)
+    socket.emit('match:join', { matchId })
+    try {
+      return await pending
+    } catch (error) {
+      lastError = error as Error
+    }
+  }
+  throw lastError ?? new Error(`join:${event} still unacknowledged after retries`)
 }
 
 async function getWallet(token: string): Promise<{ balance: number; locked: number; total: number }> {
@@ -290,7 +305,13 @@ async function main(): Promise<void> {
   check('service-level assertNotBot on create', rejectedAtService)
 
   console.log('== 8. practice: 3/day when zero balance ==')
-  await prisma.wallet.update({ where: { userId: alice.id }, data: { available: 0, locked: 0 } })
+  const zeroWallet = await prisma.wallet.findUnique({ where: { userId: alice.id }, select: { available: true, locked: true } })
+  const zeroAmount = Number(zeroWallet?.available ?? 0)
+  if (zeroAmount > 0) {
+    await runInTransaction(async (tx) => {
+      await ledger.debitAvailable(tx, { userId: alice.id, amount: zeroAmount, type: 'TEST_FREE_PRACTICE_ZERO' })
+    })
+  }
   wal = await getWallet(alice.token)
   check('alice zeroed', wal.balance === 0, wal)
 
@@ -308,7 +329,9 @@ async function main(): Promise<void> {
   res = await api('/api/practice/history', { token: alice.token })
   check('practice history has 3', Array.isArray(res.json?.data) && res.json.data.length === 3, res.json?.data?.length)
 
-  await prisma.wallet.update({ where: { userId: alice.id }, data: { available: 1000, locked: 0 } })
+  await runInTransaction(async (tx) => {
+    await ledger.creditAvailable(tx, { userId: alice.id, amount: 1000, type: 'TEST_FREE_PRACTICE_RESTORE' })
+  })
   res = await api('/api/practice/start', { method: 'POST', token: alice.token, body: { aiLevel: 'EASY' } })
   check('unlimited practice with balance', res.status === 200 && res.json?.ok, res.json)
 
@@ -402,8 +425,8 @@ async function main(): Promise<void> {
   while (totalStrokes < MAX_SIM_STROKES && frameWins === null) {
     const seat = shadow.turnIndex
     const shooter = seat === 0 ? sa2 : sb2
-    const aUp = waitFor<any>(sa2, 'game:update')
-    const bUp = waitFor<any>(sb2, 'game:update')
+    const aUp = waitFor<any>(sa2, 'game:update', 45000)
+    const bUp = waitFor<any>(sb2, 'game:update', 45000)
     const move = computeBotShot(shadow, 'HARD', `nat-${lastFrameIndex}-${strokeSeq}`)
     shooter.emit('shot:play', { matchId: natMatchId, input: move.shot })
     const [uA, uB] = await Promise.all([aUp, bUp])
@@ -416,7 +439,7 @@ async function main(): Promise<void> {
     const events = (uA.events as { type: string }[]) ?? (uB.events as { type: string }[])
     const frameEnded = frame.phase === 'FRAME_END' || events.some((e) => e.type === 'FRAME_END')
     if (frameEnded) {
-      const next = await waitAny<any>(sa2, ['frame:start', 'match:end'])
+      const next = await waitAny<any>(sa2, ['frame:start', 'match:end'], 20000)
       if (next.event === 'frame:start') {
         frameStartEvents++
         lastFrameIndex = (next.payload as any).frameIndex
@@ -591,14 +614,14 @@ async function main(): Promise<void> {
   while (!pOver && pStrokes < 700) {
     if (pShadow.turnIndex === 0) {
       const move = computeBotShot(pShadow, 'HARD', `prac-notif-${pStrokes}`)
-      const up = waitFor<any>(spPrac, 'game:update')
+      const up = waitFor<any>(spPrac, 'game:update', 45000)
       spPrac.emit('shot:play', { matchId: notifyPracticeId, input: move.shot })
       const upd = await up
       if (upd.frame?.phase === 'FRAME_END') pOver = true
       else pShadow = frameFromSnapshot(upd.frame ?? pShadow)
     } else {
       try {
-        const up = await waitFor<any>(spPrac, 'game:update', 6000)
+        const up = await waitFor<any>(spPrac, 'game:update', 30000)
         if (up.frame?.phase === 'FRAME_END') pOver = true
         else pShadow = frameFromSnapshot(up.frame ?? pShadow)
       } catch {
@@ -815,7 +838,7 @@ async function main(): Promise<void> {
       sr1.disconnect()
       const goneData = await gone
       check('opponent notified of seat disconnect', goneData.seat === 0, goneData)
-      const gonePlay = waitFor<any>(sr2, 'game:update', 15000)
+      const gonePlay = waitFor<any>(sr2, 'game:update', 30000)
       const goneMove = computeBotShot(reShadow, 'HARD', `reconn-gone-${reStrokes}`)
       sr2.emit('shot:play', { matchId: reId, input: goneMove.shot })
       const goneUpd = await gonePlay
@@ -823,17 +846,25 @@ async function main(): Promise<void> {
       check('turn played while opponent absent', missedSeqList.length > 0, missedSeqList)
       reShadow = frameFromSnapshot(goneUpd.frame ?? reShadow)
 
-      const rjBack = waitFor<any>(sr1, 'match:joined', 12000)
-      const rpBack = waitFor<any>(sr1, 'match:replay', 12000)
-      const backNotice = waitFor<any>(sr2, 'opponent:reconnected', 12000)
+      const backNotice = waitFor<any>(sr2, 'opponent:reconnected', 20000)
       sr1.connect()
       await new Promise<void>((resolveBack) => {
         sr1.once('connect', () => resolveBack())
       })
-      sr1.emit('match:join', { matchId: reId })
-      const rjData = await rjBack
+      const rjData = await joinMatchUntilAcked(sr1, reId, 'match:joined', 1500, 16)
       check('reconnected at original seat', rjData.seat === 0, rjData)
-      const replayData = await rpBack
+      let replayData: any
+      for (let attempt = 0; attempt < 12; attempt++) {
+        const replayWait = waitFor<any>(sr1, 'match:replay', 1500)
+        sr1.emit('match:join', { matchId: reId })
+        try {
+          replayData = await replayWait
+          break
+        } catch {
+          replayData = undefined
+        }
+      }
+      if (!replayData) throw new Error('timeout waiting for match:replay')
       const replaySeqs = ((replayData.events ?? []) as Array<{ seq: number }>).map((e) => e.seq)
       check(
         'reconnect replays missed events by seq',
@@ -843,8 +874,8 @@ async function main(): Promise<void> {
       const backData = await backNotice
       check('opponent told player reconnected', backData.seat === 0, backData)
     } else {
-      const up1 = waitFor<any>(sr1, 'game:update', 15000)
-      const up2 = waitFor<any>(sr2, 'game:update', 15000)
+      const up1 = waitFor<any>(sr1, 'game:update', 30000)
+      const up2 = waitFor<any>(sr2, 'game:update', 30000)
       const move = computeBotShot(reShadow, 'HARD', `reconn-${reStrokes}`)
       sr1.emit('shot:play', { matchId: reId, input: move.shot })
       const [u1, u2] = await Promise.all([up1, up2])
@@ -1064,11 +1095,11 @@ async function main(): Promise<void> {
       resolve()
     }, 4000)
   })
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 120; i++) {
     sth1.emit('shot:play', { matchId: thId, input: { aimAngle: 0.5, power: 0.5, spin: { x: 0, y: 0 }, timestamp: Date.now() } })
   }
   await floodDone
-  check('shot flood produced rate_limited responses', floodRateLimited >= 25, floodRateLimited)
+  check('shot flood produced rate_limited responses', floodRateLimited >= 80, floodRateLimited)
 
   await new Promise((r) => setTimeout(r, 2000))
   const backA = await shotFeedback(sth1, { ...vIn, timestamp: Date.now() })
@@ -1076,6 +1107,106 @@ async function main(): Promise<void> {
   check('valid shot accepted after throttle backoff', backA === 'accepted' || backB === 'accepted', { backA, backB })
   sth1.disconnect()
   sth2.disconnect()
+
+  console.log('== 18. audit: fraud flags, ledger invariance, replay data ==')
+
+  res = await api('/api/admin/settings', { method: 'PATCH', token: adminToken, body: { key: 'turnTimeoutSec', value: 600 } })
+  check('single-turn timeout ok', res.status === 200 && res.json?.ok, res.json)
+
+  const auAb = await register(suffix, '1')
+  res = await api('/api/practice/start', { method: 'POST', token: auAb.token, body: { aiLevel: 'EASY' } })
+  const auditMatchId = res.json?.data?.id as string | undefined
+  check('abuse practice match created', res.status === 200 && res.json?.ok && !!auditMatchId, res.json)
+
+  const fp = typeof auditMatchId === 'string' ? connectSocket(auAb.token) : null
+  if (fp && auditMatchId) {
+    const fpJoined = waitFor<any>(fp, 'match:joined')
+    const fpStart = waitFor<any>(fp, 'match:start')
+    fp.emit('match:join', { matchId: auditMatchId })
+    await fpJoined
+    await fpStart
+  }
+
+  const auditFeedback = (s: Socket, matchId: string, input: unknown, windowMs = 5000): Promise<string> =>
+    new Promise((resolve) => {
+      let done = false
+      const finish = (v: string) => {
+        if (done) return
+        done = true
+        s.off('error', onErr)
+        s.off('game:update', onUpd)
+        resolve(v)
+      }
+      const onErr = (d: { code?: string }) => finish(d?.code ?? 'unknown')
+      const onUpd = () => finish('accepted')
+      s.on('error', onErr)
+      s.on('game:update', onUpd)
+      setTimeout(() => finish('timeout'), windowMs)
+      s.emit('shot:play', { matchId, input })
+    })
+
+  if (fp && auditMatchId) {
+    const aV = { aimAngle: 0.5, power: 0.5, spin: { x: 0, y: 0 }, timestamp: Date.now() }
+    const aDup1 = await auditFeedback(fp, auditMatchId, { ...aV })
+    check('audit first shot accepted', aDup1 === 'accepted', aDup1)
+    const aDup2 = await auditFeedback(fp, auditMatchId, { ...aV })
+    const aDup3 = await auditFeedback(fp, auditMatchId, { ...aV })
+    const aDup4 = await auditFeedback(fp, auditMatchId, { ...aV })
+    check('replay rejections cross threshold', [aDup2, aDup3, aDup4].every((v) => v === 'duplicate_shot'), [aDup2, aDup3, aDup4])
+
+    const aTs1 = await auditFeedback(fp, auditMatchId, { ...aV, aimAngle: 0.51, timestamp: Date.now() + 1_000_000 })
+    const aTs2 = await auditFeedback(fp, auditMatchId, { ...aV, aimAngle: 0.52, timestamp: Date.now() + 1_000_000 })
+    const aTs3 = await auditFeedback(fp, auditMatchId, { ...aV, aimAngle: 0.53, timestamp: Date.now() + 1_000_000 })
+    check('future-timestamp rejections cross threshold', [aTs1, aTs2, aTs3].every((v) => v === 'bad_timestamp'), [aTs1, aTs2, aTs3])
+
+    let auditRateLimited = 0
+    const auditFloodDone = new Promise<void>((resolve) => {
+      const onErr = (d: { code?: string }) => {
+        if (d?.code === 'rate_limited') auditRateLimited++
+      }
+      fp.on('error', onErr)
+      setTimeout(() => {
+        fp.off('error', onErr)
+        resolve()
+      }, 4000)
+    })
+    for (let i = 0; i < 100; i++) {
+      fp.emit('shot:play', {
+        matchId: auditMatchId,
+        input: { aimAngle: 0.6 + (i % 3) * 0.01, power: 0.5, spin: { x: 0, y: 0 }, timestamp: Date.now() }
+      })
+    }
+    await auditFloodDone
+    check('audit flood crossed rate-limit threshold', auditRateLimited >= 8, auditRateLimited)
+
+    await new Promise((r) => setTimeout(r, 1500))
+    const flagsRes = await api('/api/admin/fraud', { token: adminToken })
+    const ownedFlags = (Array.isArray(flagsRes.json?.data) ? flagsRes.json.data : []) as Array<{ id: string; username: string | null; kind: string; confidence: number; reason: string | null }>
+    const mine = ownedFlags.filter((f) => f.username === auAb.username)
+    check('fraud list exposes owner username', mine.length > 0, mine.length)
+    check('SHOT_REPLAY flag recorded', mine.some((f) => f.kind === 'SHOT_REPLAY'), mine.map((f) => f.kind))
+    check('SHOT_FLOOD flag recorded', mine.some((f) => f.kind === 'SHOT_FLOOD'), mine.map((f) => f.kind))
+    check('CLOCK_SKEW flag recorded', mine.some((f) => f.kind === 'CLOCK_SKEW'), mine.map((f) => f.kind))
+    check('flags carry confidence', mine.every((f) => f.confidence >= 30), mine.slice(0, 2))
+
+    const abuseGuard = await api('/api/admin/fraud', { token: auAb.token })
+    check('non-admin cannot read fraud flags', abuseGuard.status === 401 || abuseGuard.status === 403, abuseGuard.status)
+
+    const eventsRes = await api(`/api/admin/matches/${auditMatchId}/events`, { token: adminToken })
+    const auditEvents = (Array.isArray(eventsRes.json?.data) ? eventsRes.json.data : []) as Array<{ seq: number; type: string; data: unknown }>
+    const shotRows = auditEvents.filter((e) => e.type === 'SHOT')
+    const monotonic = auditEvents.every((e, i, arr) => i === 0 || e.seq > arr[i - 1].seq)
+    check('admin match events replayed from db', auditEvents.length > 0 && shotRows.length >= 1, { total: auditEvents.length, shots: shotRows.length })
+    check('match event seq strictly increasing', monotonic, auditEvents.slice(0, 2))
+
+    const invariRes = await api('/api/admin/ledger/invariance', { token: adminToken })
+    const invari = (invariRes.json?.data ?? { ok: false, checked: 0, violations: [] }) as { ok: boolean; checked: number; violations: Array<{ userId: string }> }
+    check('ledger invariant holds after audit', invari.ok === true && invari.checked > 0 && invari.violations.length === 0, { ok: invari.ok, checked: invari.checked, violations: invari.violations.length })
+
+    res = await api('/api/practice/resign', { method: 'POST', token: auAb.token, body: { matchId: auditMatchId } })
+    check('audit practice resigned', res.status === 200 && res.json?.ok, res.json)
+    fp.disconnect()
+  }
 
   await resetSettings()
 

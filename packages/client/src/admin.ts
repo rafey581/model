@@ -1,4 +1,5 @@
 import { api } from './game/network.js'
+import { renderReplayViewer, type ReplayEvent } from './adminReplay.js'
 
 type ToastFn = (message: string, kind?: 'info' | 'error') => void
 
@@ -38,6 +39,22 @@ interface AdminGameEvent {
   data: unknown
 }
 
+interface FraudFlagRow {
+  id: string
+  userId: string
+  username: string | null
+  kind: string
+  confidence: number
+  reason: string | null
+  createdAt: string
+}
+
+interface LedgerInvariance {
+  ok: boolean
+  checked: number
+  violations: Array<{ userId: string; expected: number; actual: number; delta: number }>
+}
+
 interface AdminActionRow {
   id: string
   adminId: string
@@ -49,7 +66,7 @@ interface AdminActionRow {
   createdAt: string
 }
 
-const TABS = ['dashboard', 'users', 'matches', 'settings', 'audit'] as const
+const TABS = ['dashboard', 'users', 'matches', 'settings', 'fraud', 'audit'] as const
 type Tab = (typeof TABS)[number]
 let currentTab: Tab = 'dashboard'
 
@@ -101,6 +118,9 @@ async function loadTab(ctx: TabContext): Promise<void> {
         break
       case 'settings':
         view = await settingsView(ctx)
+        break
+      case 'fraud':
+        view = await fraudView()
         break
       case 'audit':
         view = await auditView()
@@ -303,23 +323,14 @@ async function renderMatchDetail(match: AdminMatch, ctx: TabContext): Promise<vo
       meta.appendChild(row)
     }
     detail.appendChild(meta)
-    const eventList = el('div', 'card')
-    eventList.appendChild(el('h3', undefined, `Game events (${events.length})`))
-    const shown = events.length <= 400 ? events : events.filter((e, i) => i < 100 || i >= events.length - 300)
-    const list = el('div', 'admin-events')
-    for (const event of shown) {
-      const line = el('div', 'admin-event')
-      line.appendChild(el('span', 'admin-event-seq', String(event.seq)))
-      line.appendChild(el('span', undefined, event.type))
-      const dataText = JSON.stringify(event.data)
-      if (dataText && dataText !== '{}') {
-        line.appendChild(el('span', 'muted', dataText.length > 140 ? dataText.slice(0, 140) + '…' : dataText))
-      }
-      list.appendChild(line)
+    const replayCard = el('div', 'card')
+    replayCard.appendChild(el('h3', undefined, `Replay (${events.length} events)`))
+    if (events.length === 0) {
+      replayCard.appendChild(el('div', 'muted', 'No events recorded for this match.'))
+    } else {
+      replayCard.appendChild(renderReplayViewer(events as ReplayEvent[]))
     }
-    if (events.length > shown.length) list.appendChild(el('div', 'muted', `… ${events.length - shown.length} more events (head + tail shown)`))
-    eventList.appendChild(list)
-    detail.appendChild(eventList)
+    detail.appendChild(replayCard)
     ctx.content.replaceChildren(detail)
   } catch (error) {
     loading.textContent = (error as Error).message
@@ -406,6 +417,47 @@ async function settingsView(ctx: TabContext): Promise<HTMLElement> {
   }
   addRow.append(keyInput, valueInput, add)
   wrap.appendChild(addRow)
+  return wrap
+}
+
+async function fraudView(): Promise<HTMLElement> {
+  const [flags, audit] = await Promise.all([
+    api<FraudFlagRow[]>('/admin/fraud'),
+    api<LedgerInvariance>('/admin/ledger/invariance')
+  ])
+  const wrap = el('div')
+  const auditCard = el('div', 'admin-card ledger-audit')
+  auditCard.appendChild(
+    el('div', audit.ok ? 'ledger-ok' : 'ledger-bad', audit.ok ? `Ledger invariant OK (${audit.checked} wallets)` : `Ledger invariant BROKEN (${audit.checked} wallets)`)
+  )
+  if (!audit.ok) {
+    const lines = el('div', 'admin-events')
+    for (const violation of audit.violations) {
+      const line = el('div', 'replay-event')
+      line.appendChild(el('span', 'muted', violation.userId.slice(0, 8)))
+      line.appendChild(el('span', 'ledger-bad', `delta ${violation.delta}`))
+      line.appendChild(el('span', 'muted', `expected ${violation.expected} actual ${violation.actual}`))
+      lines.appendChild(line)
+    }
+    auditCard.appendChild(lines)
+  }
+  wrap.appendChild(auditCard)
+  const table = el('table', 'admin-table') as HTMLTableElement
+  const thead = table.createTHead()
+  const headRow = thead.insertRow()
+  for (const label of ['Time', 'User', 'Kind', 'Confidence', 'Reason']) {
+    headRow.appendChild(el('th', undefined, label))
+  }
+  const tbody = table.createTBody()
+  for (const flag of flags) {
+    const tr = tbody.insertRow()
+    tr.insertCell().appendChild(el('div', 'muted', new Date(flag.createdAt).toISOString()))
+    tr.insertCell().appendChild(el('div', undefined, flag.username ?? flag.userId.slice(0, 8)))
+    tr.insertCell().appendChild(el('div', 'admin-key', flag.kind))
+    tr.insertCell().appendChild(el('div', 'flag-confidence', `${flag.confidence}%`))
+    tr.insertCell().appendChild(el('div', 'muted', flag.reason ?? '-'))
+  }
+  wrap.appendChild(table)
   return wrap
 }
 

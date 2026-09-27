@@ -1,5 +1,6 @@
 import {
   BALL_RADIUS,
+  BALL_RESTITUTION,
   TABLE_LENGTH,
   TABLE_WIDTH,
   CUSHION_RESTITUTION_LONG,
@@ -17,8 +18,8 @@ import {
 import type { BallState } from '../state.js'
 import type { SimEvent, SimShot, SimResult } from '../events.js'
 import type { Vec2 } from '../vec.js'
-import { add, sub, scale, length, dist, normalize, vec } from '../vec.js'
-import { resolveBallBall, positionalCorrection, reflectCushionX, reflectCushionY } from './collision.js'
+import { sub, length, normalize, vec } from '../vec.js'
+import { reflectCushionX, reflectCushionY } from './collision.js'
 import { applyShot } from './cue.js'
 import { pocketPositions } from './layout.js'
 import type { Pocket } from './layout.js'
@@ -65,13 +66,7 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
         for (let j = i + 1; j < balls.length; j++) {
           const b = balls[j]!
           if (b.potted) continue
-          const res = resolveBallBall(a.pos, a.vel, b.pos, b.vel)
-          if (!res.colliding) continue
-          const corr = positionalCorrection(a.pos, b.pos)
-          a.pos = corr.aPos
-          b.pos = corr.bPos
-          a.vel = res.aVel
-          b.vel = res.bVel
+          if (!resolveCollisionPair(a, b)) continue
           events.push({ type: 'BALL_HIT', tick, ballId: b.id, otherBallId: a.id })
           if (firstContactId === null && (a.isCue || b.isCue)) {
             firstContactId = a.isCue ? b.id : a.id
@@ -110,24 +105,34 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
 }
 
 function integrate(ball: BallState): void {
-  const speed = length(ball.vel)
+  const vx = ball.vel.x
+  const vy = ball.vel.y
+  const speed = Math.sqrt(vx * vx + vy * vy)
   if (speed > 0) {
     const reduction = ROLL_FRICTION * TICK_DT
     const nextSpeed = speed - reduction
     if (nextSpeed <= MIN_SPEED) {
-      ball.vel = vec(0, 0)
+      ball.vel.x = 0
+      ball.vel.y = 0
     } else {
-      ball.vel = scale(ball.vel, nextSpeed / speed)
+      const f = nextSpeed / speed
+      ball.vel.x = vx * f
+      ball.vel.y = vy * f
     }
   }
-  const spinMag = length(ball.spin)
+  const sx = ball.spin.x
+  const sy = ball.spin.y
+  const spinMag = Math.sqrt(sx * sx + sy * sy)
   if (spinMag > 0) {
     const reduction = SPIN_FRICTION * TICK_DT
     const nextSpin = spinMag - reduction
     if (nextSpin <= 0) {
-      ball.spin = vec(0, 0)
+      ball.spin.x = 0
+      ball.spin.y = 0
     } else {
-      ball.spin = scale(ball.spin, nextSpin / spinMag)
+      const f = nextSpin / spinMag
+      ball.spin.x = sx * f
+      ball.spin.y = sy * f
     }
   }
   ball.pos.x += ball.vel.x * TICK_DT
@@ -169,11 +174,14 @@ function cushionDamping(ball: BallState): number {
 
 function checkPockets(ball: BallState, pockets: Pocket[], events: SimEvent[], tick: number): void {
   for (const pocket of pockets) {
-    const d = dist(ball.pos, vec(pocket.x, pocket.y))
-    if (d < pocket.radius) {
+    const dx = ball.pos.x - pocket.x
+    const dy = ball.pos.y - pocket.y
+    if (dx * dx + dy * dy < pocket.radius * pocket.radius) {
       ball.potted = true
-      ball.vel = vec(0, 0)
-      ball.spin = vec(0, 0)
+      ball.vel.x = 0
+      ball.vel.y = 0
+      ball.spin.x = 0
+      ball.spin.y = 0
       events.push({
         type: ball.isCue ? 'CUE_POTTED' : 'POTTED',
         tick,
@@ -182,6 +190,34 @@ function checkPockets(ball: BallState, pockets: Pocket[], events: SimEvent[], ti
       return
     }
   }
+}
+
+function resolveCollisionPair(a: BallState, b: BallState): boolean {
+  const dx = b.pos.x - a.pos.x
+  const dy = b.pos.y - a.pos.y
+  const minDist = BALL_RADIUS * 2
+  const d2 = dx * dx + dy * dy
+  if (d2 === 0 || d2 >= minDist * minDist) return false
+  const d = Math.sqrt(d2)
+  const nx = dx / d
+  const ny = dy / d
+  const relSpeedAlongNormal = (b.vel.x - a.vel.x) * nx + (b.vel.y - a.vel.y) * ny
+  if (relSpeedAlongNormal > 0) return false
+  const impulse = (-(1 + BALL_RESTITUTION) * relSpeedAlongNormal) / 2
+  const ix = nx * impulse
+  const iy = ny * impulse
+  a.vel.x -= ix
+  a.vel.y -= iy
+  b.vel.x += ix
+  b.vel.y += iy
+  const overlap = minDist - d
+  const cx = nx * (overlap / 2)
+  const cy = ny * (overlap / 2)
+  a.pos.x -= cx
+  a.pos.y -= cy
+  b.pos.x += cx
+  b.pos.y += cy
+  return true
 }
 
 function applySpinEffects(balls: BallState[], cueIndex: number, objectIndex: number): void {

@@ -10,6 +10,7 @@ deterministic physics + rules engine and a ledger-based wallet.
 See also:
 - `development_plan.md` — full technical specification
 - `product_showcase_client_review.md` — client-facing product overview
+- `RUNBOOK.md` — boot, migration, backup/restore and monitoring procedures
 
 ## Structure
 
@@ -24,14 +25,15 @@ packages/
 
 ```bash
 pnpm install
-pnpm db:up            # starts postgres + redis (docker compose)
-cp .env.example .env
-pnpm db:migrate
-pnpm dev              # runs server + client in watch mode
+pnpm db:up                # starts postgres (docker compose)
+cp .env.example packages/server/.env   # then set DATABASE_URL + real secrets
+pnpm db:deploy            # apply migrations (non-interactive, for any environment)
+pnpm db:seed              # first-boot users (admin, player, player2)
+pnpm dev                  # runs server + client in watch mode
 ```
 
 - Client: http://localhost:5173
-- Server: http://localhost:4000
+- Server: http://localhost:4000 (health: `/api/health`, readiness: `/api/ready`)
 
 ## Useful Scripts
 
@@ -39,11 +41,16 @@ pnpm dev              # runs server + client in watch mode
 pnpm test          # run all tests (physics, rules, services)
 pnpm typecheck     # typecheck all packages
 pnpm build         # build all packages
+pnpm e2e           # full end-to-end suite (needs a running server; mutates dev DB)
+pnpm db:backup     # Postgres custom-format dump -> backups/
+pnpm db:restore -- -File .\backups\snooker-<timestamp>.sql
 ```
 
 ## Environment Variables
 
-See `.env.example`. Never commit real secrets.
+Copy `.env.example` to `packages/server/.env` and fill in real values.
+`DATABASE_URL`, `JWT_SECRET` and `COOKIE_SECRET` are required — the server refuses
+to boot without them. Never commit real secrets. Full reference: `RUNBOOK.md` §2.
 
 ## License / Compliance
 

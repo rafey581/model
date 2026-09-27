@@ -2,11 +2,14 @@ import 'dotenv/config'
 import { z } from 'zod'
 
 const envSchema = z.object({
-  DATABASE_URL: z.string().default('postgresql://snooker:snooker@localhost:5432/snooker'),
-  JWT_SECRET: z.string().min(8).default('dev-secret-change-me'),
-  COOKIE_SECRET: z.string().min(8).default('dev-cookie-secret'),
+  DATABASE_URL: z.string().min(1),
+  JWT_SECRET: z.string().min(16, 'JWT_SECRET is required (16+ chars; never use a committed value)'),
+  COOKIE_SECRET: z.string().min(16, 'COOKIE_SECRET is required (16+ chars; never use a committed value)'),
   PORT: z.coerce.number().default(4000),
   CLIENT_ORIGIN: z.string().default('http://localhost:5173'),
+  LOG_LEVEL: z
+    .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal'])
+    .default('info'),
   CR_START_BALANCE: z.coerce.number().default(1000),
   MATCH_TURN_TIMEOUT_SEC: z.coerce.number().default(60),
   MATCH_RECONNECT_GRACE_SEC: z.coerce.number().default(120),
