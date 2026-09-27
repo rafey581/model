@@ -1,0 +1,227 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String                 @id @default(cuid())
+  email        String                 @unique
+  username     String                 @unique
+  passwordHash String
+  role         String                 @default("PLAYER")
+  status       String                 @default("ACTIVE")
+  jgCheck      Json?
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+  profile      Profile?
+  wallet       Wallet?
+  sessions     Session[]
+  matchEntries MatchPlayer[]
+  matches      Match[]                @relation("MatchWinner")
+  transactions WalletTransaction[]
+  tournaments  TournamentPlayer[]
+  notifications Notification[]
+}
+
+model Profile {
+  id          String  @id @default(cuid())
+  userId      String  @unique
+  countryCode String?
+  avatarUrl   String?
+  bio         String?
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  ip        String?
+  userAgent String?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Wallet {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  available Decimal  @default(0)
+  locked    Decimal  @default(0)
+  currency  String   @default("CR")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model WalletTransaction {
+  id            String   @id @default(cuid())
+  userId        String
+  type          String
+  amount        Decimal
+  currency      String   @default("CR")
+  status        String   @default("COMPLETED")
+  refId         String?
+  balanceBefore Decimal
+  balanceAfter  Decimal
+  meta          Json?
+  createdAt     DateTime @default(now())
+  counterpartyId String?
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([refId])
+}
+
+model Match {
+  id             String       @id @default(cuid())
+  matchType      String       @default("ONE_V_ONE")
+  tournamentId   String?
+  round          Int?
+  aiLevel        String?
+  stakeTier      String?
+  status         String       @default("CREATED")
+  stakePerPlayer Decimal      @default(0)
+  currency       String       @default("CR")
+  platformFeePct Decimal      @default(0)
+  format         String       @default("BO3")
+  winnerId       String?
+  resultJson     Json?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  players        MatchPlayer[]
+  events         GameEvent[]
+  winner         User?        @relation("MatchWinner", fields: [winnerId], references: [id])
+  tournament     Tournament?  @relation(fields: [tournamentId], references: [id])
+}
+
+model MatchPlayer {
+  id       String @id @default(cuid())
+  matchId  String
+  userId   String
+  seat     Int
+  result   String?
+  playSide Json?
+  match    Match  @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([matchId, seat])
+}
+
+model GameEvent {
+  id        String   @id @default(cuid())
+  matchId   String
+  seq       Int
+  type      String
+  data      Json?
+  createdAt DateTime @default(now())
+  match     Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@unique([matchId, seq])
+}
+
+model Tournament {
+  id          String             @id @default(cuid())
+  status      String             @default("DRAFT")
+  name        String             @default("8-Player Cup")
+  entryFee    Decimal            @default(0)
+  size        Int                @default(8)
+  format      String             @default("BO3")
+  championId  String?
+  runnerUpId  String?
+  createdAt   DateTime           @default(now())
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  players     TournamentPlayer[]
+  matches     Match[]
+  resultsJson Json?
+}
+
+model TournamentPlayer {
+  id           String     @id @default(cuid())
+  tournamentId String
+  userId       String
+  seed         Int
+  status       String     @default("ALIVE")
+  eliminatedIn Int?
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tournamentId, seed])
+}
+
+model CryptoDeposit {
+  id            String   @id @default(cuid())
+  userId        String
+  network       String
+  address       String
+  amount        Decimal
+  confirmations Int      @default(0)
+  status        String   @default("PENDING")
+  txHash        String?
+  creditedAt    DateTime?
+  createdAt     DateTime @default(now())
+}
+
+model CryptoWithdrawal {
+  id       String   @id @default(cuid())
+  userId   String
+  address  String
+  network  String
+  amount   Decimal
+  status   String   @default("PENDING")
+  txHash   String?
+  reviewBy String?
+  createdAt DateTime @default(now())
+  completedAt DateTime?
+}
+
+model KycRecord {
+  id          String   @id @default(cuid())
+  userId      String
+  status      String   @default("NOT_SUBMITTED")
+  providerRef String?
+  submittedAt DateTime?
+  reviewedAt  DateTime?
+  result      Json?
+}
+
+model AdminAction {
+  id         String   @id @default(cuid())
+  adminId    String
+  action     String
+  targetType String
+  targetId   String?
+  meta       Json?
+  createdAt  DateTime @default(now())
+}
+
+model FraudFlag {
+  id        String   @id @default(cuid())
+  userId    String
+  kind      String
+  confidence Int     @default(0)
+  reason    String?
+  createdAt DateTime @default(now())
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  kind      String
+  title     String
+  body      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+  @@index([userId, createdAt])
+}
+
+model AppSetting {
+  key   String @id
+  value Json
+}
