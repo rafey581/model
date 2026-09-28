@@ -378,13 +378,38 @@ describe('cushions', () => {
 describe('playback', () => {
   const breakShot = { aimAngle: 0, power: 1, spin: { x: 0, y: 0 } }
 
-  it('reports simulated time, which ticksUsed alone understates', () => {
+  it('reports simulated time on the same clock as the tick count', () => {
     const result = simulateStroke(layoutTableBalls(), breakShot, { maxTicks: 120 * 60 })
     expect(result.simSeconds).toBeGreaterThan(0)
-    // A tick advances a ball by several substeps, so tick count is not duration.
-    // If these ever match, the field is redundant and the keyframe clock is fine.
-    expect(result.simSeconds).toBeGreaterThan(result.ticksUsed * TICK_DT)
+    // Subdividing a tick divides it rather than repeating it, so a tick of wall
+    // clock is a tick of simulated time however many substeps it took. The two
+    // clocks agreeing is what makes the keyframe times line up with the replay.
+    // `ticksUsed` counts the final tick that found the table already settled, which
+    // adds no time, so the two agree to within a single tick.
+    expect(Math.abs(result.simSeconds - result.ticksUsed * TICK_DT)).toBeLessThanOrEqual(TICK_DT)
     expect(result.simSeconds).toBeLessThan(60)
+  })
+
+  it('advances a ball by one tick of travel however many substeps a tick takes', () => {
+    // The subdivision exists only to keep contact detection from tunnelling. If it
+    // ever advanced a ball by a whole tick per substep, a fast ball would cross the
+    // table several times over in a single tick and pass straight through anything
+    // it met. Over one tick, distance has to follow speed and not the substep count.
+    const openTable = (): ReturnType<typeof layoutTableBalls> => {
+      const balls = layoutTableBalls()
+      for (const ball of balls) ball.potted = ball.id !== 0
+      return balls
+    }
+    const after = (power: number) => {
+      const balls = openTable()
+      const from = balls[0]!.pos.x
+      const result = simulateStroke(balls, { aimAngle: 0, power, spin: { x: 0, y: 0 } }, { maxTicks: 1 })
+      return result.balls[0]!.pos.x - from
+    }
+    // Power 0.3 needs several substeps a tick and power 0.03 needs one.
+    const fast = after(0.3)
+    const slow = after(0.03)
+    expect(fast / slow).toBeCloseTo(0.3 / 0.03, 1)
   })
 
   it('does not sample keyframes unless playback is requested', () => {
@@ -395,7 +420,13 @@ describe('playback', () => {
     expect(plain.pots).toBeUndefined()
     const sampled = simulateStroke(layoutTableBalls(), breakShot, { playback: { rate: 30 } })
     expect(sampled.keyframes!.length).toBeGreaterThan(0)
-    expect(sampled.pots).toEqual([])
+    // Whatever this particular break shot does, every recorded pot must name a ball
+    // that the simulation agrees was potted, at a time inside the shot.
+    for (const [ballId, at] of sampled.pots ?? []) {
+      expect(sampled.pottedIds).toContain(ballId)
+      expect(at).toBeGreaterThanOrEqual(0)
+      expect(at).toBeLessThanOrEqual(sampled.simSeconds)
+    }
   })
 
   it('produces strictly increasing keyframe times that reach the shot duration', () => {
@@ -413,12 +444,21 @@ describe('playback', () => {
   it('only ever samples balls that are on the table and moving', () => {
     const result = simulateStroke(layoutTableBalls(), breakShot, { maxTicks: 120 * 60, playback: { rate: 30 } })
     const potted = new Set(result.pottedIds)
+    // A ball is allowed to appear in the one keyframe where it drops, so that the
+    // replay shows it reach the pocket instead of blinking out mid-air. It must not
+    // reappear in any later keyframe.
+    const potTimes = new Map<number, number>()
+    for (const [ballId, at] of result.pots ?? []) potTimes.set(ballId, at)
     for (const keyframe of result.keyframes!) {
       const seen = new Set<number>()
       for (const [id, x, y] of keyframe.balls) {
         expect(seen.has(id), `ball ${id} sampled twice in one keyframe`).toBe(false)
         seen.add(id)
-        expect(potted.has(id)).toBe(false)
+        if (potted.has(id)) {
+          // It may appear up to and including the frame it drops in, never after.
+          expect(keyframe.t, `ball ${id} sampled after it was potted`).toBeLessThanOrEqual(potTimes.get(id)! + 1e-9)
+          continue
+        }
         expect(Number.isFinite(x) && Number.isFinite(y)).toBe(true)
         expect(x).toBeGreaterThanOrEqual(0)
         expect(y).toBeGreaterThanOrEqual(0)
@@ -526,6 +566,37 @@ describe('rules', () => {
     expect(outcome.sim.firstContactId).toBeNull()
     expect(outcome.resolution.foul).toBe(true)
     expect(frame.turnIndex).toBe(1)
+  })
+
+  it('reports a wrong-ball first contact as a contact, not as no contact', () => {
+    // The same penalty applies either way, so the two cases are only distinguishable
+    // by what the engine reports. First contact is what decides it: a stroke that
+    // reaches a ball it may not hit has made a contact, and must be recorded as one
+    // rather than being lumped in with a stroke that never touched anything.
+    const frame = createFrame()
+    const cue = frame.balls.find((b) => b.id === BALL_IDS.CUE)!
+    // Clear the rest of the table so the yellow is the only ball within reach, then
+    // put it squarely in the cue ball's path. A red is on, so this is a wrong ball.
+    for (const b of frame.balls) {
+      if (b.id !== BALL_IDS.CUE && b.id !== BALL_IDS.YELLOW) b.potted = true
+    }
+    const yellow = frame.balls.find((b) => b.id === BALL_IDS.YELLOW)!
+    yellow.potted = false
+    yellow.vel.x = 0
+    yellow.vel.y = 0
+    yellow.pos.x = cue.pos.x + 120
+    yellow.pos.y = cue.pos.y
+
+    const outcome = applyStroke(frame, 0, { power: 0.6, aimAngle: 0, spin: { x: 0, y: 0 } })
+    // Contact happened, so this is not the no-contact case.
+    expect(outcome.sim.firstContactId).toBe(BALL_IDS.YELLOW)
+    // ...but reaching an illegal ball is still a foul, and the visit still switches.
+    expect(outcome.resolution.foul).toBe(true)
+    expect(frame.turnIndex).toBe(1)
+    // The struck ball was actually driven away, which is what separates a real
+    // contact from a stroke that passed through empty space.
+    const struck = frame.balls.find((b) => b.id === BALL_IDS.YELLOW)!
+    expect(Math.abs(struck.pos.x - (cue.pos.x + 120))).toBeGreaterThan(1)
   })
 
   it('builds a match state', () => {

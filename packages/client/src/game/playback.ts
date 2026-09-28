@@ -1,11 +1,10 @@
-import type { ShotPlayback } from '@snooker/shared'
+import { SHOT_PLAYBACK_SPEED, type ShotPlayback } from '@snooker/shared'
 
 /**
- * Shot playback speed. The server streams true simulated time; scaling it here
- * means a 14 second break plays in about 4.7 seconds. Changing this is a
- * one-line local change and needs no server change.
+ * Shot playback speed. Shared with the server, which needs the same number to know
+ * how long a client's replay will run before it lets the next shot go.
  */
-export const SHOT_PLAYBACK_SPEED = 3
+export { SHOT_PLAYBACK_SPEED }
 
 interface BallSample {
   t: number

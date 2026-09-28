@@ -83,11 +83,24 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
       break
     }
 
+    // A tick is subdivided so that no ball advances more than a quarter of a
+    // radius per substep, which is what keeps contact detection from tunnelling:
+    // two balls are 105mm across, and a fast cue ball covers far more than that in
+    // a whole tick.
+    //
+    // The subdivision must divide the tick, not repeat it. Advancing by a whole
+    // TICK_DT on every substep made a fast ball travel several ticks' worth of
+    // ground per tick, so it could pass clean through an object ball without ever
+    // overlapping it, and the shot it "hit" registered as a glancing nothing. It
+    // also applied rolling resistance once per substep, which made the effective
+    // friction rise with speed and left harder shots travelling shorter distances
+    // than softer ones. The substep delta below fixes both.
     const substeps = Math.max(1, Math.ceil((maxSpeed * TICK_DT) / (BALL_RADIUS * 0.25)))
+    const subDt = TICK_DT / substeps
     for (let step = 0; step < substeps; step++) {
       for (const ball of balls) {
         if (ball.potted || ball.vel.x === 0 && ball.vel.y === 0) continue
-        integrate(ball)
+        integrate(ball, subDt)
       }
 
       for (let i = 0; i < balls.length; i++) {
@@ -102,13 +115,23 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
           events.push({ type: 'BALL_HIT', tick, ballId: b.id, otherBallId: a.id })
           if (cue) {
             const other = cue === a ? b : a
-            if (firstContactId === null) firstContactId = other.id
+            // The striker has to cause the cue ball to make the first contact. If the
+            // cue ball was already standing still and an object ball ran into it, the
+            // object ball was never "on", so that cannot be a legal first contact and
+            // must not be recorded as one.
+            if (firstContactId === null && cueVelBefore.x * cueVelBefore.x + cueVelBefore.y * cueVelBefore.y > 0) {
+              firstContactId = other.id
+            }
             applySpinEffects(cue, other, !cueFirstContact, cueVelBefore)
             cueFirstContact = true
           }
         }
       }
 
+      // Rails and pockets are resolved per substep as well, so a ball that reaches
+      // a cushion partway through a tick is turned at that moment rather than
+      // being allowed to travel its whole remaining tick into the rail and then
+      // snapped back, which cost a fast ball most of a ball's width of travel.
       for (const ball of balls) {
         if (ball.potted) continue
         reflectOffCushions(ball, events, tick)
@@ -121,17 +144,17 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
           cuePotted = true
         }
       }
+    }
 
-      simTime += TICK_DT
-      if (keyframes) {
-        const due = simTime >= nextSampleAt
-        // A pot always forces a sample: without one the ball would sit at the
-        // pocket lip until the replay ended and the snapshot took over.
-        if (due || justPotted.length) {
-          keyframes.push(captureKeyframe(balls, simTime, justPotted))
-          justPotted = []
-          nextSampleAt = simTime + (due ? sampleInterval : 0)
-        }
+    simTime += TICK_DT
+    if (keyframes) {
+      const due = simTime >= nextSampleAt
+      // A pot always forces a sample: without one the ball would sit at the
+      // pocket lip until the replay ended and the snapshot took over.
+      if (due || justPotted.length) {
+        keyframes.push(captureKeyframe(balls, simTime, justPotted))
+        justPotted = []
+        nextSampleAt = simTime + (due ? sampleInterval : 0)
       }
     }
   }
@@ -191,12 +214,12 @@ function round(value: number, places = 0): number {
   return Math.round(value * f) / f
 }
 
-function integrate(ball: BallState): void {
+function integrate(ball: BallState, dt: number): void {
   const vx = ball.vel.x
   const vy = ball.vel.y
   const speed = Math.sqrt(vx * vx + vy * vy)
   if (speed > 0) {
-    const reduction = ROLL_FRICTION * TICK_DT
+    const reduction = ROLL_FRICTION * dt
     const nextSpeed = speed - reduction
     if (nextSpeed <= MIN_SPEED) {
       ball.vel.x = 0
@@ -215,12 +238,12 @@ function integrate(ball: BallState): void {
     // cancels the spin outright, which leaves the bottom of the spin control
     // range doing nothing at all. Proportional decay keeps the effect in
     // proportion to the spin applied at every shot distance.
-    const retain = Math.max(0, 1 - SPIN_FRICTION * TICK_DT)
+    const retain = Math.max(0, 1 - SPIN_FRICTION * dt)
     ball.spin.x = sx * retain
     ball.spin.y = sy * retain
   }
-  ball.pos.x += ball.vel.x * TICK_DT
-  ball.pos.y += ball.vel.y * TICK_DT
+  ball.pos.x += ball.vel.x * dt
+  ball.pos.y += ball.vel.y * dt
 }
 
 function reflectOffCushions(ball: BallState, events: SimEvent[], tick: number): void {

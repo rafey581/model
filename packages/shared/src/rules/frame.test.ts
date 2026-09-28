@@ -115,16 +115,43 @@ describe('fouls', () => {
     expect(f.ballOn).toBe('RED')
   })
 
-  it('treats hitting the wrong colour on ANY_COLOUR as a foul', () => {
+  it('allows any colour to be nominated after a red, not just the lowest one', () => {
+    // The ball on after a red is "a colour of the striker's choice", so the black is
+    // a legal first contact and scores its own value. This used to be called a foul
+    // for missing the ball on, which reported "no legal contact" on a shot that had
+    // plainly potted a ball.
     const f = createFrame(0)
     stroke(f, 0, [BALL_IDS.RED_MIN], false, BALL_IDS.RED_MIN)
-    stroke(f, 0, [BALL_IDS.BLACK], false, BALL_IDS.YELLOW)
-    expect(f.scores.player1).toBe(7)
-    expect(f.remainingReds).toBe(TOTAL_REDS - 1)
-    expect(ball(f, BALL_IDS.BLACK).potted).toBe(false)
+    expect(f.ballOn).toBe('ANY_COLOUR')
+    stroke(f, 0, [BALL_IDS.BLACK], false, BALL_IDS.BLACK)
+    expect(f.scores.player0).toBe(1 + 7)
+    expect(f.scores.player1).toBe(0)
+    // A colour potted after a red is spotted again, so it goes back on the table
+    // rather than staying off it.
     expect(f.colorsRemaining.has(BALL_IDS.BLACK)).toBe(true)
+    expect(ball(f, BALL_IDS.BLACK).potted).toBe(false)
+    // The break carries on, and the striker is back on a red.
+    expect(f.turnIndex).toBe(0)
     expect(f.ballOn).toBe('RED')
+  })
+
+  it('scores a colour after a red at the value of the colour actually potted', () => {
+    // The blue is not the lowest colour on the table, so a fixed "lowest colour" rule
+    // would have scored this at the yellow's 2 points.
+    const f = createFrame(0)
+    stroke(f, 0, [BALL_IDS.RED_MIN], false, BALL_IDS.RED_MIN)
+    stroke(f, 0, [BALL_IDS.BLUE], false, BALL_IDS.BLUE)
+    expect(f.scores.player0).toBe(1 + 5)
+  })
+
+  it('treats hitting a red first while on ANY_COLOUR as a foul', () => {
+    // Reds are not on after a red, so the first contact may not be a red.
+    const f = createFrame(0)
+    stroke(f, 0, [BALL_IDS.RED_MIN], false, BALL_IDS.RED_MIN)
+    stroke(f, 0, [], false, BALL_IDS.RED_MAX)
+    expect(f.scores.player1).toBe(4)
     expect(f.turnIndex).toBe(1)
+    expect(f.ballOn).toBe('RED')
   })
 
   it('treats potting the required colour plus another colour as a foul (F4)', () => {
@@ -200,27 +227,91 @@ describe('timeout foul (no stroke)', () => {
 })
 
 describe('colouring up', () => {
-  it('runs the full colour sequence and ends the frame', () => {
+  it('runs the colour sequence and ends the frame once the lead covers the rest', () => {
+    // A frame is decided by the points, not by the last ball. Potting up to the blue
+    // leaves the pink and black worth 13, and the striker is 14 ahead, so the frame
+    // is over there and the pink and black are never touched. Requiring every colour
+    // to be potted off the table first is not the rule, and it is what allowed a tied
+    // frame on the final black to be traded back and forth indefinitely.
     const f = createFrame(0)
     f.remainingReds = 0
     f.ballOn = 'ANY_COLOUR'
     let points = 0
     for (let i = 0; i < COLOR_ORDER.length; i++) {
       const colorId = COLOR_ORDER[i]!
-      const end = stroke(f, 0, [colorId], false, colorId)
+      const before = points
       points += COLOR_VALUES[colorId] ?? 0
+      const end = stroke(f, 0, [colorId], false, colorId)
       expect(f.scores.player0).toBe(points)
       expect(f.colorsRemaining.has(colorId)).toBe(false)
-      if (i < COLOR_ORDER.length - 1) {
-        expect(end.frameEnded).toBe(false)
-        expect(f.ballOn).toEqual({ colour: COLOR_ORDER[i + 1] })
-      } else {
+
+      // What the trailing player could still score, and whether that can catch up.
+      let remaining = 0
+      for (const id of f.colorsRemaining) remaining += COLOR_VALUES[id] ?? 0
+      const decided = points - before > remaining || points > remaining
+      if (decided) {
         expect(end.frameEnded).toBe(true)
         expect(end.frameWinner).toBe(0)
         expect(f.phase).toBe('FRAME_END')
-        expect(f.scores.player0).toBe(totalColourPoints())
+      } else {
+        expect(end.frameEnded).toBe(false)
+        expect(f.ballOn).toEqual({ colour: COLOR_ORDER[i + 1] })
       }
+      if (end.frameEnded) return
     }
+    throw new Error('colour sequence never ended the frame')
+  })
+
+  it('ends the frame on the blue when one player is 14 ahead of the other', () => {
+    const f = createFrame(0)
+    f.remainingReds = 0
+    f.ballOn = 'ANY_COLOUR'
+    for (const colorId of [BALL_IDS.YELLOW, BALL_IDS.GREEN, BALL_IDS.BROWN]) {
+      stroke(f, 0, [colorId], false, colorId)
+      expect(f.phase).not.toBe('FRAME_END')
+    }
+    // 2 + 3 + 4 + 5 = 14 ahead, with only the pink and black (13) left to play.
+    const end = stroke(f, 0, [BALL_IDS.BLUE], false, BALL_IDS.BLUE)
+    expect(end.frameEnded).toBe(true)
+    expect(end.frameWinner).toBe(0)
+    expect(f.scores.player0).toBe(14)
+    expect(f.colorsRemaining.has(BALL_IDS.PINK)).toBe(true)
+    expect(f.colorsRemaining.has(BALL_IDS.BLACK)).toBe(true)
+  })
+
+  it('respots the black to decide a frame that is level on the last ball', () => {
+    // Level scores with only the black left: it goes back on its spot, and the next
+    // pot of it wins the frame outright because there is nothing left to win back.
+    const g = createFrame(0)
+    g.remainingReds = 0
+    for (const colorId of [BALL_IDS.YELLOW, BALL_IDS.GREEN, BALL_IDS.BROWN, BALL_IDS.BLUE, BALL_IDS.PINK]) {
+      ball(g, colorId).potted = true
+      g.colorsRemaining.delete(colorId)
+    }
+    g.scores.player0 = 20
+    g.scores.player1 = 20
+    g.ballOn = { colour: BALL_IDS.BLACK }
+
+    // Potting the black at level scores 7 with nothing left on the table, so the
+    // frame ends on the spot rather than being played on.
+    const end = stroke(g, 0, [BALL_IDS.BLACK], false, BALL_IDS.BLACK)
+    expect(end.frameEnded).toBe(true)
+    expect(end.frameWinner).toBe(0)
+    expect(g.scores.player0).toBe(27)
+  })
+
+  it('leaves a part-played colour sequence alone when the scores are level', () => {
+    // Level scores must not drag the ball on forward to the black: the colours are
+    // still played in ascending order.
+    const f = createFrame(0)
+    f.remainingReds = 0
+    f.ballOn = 'ANY_COLOUR'
+    stroke(f, 0, [BALL_IDS.YELLOW], false, BALL_IDS.YELLOW)
+    stroke(f, 0, [BALL_IDS.GREEN], false, BALL_IDS.GREEN)
+    // Even out the scores by hand, then carry on the sequence.
+    f.scores.player0 = f.scores.player1
+    stroke(f, 0, [BALL_IDS.BROWN], false, BALL_IDS.BROWN)
+    expect(f.ballOn).toEqual({ colour: BALL_IDS.BLUE })
   })
 
   it('re-spots a colour potted on a foul during colouring up', () => {

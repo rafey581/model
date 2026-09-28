@@ -35,6 +35,49 @@ export interface AimGuideBall {
 }
 
 /**
+ * How far the object-ball direction arrow is drawn beyond the contact point, in
+ * millimetres. Roughly three and a half ball widths: long enough to read the
+ * line at a glance, short enough not to be mistaken for the aim line.
+ */
+export const OBJECT_DIR_ARROW_LENGTH = 190
+
+/** The head of the object-ball arrow, as an angle, for drawing the barbs. */
+const ARROW_HEAD_LENGTH = 46
+const ARROW_HEAD_ANGLE = Math.PI / 7
+
+export interface ObjectDirection {
+  /** Where the arrow starts: the contact point on the target ball. */
+  from: { x: number; y: number }
+  /** Where the arrowhead points: out along the line of centres. */
+  to: { x: number; y: number }
+  /** The two barbs, so the arrow reads as an arrowhead rather than a plain line. */
+  barbs: [{ x: number; y: number }, { x: number; y: number }]
+}
+
+/**
+ * The path the struck ball will take once the cue ball reaches it: the line of
+ * centres continued past the contact point, with an arrowhead on the end.
+ *
+ * This is the cue-ball contact line and the object-ball departure line in one,
+ * which is the single fact a player needs to judge a cut shot. It is derived
+ * only from the geometry of the contact, so it holds for every angle: on a full
+ * hit the two lines coincide, and on a thin cut they open up.
+ */
+export function objectDirection(guide: AimGuide, length: number = OBJECT_DIR_ARROW_LENGTH): ObjectDirection {
+  const dx = guide.lineOfCentres.x
+  const dy = guide.lineOfCentres.y
+  const from = { x: guide.contact.x, y: guide.contact.y }
+  const to = { x: from.x + dx * length, y: from.y + dy * length }
+  // The barbs sweep back from the tip, one on each side of the shaft.
+  const head = Math.atan2(dy, dx)
+  const barb = (sign: number): { x: number; y: number } => ({
+    x: to.x - Math.cos(head + sign * ARROW_HEAD_ANGLE) * ARROW_HEAD_LENGTH,
+    y: to.y - Math.sin(head + sign * ARROW_HEAD_ANGLE) * ARROW_HEAD_LENGTH
+  })
+  return { from, to, barbs: [barb(1), barb(-1)] }
+}
+
+/**
  * Works out what the cue ball is lined up on.
  *
  * A contact happens when the two centres are one diameter apart, so the cue ball

@@ -1,6 +1,6 @@
 import './styles.css'
 import { api, connectSocket, getSocket, makeToast } from './game/network.js'
-import { drawTable } from './game/renderer.js'
+import { drawTable, resetTableAnimation } from './game/renderer.js'
 import { Scene3D } from './game/scene3d.js'
 import type { FrameSnapshotData } from './game/renderer.js'
 import { createCueController } from './game/input.js'
@@ -45,6 +45,19 @@ let scene3d: Scene3D | null = null
 let myTurn = false
 /** Non-null while a streamed shot is replaying; drives what the table shows. */
 let shotPlayer: ShotPlayer | null = null
+/**
+ * A shot update that arrived while another shot was still animating. It waits here
+ * until the current replay finishes rather than replacing it, so every shot is
+ * played out in full and no two shots' worth of movement are ever applied in one
+ * jump.
+ */
+let queuedUpdate: GameUpdatePayload | null = null
+/**
+ * True from the moment a shot's animation starts until the server has been told it
+ * has finished. The server holds its next shot back for exactly this window, so
+ * this is what keeps the table and the animation in step.
+ */
+let shotInFlight = false
 /** Pots whose sound was deferred until the replay reached the drop. */
 let deferredPots: number[] = []
 let players: Array<{ id: string; userId: string; seat: number; user: { id: string; username: string } }> = []
@@ -370,6 +383,10 @@ function leaveGameState(): void {
   activeMatchId = null
   frame = null
   mySeat = undefined
+  // Any replay still queued belonged to the match being left, and the drawn ball
+  // positions belonged to its table, so both are dropped here.
+  abandonPlayback()
+  resetTableAnimation()
   framesWon = [0, 0]
   frameIndex = 1
   players = []
@@ -1340,7 +1357,10 @@ function renderGame(): void {
   cueController = createCueController({
     canvas,
     cuePosition: { x: 300, y: 800 },
-    enabled: () => myTurn,
+    // The visit is only playable when the table has settled, which is the same
+    // condition that draws the cue. Firing while a shot is still animating used to
+    // be accepted by the server and cut the animation dead.
+    enabled: () => isVisitPlayable(),
     onChange: (aim) => {
       powerFill.style.width = `${Math.round(aim.power * 100)}%`
       spinLabel.textContent = `Spin: ${aim.spinX.toFixed(1)} / ${aim.spinY.toFixed(1)}`
@@ -1359,6 +1379,48 @@ interface GameUpdatePayload {
 }
 
 function handleGameUpdate(data: GameUpdatePayload): void {
+  // A shot has to be watched to the end. If another update lands while one is
+  // still animating, it waits its turn instead of cutting the replay short, so the
+  // balls are never seen to jump by two shots' worth of movement at once.
+  // `shotInFlight` is the single "unfinished shot" flag: it stays set from the
+  // moment playback starts until the server has been told the shot finished, and
+  // it is also set when there is no pre-shot snapshot to animate.
+  if (shotInFlight) {
+    queuedUpdate = data
+    return
+  }
+  applyGameUpdate(data)
+}
+
+/**
+ * The visit can be played only once every ball has stopped moving and the server
+ * has taken delivery of the previous shot's "finished" acknowledgement.
+ *
+ * All three conditions matter. `shotPlayer` is the replay that is on screen,
+ * `queuedUpdate` is a shot still waiting behind it, and `shotInFlight` stays set
+ * from the moment a replay starts until the server has confirmed it finished, so
+ * it also covers the brief window where the animation has ended but the server is
+ * still holding the table. Aiming or firing in that window would hand the server a
+ * second shot while the first was still live, which is what produced two shots'
+ * worth of movement in a single frame.
+ */
+function isVisitPlayable(): boolean {
+  return myTurn && shotPlayer === null && queuedUpdate === null && !shotInFlight
+}
+
+/**
+ * Drops any replay in progress and forgets anything queued behind it. Used when
+ * the server replaces the table outright (a new match, or a reconnect) so the
+ * authoritative state is adopted immediately rather than after a stale animation.
+ */
+function abandonPlayback(): void {
+  shotPlayer = null
+  queuedUpdate = null
+  shotInFlight = false
+  deferredPots = []
+}
+
+function applyGameUpdate(data: GameUpdatePayload): void {
   const previous = frame
   frame = data.frame
   myTurn = mySeat !== undefined && data.frame.turnIndex === mySeat
@@ -1369,6 +1431,12 @@ function handleGameUpdate(data: GameUpdatePayload): void {
   deferredPots = []
   if (data.playback && data.playback.keyframes.length && previous) {
     shotPlayer = new ShotPlayer(data.playback, previous.balls as PlaybackBall[])
+    shotInFlight = true
+  } else if (data.playback) {
+    // Playback arrived with no pre-shot snapshot to start from, so there is nothing
+    // to animate. Tell the server straight away rather than stalling the visit.
+    shotInFlight = true
+    finishShot()
   }
 
   const potted: number[] = []
@@ -1415,23 +1483,29 @@ function handleSocketEvents(socket: Socket): void {
 
   socket.on('match:joined', (data: { matchId: string; seat: number; snapshot: FrameSnapshotData | null }) => {
     mySeat = data.seat
-    if (data.snapshot) handleGameUpdate({ frame: data.snapshot })
+    // A join is the server's authoritative word on the table, so anything in flight
+    // is abandoned rather than finished: after a reconnect there is no replay left
+    // to watch and the settled state is the truth.
+    abandonPlayback()
+    if (data.snapshot) applyGameUpdate({ frame: data.snapshot })
     const opp = opponentName()
     toast(`Playing vs ${opp} (seat ${data.seat + 1})`)
     updateHud()
   })
   socket.on('match:start', (data: { snapshot: FrameSnapshotData; frameIndex: number }) => {
     frameIndex = data.frameIndex
-    frame = data.snapshot
     // A new match replaces the table outright, so any replay in flight is void.
-    shotPlayer = null
-    deferredPots = []
+    abandonPlayback()
+    frame = data.snapshot
     myTurn = mySeat !== undefined && data.snapshot.turnIndex === mySeat
     toast('Match started!')
     updateHud()
   })
   socket.on('frame:start', (data: { frameIndex: number; snapshot: FrameSnapshotData }) => {
     frameIndex = data.frameIndex
+    // The frame change usually lands straight after the shot that won it, while that
+    // shot is still animating, so it queues behind the replay rather than cutting it
+    // off. Only the announcement is immediate.
     handleGameUpdate({ frame: data.snapshot })
     toast(`Frame ${data.frameIndex} starting`)
   })
@@ -1512,11 +1586,21 @@ function loop(): void {
       const shown = stepShotPlayback(frame, fdt / 1000)
       const cue = shown.balls.find((b) => b.id === 0 && !b.potted)
       if (cue) cueController?.setCuePosition(cue.x, cue.y)
+      // Aiming is only offered once the table has genuinely settled: no shot still
+      // animating, and nothing waiting behind it. Without this the cue stick and the
+      // aim guide were drawn while the balls were still moving.
+      const canAim = isVisitPlayable()
+      const renderOptions = {
+        aim: cueController?.aim,
+        youSeat: mySeat,
+        immediate: shotPlayer !== null,
+        canAim
+      }
       if (scene3d) {
-        scene3d.update(shown, { aim: cueController?.aim, youSeat: mySeat, immediate: shotPlayer !== null })
+        scene3d.update(shown, renderOptions)
         scene3d.render()
       } else {
-        drawTable(canvas, shown, { aim: cueController?.aim, youSeat: mySeat, immediate: shotPlayer !== null })
+        drawTable(canvas, shown, renderOptions)
       }
     }
   } catch (error) {
@@ -1531,23 +1615,36 @@ function loop(): void {
 }
 
 /**
+ * Announces that a shot has finished animating. The server holds its next shot
+ * back until it hears this, which is what stops a bot firing a new shot into the
+ * middle of the previous one's animation.
+ */
+function finishShot(): void {
+  if (!shotInFlight) return
+  shotInFlight = false
+  if (activeMatchId) getSocket().emit('shot:done', { matchId: activeMatchId })
+}
+
+/**
  * Advances the replay clock and returns the snapshot to draw this frame.
  */
 function stepShotPlayback(target: FrameSnapshotData, dtSeconds: number): FrameSnapshotData {
-  if (!shotPlayer) return target
-  const balls = shotPlayer.advance(dtSeconds)
-  if (deferredPots.length) {
-    const due = shotPlayer.takeDuePots()
-    if (due.length) {
-      const ids = deferredPots.filter((id) => due.includes(id))
-      if (ids.length) {
-        playPot(ids.length)
-        toast(`Potted: ${ids.map(ballName).join(', ')}`)
+  if (shotPlayer) {
+    const balls = shotPlayer.advance(dtSeconds)
+    if (deferredPots.length) {
+      const due = shotPlayer.takeDuePots()
+      if (due.length) {
+        const ids = deferredPots.filter((id) => due.includes(id))
+        if (ids.length) {
+          playPot(ids.length)
+          toast(`Potted: ${ids.map(ballName).join(', ')}`)
+        }
+        deferredPots = deferredPots.filter((id) => !due.includes(id))
       }
-      deferredPots = deferredPots.filter((id) => !due.includes(id))
     }
-  }
-  if (shotPlayer.finished) {
+    if (!shotPlayer.finished) {
+      return { ...target, balls }
+    }
     // A pot whose timestamp never arrived would otherwise be silently dropped.
     if (deferredPots.length) {
       playPot(deferredPots.length)
@@ -1555,9 +1652,24 @@ function stepShotPlayback(target: FrameSnapshotData, dtSeconds: number): FrameSn
     }
     shotPlayer = null
     deferredPots = []
-    return target
+    finishShot()
   }
-  return { ...target, balls }
+
+  // This shot is done, so the table shows its settled state and any shot that was
+  // held up starts animating now.
+  if (queuedUpdate) {
+    const next = queuedUpdate
+    queuedUpdate = null
+    applyGameUpdate(next)
+    if (shotPlayer && frame) {
+      // The queued shot has a replay of its own, so show its first frame at once
+      // instead of pausing for a frame on the finished shot's positions. Advancing
+      // by zero cannot finish a shot with any duration left in it, and the queue is
+      // already empty, so this recurses at most once more.
+      return stepShotPlayback(frame, 0)
+    }
+  }
+  return target
 }
 
 function reportFatalError(error: unknown): void {

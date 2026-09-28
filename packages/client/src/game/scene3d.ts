@@ -1,13 +1,24 @@
 import * as THREE from 'three'
 import { TABLE_LENGTH, TABLE_WIDTH, BALL_RADIUS, BAULK_LINE_X, D_RADIUS, POCKET_RADIUS_CORNER, POCKET_RADIUS_MIDDLE, pocketPositions } from '@snooker/shared'
 import type { FrameSnapshotData, AimState, RenderOptions } from './renderer.js'
-import { computeAimGuide, type AimGuide, type AimGuideBall } from './aim.js'
+import { computeAimGuide, objectDirection, type AimGuide, type AimGuideBall } from './aim.js'
 import { setTableTransform } from './renderer.js'
 
 const HALF_L = TABLE_LENGTH / 2
 const HALF_W = TABLE_WIDTH / 2
 const CUSHION_H = 12
-const STICK_LEN = 1500
+/**
+ * The cue tip's position in the stick's own space. The stick's origin sits at the
+ * centre of the shaft, so the tip is well short of half the length: the tip ferrule
+ * ends at 626mm forward, not at 750mm. Backing the stick off by half the length
+ * instead of by this number left the tip floating a ball's width or more away from
+ * the ball it was addressing.
+ */
+const STICK_TIP_Y = 626
+/** How far the tip pulls back from the ball at rest, before any power draw-back. */
+const STICK_REST_GAP = 8
+/** How far the tip draws back at full power, as the player loads the shot. */
+const STICK_POWER_DRAW = 190
 const tableX = (x: number): number => x - HALF_L
 const tableZ = (y: number): number => y - HALF_W
 
@@ -264,7 +275,7 @@ export class Scene3D {
   private aimGlow!: THREE.Mesh
   private contactRing!: THREE.Mesh
   private contactDot!: THREE.Mesh
-  private contactLine!: THREE.Line
+  private objectArrow!: THREE.LineSegments
   private spinLine!: THREE.Line
   private stick!: THREE.Group
   private lastTime = 0
@@ -525,13 +536,20 @@ export class Scene3D {
     this.contactDot.visible = false
     this.scene.add(this.contactDot)
 
-    this.contactLine = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
-      new THREE.LineBasicMaterial({ color: 0xffd76a, transparent: true, opacity: 0.8 })
+    // The object-ball departure arrow: one shaft plus two barbs, drawn as three
+    // separate segments so the whole arrowhead can be built from a single line.
+    this.objectArrow = new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(), new THREE.Vector3(),
+        new THREE.Vector3(), new THREE.Vector3(),
+        new THREE.Vector3(), new THREE.Vector3()
+      ]),
+      new THREE.LineBasicMaterial({ color: 0xffd76a, transparent: true, opacity: 0.95 })
     )
-    this.contactLine.visible = false
-    this.contactLine.frustumCulled = false
-    this.scene.add(this.contactLine)
+    this.objectArrow.visible = false
+    this.objectArrow.frustumCulled = false
+    this.objectArrow.renderOrder = 3
+    this.scene.add(this.objectArrow)
 
     this.aimGlow = new THREE.Mesh(
       new THREE.PlaneGeometry(90, 90),
@@ -622,7 +640,11 @@ export class Scene3D {
 
     const cueBall = snapshot.balls.find((b) => b.id === 0 && !b.potted)
     const myTurn = options.youSeat !== undefined && snapshot.turnIndex === options.youSeat
-    if (cueBall && options.aim && myTurn) {
+    // The cue stick and the aim guide are only drawn on a settled table during the
+    // player's own visit. Without the canAim test they would be re-anchored to a
+    // cue ball that is still travelling, which dragged the stick diagonally across
+    // the cloth behind a shot the player had already played.
+    if (cueBall && options.aim && myTurn && options.canAim !== false) {
       this.showAim(cueBall, options.aim, snapshot.balls)
     } else {
       this.hideAim()
@@ -666,8 +688,12 @@ export class Scene3D {
     if (guide) {
       this.showContactMarker(guide)
     } else {
+      // Nothing in the way, so no contact dot, no ring and no departure arrow.
+      // Every one has to be cleared: a stale arrow left on the cloth would claim
+      // a ball was going to be struck when nothing is there.
       this.contactRing.visible = false
       this.contactDot.visible = false
+      this.objectArrow.visible = false
     }
 
     const spinX = aim.spinX ?? 0
@@ -681,17 +707,22 @@ export class Scene3D {
       this.spinLine.visible = false
     }
 
-    const tipGap = BALL_RADIUS + 10 + aim.power * 240
+    // The tip sits `tipGap` behind the ball's centre, and the stick extends a
+    // further STICK_TIP_Y forward of its own origin, so the origin goes back by
+    // the sum of the two.
+    const tipGap = BALL_RADIUS + STICK_REST_GAP + aim.power * STICK_POWER_DRAW
+    const backOff = tipGap + STICK_TIP_Y
     this.stick.visible = true
-    this.stick.position.set(cx - dir.x * (tipGap + STICK_LEN / 2), 21, cz - dir.z * (tipGap + STICK_LEN / 2))
+    this.stick.position.set(cx - dir.x * backOff, 21, cz - dir.z * backOff)
     const up = new THREE.Vector3(0, 1, 0)
     const target = new THREE.Vector3(dir.x, 0, dir.z).normalize()
     this.stick.quaternion.setFromUnitVectors(up, target)
   }
 
   /**
-   * Rings the target ball and drops a bright dot on the exact point the cue ball
-   * is lined up to touch, with a short spur showing which way it will leave.
+   * Rings the target ball, drops a bright dot on the exact point the cue ball is
+   * lined up to touch, and draws the object-ball departure arrow: the line of
+   * centres continued out of the contact point, arrowhead on the end.
    */
   private showContactMarker(guide: AimGuide): void {
     // The contact point is on the target's surface, so the target's centre is one
@@ -704,17 +735,19 @@ export class Scene3D {
     this.contactDot.position.set(tableX(guide.contact.x), 1.4, tableZ(guide.contact.y))
     this.contactDot.visible = true
 
-    // A short spur off the contact point, pointing down the line of centres, so
-    // the direction the object ball will travel is readable on a cut.
-    this.setLine(
-      this.contactLine,
-      tableX(guide.contact.x),
-      1.5,
-      tableZ(guide.contact.y),
-      tableX(guide.contact.x + guide.lineOfCentres.x * 30),
-      1.5,
-      tableZ(guide.contact.y + guide.lineOfCentres.y * 30)
-    )
+    // Shaft and the two barbs, laid out flat on the cloth just above it.
+    const arrow = objectDirection(guide)
+    const y = 1.5
+    const attr = this.objectArrow.geometry.getAttribute('position') as THREE.BufferAttribute
+    attr.setXYZ(0, tableX(arrow.from.x), y, tableZ(arrow.from.y))
+    attr.setXYZ(1, tableX(arrow.to.x), y, tableZ(arrow.to.y))
+    attr.setXYZ(2, tableX(arrow.to.x), y, tableZ(arrow.to.y))
+    attr.setXYZ(3, tableX(arrow.barbs[0].x), y, tableZ(arrow.barbs[0].y))
+    attr.setXYZ(4, tableX(arrow.to.x), y, tableZ(arrow.to.y))
+    attr.setXYZ(5, tableX(arrow.barbs[1].x), y, tableZ(arrow.barbs[1].y))
+    attr.needsUpdate = true
+    this.objectArrow.geometry.computeBoundingSphere()
+    this.objectArrow.visible = true
   }
 
   private setLine(line: THREE.Line, ax: number, ay: number, az: number, bx: number, by: number, bz: number): void {
@@ -733,7 +766,7 @@ export class Scene3D {
     this.spinLine.visible = false
     this.contactRing.visible = false
     this.contactDot.visible = false
-    this.contactLine.visible = false
+    this.objectArrow.visible = false
     if (this.stick) this.stick.visible = false
   }
 

@@ -46,7 +46,9 @@ export function applyStroke(
   const resolution = resolveStroke(frame, shooterIndex, sim.pottedIds, sim.cuePotted, sim.firstContactId)
   frame.remainingReds = redsBefore - (resolution.foul ? 0 : pottedRedsCount)
   for (const id of sim.pottedIds) {
-    if (!frame.pottedOrder.includes(id)) frame.pottedOrder.push(id)
+    // The cue ball is not an object ball, so it does not join the frame's running
+    // list of potted balls. It is still marked potted below and then respotted.
+    if (id !== BALL_IDS.CUE && !frame.pottedOrder.includes(id)) frame.pottedOrder.push(id)
     const ball = frame.balls.find((b) => b.id === id)
     if (ball) ball.potted = true
   }
@@ -111,19 +113,50 @@ function placeCueIfInHand(frame: FrameState, shot: { cuePos?: { x: number; y: nu
   cue.spin = { x: 0, y: 0 }
 }
 
+/**
+ * Decides whether the frame is over.
+ *
+ * A frame does not end when the last ball happens to be potted and left off the
+ * table. It ends as soon as one player leads by more than the value of everything
+ * still on the table, because at that point the trailing player can no longer catch
+ * them however long the frame runs. That is what stops a tied frame on the final
+ * black from being traded back and forth for ever: the potter of that black leads by
+ * seven with nothing left to win, and the frame is over.
+ *
+ * With the scores level and the frame still live, the black decides it, so it goes
+ * back on its spot ready to be played for the frame.
+ */
 export function maybeEndFrame(frame: FrameState): { frameEnded: boolean; frameWinner: number | null } {
-  if (frame.remainingReds !== 0 || frame.colorsRemaining.size !== 0) {
+  if (frame.remainingReds !== 0) {
     return { frameEnded: false, frameWinner: null }
   }
-  if (frame.scores.player0 === frame.scores.player1) {
+
+  let remaining = 0
+  for (const id of frame.colorsRemaining) {
+    remaining += COLOR_VALUES[id] ?? 0
+  }
+
+  const lead0 = frame.scores.player0 - frame.scores.player1
+  if (lead0 > remaining) {
+    frame.phase = 'FRAME_END'
+    return { frameEnded: true, frameWinner: 0 }
+  }
+  if (-lead0 > remaining) {
+    frame.phase = 'FRAME_END'
+    return { frameEnded: true, frameWinner: 1 }
+  }
+
+  if (frame.scores.player0 === frame.scores.player1 && !frame.colorsRemaining.has(BALL_IDS.BLACK)) {
+    // Level scores, the frame still live, and no black left to play: the black
+    // decides it, so it goes back on its spot. Guarded on the black actually being
+    // off the table, otherwise this would hijack the ball on partway through the
+    // sequence whenever the scores happened to be level.
     respotBall(frame, BALL_IDS.BLACK)
     frame.colorsRemaining.add(BALL_IDS.BLACK)
     frame.ballOn = { colour: BALL_IDS.BLACK }
     frame.phase = 'PLAYING'
-    return { frameEnded: false, frameWinner: null }
   }
-  frame.phase = 'FRAME_END'
-  return { frameEnded: true, frameWinner: frame.scores.player0 > frame.scores.player1 ? 0 : 1 }
+  return { frameEnded: false, frameWinner: null }
 }
 
 export function framesToWin(format: string): number {

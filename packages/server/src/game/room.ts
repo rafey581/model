@@ -12,6 +12,7 @@ import {
   seededRandom
 } from '@snooker/shared'
 import type { MatchState, FrameState, ShotInput, ShotPlayback } from '@snooker/shared'
+import { SHOT_PLAYBACK_SPEED } from '@snooker/shared'
 import type { PracticeAiLevel } from '@snooker/shared'
 import { computeBotShot } from '../bot/bot.js'
 import { config } from '../config.js'
@@ -53,6 +54,23 @@ export class GameRoom {
   private simulating = false
   private botTimer: NodeJS.Timeout | null = null
   private turnTimer: NodeJS.Timeout | null = null
+  /**
+   * Set while a streamed shot is animating on the players' screens, and cleared
+   * when a client reports that the animation has finished.
+   *
+   * Nothing new may be played while this is set. Without it the bot simply waited
+   * 800-2300ms after the update was sent and then fired, which lands well inside a
+   * full-power break's several seconds of animation. The result was that a shot
+   * arrived mid-replay, the client dropped the replay in flight, and several shots
+   * worth of ball movement appeared in a single jump.
+   */
+  private awaitingPlayback = false
+  /**
+   * Backstop for the playback gate. A client that never reports back, because it
+   * was closed or its tab was backgrounded, must not stall the match for ever, so
+   * the hold is released after a generous multiple of the shot's own playback time.
+   */
+  private playbackTimer: NodeJS.Timeout | null = null
   private readonly turnTimeoutSec: number
   private callbacks: RoomCallbacks
   private disconnectedAt = new Map<number, number>()
@@ -171,6 +189,7 @@ export class GameRoom {
       this.turnTimer = null
     }
     if (!this.started || this.stopped) return
+    if (this.awaitingPlayback) return
     const frame = this.match.currentFrame
     if (!frame || frame.phase === 'FRAME_END') return
     const seat = frame.turnIndex
@@ -188,6 +207,7 @@ export class GameRoom {
     if (!frame || frame.phase === 'FRAME_END') return
     const seat = frame.turnIndex
     if (!this.isHumanTurn(seat) || this.isSeatDisconnected(seat)) return
+    if (this.awaitingPlayback) return
     this.simulating = true
     try {
       const { foulValue, reason } = applyTimeoutFoul(frame, seat, 'turn timeout')
@@ -210,6 +230,10 @@ export class GameRoom {
     if (seat === undefined) return { accepted: false, error: 'not in match' }
     if (seat !== frame.turnIndex) return { accepted: false, error: 'not your turn' }
     if (this.simulating) return { accepted: false, error: 'balls still moving' }
+    // A shot may only be played once the table has settled. Firing into an
+    // animation already in flight was accepted before, and abandoned that
+    // animation partway through.
+    if (this.awaitingPlayback) return { accepted: false, error: 'wait for the table to settle' }
     if (this.isBotTurn()) return { accepted: false, error: 'robot is thinking' }
     return this.executeShot(seat, shot)
   }
@@ -271,6 +295,9 @@ export class GameRoom {
       void this.handleFrameEnd(frameWinner, frame, playback)
     } else {
       this.broadcast('game:update', { frame: frameSnapshot(frame), events, playback })
+      // Hold the room until this shot has been watched. The hold is taken before the
+      // bot is considered, so a queued update can never overtake the animation.
+      this.holdForPlayback(playback)
       this.armTurnTimer()
       this.scheduleBotIfNeeded()
     }
@@ -286,8 +313,11 @@ export class GameRoom {
       playback
     })
     void this.callbacks.persist([frameEnd])
+    // The frame-winning shot animates too, so the room is held for it. The client
+    // queues the frame:start broadcast below behind that same replay, which keeps
+    // the re-rack from cutting the last shot of the frame off mid-flight.
+    this.holdForPlayback(playback)
     await this.callbacks.onFrameEnd(this.matchId, frameWinner, scores)
-
     const matchEnded = applyFrameWinner(this.match, frameWinner)
     if (matchEnded) {
       const winner = matchWinnerIndex(this.match)
@@ -320,15 +350,63 @@ export class GameRoom {
   private scheduleBotIfNeeded(): void {
     if (!this.isBotTurn()) return
     if (this.botTimer) clearTimeout(this.botTimer)
+    // The bot must not fire while the table is still animating: its shot would be
+    // broadcast into the middle of the previous replay.
+    if (this.awaitingPlayback) return
     const level = this.aiLevel ?? 'MEDIUM'
     const delay = 800 + Math.floor(seededRandom(`${this.matchId}:t${this.seq}`)() * 1500)
     this.botTimer = setTimeout(() => {
       this.botTimer = null
       const frame = this.match.currentFrame
-      if (!frame || frame.turnIndex !== 1 || this.simulating) return
+      if (!frame || frame.turnIndex !== 1 || this.simulating || this.awaitingPlayback) return
       const bot = computeBotShot(frame, level, this.matchId)
       this.executeShot(1, { aimAngle: bot.shot.aimAngle, power: bot.shot.power, spin: bot.shot.spin, cuePos: bot.shot.cuePos })
     }, delay)
+  }
+
+  /**
+   * Holds the room while a shot animates, so no further shot is broadcast until
+   * the players have actually watched it through.
+   *
+   * The hold ends when a client reports `shot:done`, or when the backstop timer
+   * fires for a client that never will. The backstop is deliberately generous: it
+   * only exists so a dead client cannot wedge the match, and is never what ends a
+   * hold in normal play.
+   */
+  private holdForPlayback(playback?: ShotPlayback): void {
+    if (!playback) return
+    this.awaitingPlayback = true
+    if (this.playbackTimer) clearTimeout(this.playbackTimer)
+    const budgetMs = (playback.duration / SHOT_PLAYBACK_SPEED) * 1000
+    this.playbackTimer = setTimeout(() => {
+      this.playbackTimer = null
+      this.releasePlayback()
+    }, budgetMs * 2 + 15000)
+  }
+
+  /**
+   * Called when a client reports that a shot has finished animating. The room
+   * resumes: the turn clock restarts and the bot takes its turn if it has one.
+   *
+   * The acknowledgement is deliberately idempotent, and it is only accepted from
+   * someone actually seated in this match. Without that check any client that
+   * guessed the match id could release another player's hold and, worse, could
+   * release it early by acknowledging a shot it never watched.
+   */
+  noteShotPlayed(userId: string): void {
+    if (this.seatOfUser.get(userId) === undefined) return
+    this.releasePlayback()
+  }
+
+  private releasePlayback(): void {
+    if (this.playbackTimer) {
+      clearTimeout(this.playbackTimer)
+      this.playbackTimer = null
+    }
+    if (!this.awaitingPlayback) return
+    this.awaitingPlayback = false
+    this.armTurnTimer()
+    this.scheduleBotIfNeeded()
   }
 
   private noteDelivered(events: GameUpdateEvent[]): void {

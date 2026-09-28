@@ -36,6 +36,22 @@ export const TICK_RATE = 120
 export const TICK_DT = 1 / TICK_RATE
 export const MAX_SIM_TICKS = TICK_RATE * 60
 
+/**
+ * How much faster than real time a shot is replayed at.
+ *
+ * This lives in shared because the server needs it too: it works out how long a
+ * client's replay will run so it can hold the next shot until that replay has
+ * finished. The two sides therefore have to agree on one number.
+ *
+ * A full-power break is the long pole, settling in around 12-19 seconds of
+ * simulated time on the current cloth. At 6x that plays out in 2-3 seconds,
+ * which is long enough to follow where each ball went and short enough that a
+ * visit does not stall the table. The speed is a presentation choice only: the
+ * simulation is unaffected by it, and the server's playback hold is derived from
+ * it so the two cannot drift apart.
+ */
+export const SHOT_PLAYBACK_SPEED = 6
+
 export const RED_VALUE = 1
 
 export const BALL_IDS = {

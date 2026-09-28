@@ -1,5 +1,5 @@
 import { TABLE_LENGTH, TABLE_WIDTH, BALL_RADIUS, pocketPositions } from '@snooker/shared'
-import { computeAimGuide, type AimGuide } from './aim.js'
+import { computeAimGuide, objectDirection, type AimGuide } from './aim.js'
 
 export interface DrawableBall {
   id: number
@@ -57,6 +57,16 @@ export function tableToCanvas(x: number, y: number): { x: number; y: number } {
   return { x: currentTransform.offsetX + x * currentTransform.scale, y: currentTransform.offsetY + y * currentTransform.scale }
 }
 
+/**
+ * Forgets every drawn ball position, so the next frame places balls exactly where
+ * the rules say rather than easing them in from the last table that was on screen.
+ * Called when leaving a match.
+ */
+export function resetTableAnimation(): void {
+  interpPos.clear()
+  lastInterpTime = 0
+}
+
 export interface RenderOptions {
   aim?: AimState
   youSeat?: number
@@ -66,6 +76,17 @@ export interface RenderOptions {
    * and must not lag the replay clock.
    */
   immediate?: boolean
+  /**
+   * Whether the player is allowed to aim right now, which is the table being
+   * settled and the visit being theirs.
+   *
+   * This is deliberately not the same question as "is it my turn". The turn index
+   * does not change while a player keeps a visit, so a turn test alone would let
+   * the cue and the aim guide be drawn on a cue ball that is still travelling.
+   * With this false the aim guide and the cue stick are both suppressed, which is
+   * what keeps the cue from riding a moving ball.
+   */
+  canAim?: boolean
 }
 
 const POCKETS = pocketPositions()
@@ -142,7 +163,12 @@ export function drawTable(
     const prev = interpPos.get(ball.id)
     let px = tx
     let py = ty
-    if (prev) {
+    // A ball with no drawn position yet is a newly racked or newly respotted ball,
+    // so it appears where the rules put it rather than sliding in from wherever the
+    // previous shot or previous match last left it. A jump of more than 500mm is
+    // likewise a re-rack rather than travel, and snaps for the same reason the 3D
+    // view snaps. Only genuine movement is smoothed.
+    if (prev && options.immediate !== true && Math.hypot(tx - prev.x, ty - prev.y) <= 500) {
       px = prev.x + (tx - prev.x) * k
       py = prev.y + (ty - prev.y) * k
     }
@@ -156,7 +182,7 @@ export function drawTable(
   const cueBall = snapshot.balls.find((b) => b.id === 0 && !b.potted)
   if (options.aim && options.youSeat !== undefined && cueBall) {
     const myTurn = snapshot.turnIndex === options.youSeat
-    if (myTurn) {
+    if (myTurn && options.canAim !== false) {
       const interp = interpPos.get(0)
       const cx = interp ? interp.x : cueBall.x
       const cy = interp ? interp.y : cueBall.y
@@ -262,9 +288,11 @@ function drawBall(
 }
 
 /**
- * Draws the aim: a dotted line out of the cue ball that stops exactly where the
- * cue ball would touch a ball, with a ring marking that contact point. When the
- * line meets nothing, a short marker shows the direction instead.
+ * Draws the aim. With a ball in the way it is two lines: a dotted line from the
+ * cue ball out to the exact point the cue ball touches it, and a solid arrow
+ * continuing past that point along the line of centres to show which way the
+ * struck ball will leave. With nothing in the way there is only the dotted line
+ * and a small tip marker, because there is no contact to predict.
  */
 function drawAim(
   ctx: CanvasRenderingContext2D,
@@ -276,12 +304,12 @@ function drawAim(
   aim: AimState,
   guide: AimGuide | null
 ): void {
-  const fallback = (40 + aim.power * 150) * scale * 0.018
   // With a ball in the way the line runs out to the exact point the cue ball
-  // touches it. On an open table it falls back to a power-scaled stub so the
-  // direction of the shot is still readable.
-  const endX = guide ? x + guide.contact.x * scale : x + Math.cos(aim.angle) * fallback
-  const endY = guide ? y + guide.contact.y * scale : y + Math.sin(aim.angle) * fallback
+  // touches it. With clear table ahead the line shows direction only, and grows
+  // with power so the player can still read how hard the shot is.
+  const openLength = (150 + aim.power * 330) * scale
+  const endX = guide ? offsetX + guide.contact.x * scale : x + Math.cos(aim.angle) * openLength
+  const endY = guide ? offsetY + guide.contact.y * scale : y + Math.sin(aim.angle) * openLength
 
   ctx.strokeStyle = `rgba(255,255,255,${0.45 + aim.power * 0.35})`
   ctx.lineWidth = 2
@@ -295,6 +323,8 @@ function drawAim(
   if (guide) {
     drawContactMarker(ctx, offsetX, offsetY, scale, guide)
   } else {
+    // Nothing to contact, so there is no contact dot, no ring and no object-ball
+    // arrow -- just a soft cap marking where the line stops.
     const glowR = 5 * scale * 0.5 * (0.8 + aim.power * 0.9)
     const glow = ctx.createRadialGradient(endX, endY, 1, endX, endY, glowR * 2.2)
     glow.addColorStop(0, 'rgba(255,215,120,0.55)')
@@ -324,10 +354,10 @@ function drawAim(
 }
 
 /**
- * Marks the spot on the target ball that the cue ball is lined up to touch: a
- * filled dot for the contact itself, a short tick along the line of centres to
- * show which way the object ball will leave, and a ring around the whole ball to
- * make it obvious which ball is being aimed at.
+ * Marks the contact and predicts what happens next: a ring round the target ball
+ * so it is obvious which one is being aimed at, a filled dot on the exact point
+ * the cue ball will touch it, and an arrow leaving that point along the line of
+ * centres showing the direction the struck ball will travel.
  */
 function drawContactMarker(
   ctx: CanvasRenderingContext2D,
@@ -352,16 +382,26 @@ function drawContactMarker(
   ctx.arc(ballX, ballY, ringR, 0, Math.PI * 2)
   ctx.stroke()
 
-  // A short spur off the contact point, pointing down the line of centres.
-  const spur = 22 * scale * 0.5
-  ctx.strokeStyle = 'rgba(255,215,120,0.8)'
-  ctx.lineWidth = 2
+  // The object-ball departure: the line of centres continued out of the contact
+  // point, arrowhead on the end. Drawn solid and in the target's own cue colour so
+  // it reads as a different fact from the white dotted aim line.
+  const arrow = objectDirection(guide)
+  const tipX = offsetX + arrow.to.x * scale
+  const tipY = offsetY + arrow.to.y * scale
+  ctx.strokeStyle = 'rgba(255,215,120,0.95)'
+  ctx.lineWidth = 2.5
+  ctx.lineCap = 'round'
   ctx.beginPath()
   ctx.moveTo(cx, cy)
-  ctx.lineTo(cx + guide.lineOfCentres.x * spur, cy + guide.lineOfCentres.y * spur)
+  ctx.lineTo(tipX, tipY)
+  ctx.moveTo(tipX, tipY)
+  ctx.lineTo(offsetX + arrow.barbs[0].x * scale, offsetY + arrow.barbs[0].y * scale)
+  ctx.moveTo(tipX, tipY)
+  ctx.lineTo(offsetX + arrow.barbs[1].x * scale, offsetY + arrow.barbs[1].y * scale)
   ctx.stroke()
+  ctx.lineCap = 'butt'
 
-  ctx.fillStyle = 'rgba(255,215,120,0.95)'
+  ctx.fillStyle = 'rgba(255,255,255,0.95)'
   ctx.beginPath()
   ctx.arc(cx, cy, 3.5 * scale * 0.5, 0, Math.PI * 2)
   ctx.fill()

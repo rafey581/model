@@ -1,4 +1,4 @@
-﻿import { io } from 'socket.io-client'
+import { io } from 'socket.io-client'
 import type { Socket } from 'socket.io-client'
 import { PrismaClient } from '@prisma/client'
 import { signToken } from '../src/auth/guards.js'
@@ -101,6 +101,100 @@ function waitAny<T>(
 
 function connectSocket(token: string): Socket {
   return io('http://localhost:4000', { auth: { token }, transports: ['websocket'], timeout: 10000 })
+}
+
+type ShotInput = {
+  aimAngle: number
+  power: number
+  spin: { x: number; y: number }
+  cuePos?: { x: number; y: number }
+  timestamp?: number
+}
+
+/**
+ * Reports that a shot has finished animating, releasing the room's pacing hold.
+ *
+ * The browser client sends this from `finishShot()`, which fires for *any* shot it
+ * watches - its own, the opponent's, or the bot's - because the point of the hold is
+ * that the table must be seen to settle before the next shot is broadcast. The
+ * acknowledgement is idempotent, so sending it when no hold is active is a no-op.
+ */
+function ackShot(socket: Socket, matchId: string): void {
+  socket.emit('shot:done', { matchId })
+}
+
+/**
+ * Waits for the next `game:update` on one socket and acknowledges the shot it
+ * carries, which is what a client does with a shot it did not take itself (the bot's,
+ * in a practice match). Without the ack the bot's next shot stays blocked behind the
+ * hold and the match stalls.
+ */
+async function watchShotLikeAClient(socket: Socket, matchId: string, timeoutMs = 45000): Promise<any> {
+  try {
+    const update = await waitFor<any>(socket, 'game:update', timeoutMs)
+    ackShot(socket, matchId)
+    return update
+  } catch (error) {
+    ackShot(socket, matchId)
+    throw error
+  }
+}
+
+/**
+ * Plays a shot the way a real client does, and returns the `game:update` both seats
+ * receive.
+ *
+ * The room holds the turn after every shot until someone reports that its playback has
+ * finished (`shot:done`). That pacing signal is what stops a shot being fired into the
+ * middle of the previous one's replay, and the browser client sends it as soon as its
+ * animation completes. The harness has no animation, but it has to behave the same
+ * way: without the acknowledgement the hold rejects every shot after the first with
+ * `wait for the table to settle` and the match silently stalls with no further
+ * `game:update` at all.
+ *
+ * The acknowledgement and the following shot arrive on different sockets, so the room
+ * may not have processed the ack by the time the next shot lands. A real client can
+ * hit that race too, so the shot is retried when the room reports the table is still
+ * settling. The gate itself is left untouched.
+ *
+ * `watchers` is the list of connected sockets that should see the resulting update.
+ * A disconnected seat is deliberately left out: it receives no broadcast, so waiting
+ * on one would hang on a client that is behaving exactly as intended.
+ */
+async function playShotLikeAClient(
+  matchId: string,
+  shooter: Socket,
+  watchers: Socket[],
+  input: ShotInput,
+  timeoutMs = 45000
+): Promise<any[]> {
+  const deadline = Date.now() + timeoutMs
+  for (let attempt = 1; ; attempt++) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) throw new Error(`timeout waiting for game:update on ${matchId}`)
+    const update = Promise.all(
+      watchers.map((s) => waitFor<any>(s, 'game:update', remaining))
+    ).then((list) => ({ kind: 'update' as const, list }))
+    // A rejected shot comes straight back as an `error`; that is how we tell a
+    // pacing rejection apart from a shot that is still being simulated.
+    const rejection = waitFor<{ code: string }>(shooter, 'error', remaining).then((p) => ({
+      kind: 'error' as const,
+      code: p.code
+    }))
+    shooter.emit('shot:play', { matchId, input })
+    const result = await Promise.race([update, rejection])
+    if (result.kind === 'update') {
+      // The shooter's own playback is over the moment it holds the result, which is
+      // exactly when the browser client releases the room's hold.
+      ackShot(shooter, matchId)
+      return result.list
+    }
+    if (result.code !== 'wait for the table to settle') {
+      throw new Error(`shot:play rejected on ${matchId}: ${result.code}`)
+    }
+    if (attempt >= 40) throw new Error(`table never settled on ${matchId}`)
+    await new Promise((r) => setTimeout(r, 100))
+  }
 }
 
 async function joinMatchUntilAcked(socket: Socket, matchId: string, event: string, shortMs = 1200, tries = 12): Promise<any> {
@@ -215,20 +309,19 @@ async function main(): Promise<void> {
 
   const initialCue = as.snapshot.balls[0]
   const turnSeat = as.snapshot.turnIndex
-  const shooter = turnSeat === 0 ? sa : sb
-  const aUpdate = waitFor<any>(sa, 'game:update')
-  const bUpdate = waitFor<any>(sb, 'game:update')
-  shooter.emit('shot:play', { matchId, input: { aimAngle: 0.45, power: 0.75, spin: { x: 0, y: 0 } } })
   let au: any
   let bu: any
   try {
-    au = await aUpdate
+    ;[au, bu] = await playShotLikeAClient(
+      matchId,
+      turnSeat === 0 ? sa : sb,
+      [sa, sb],
+      { aimAngle: 0.45, power: 0.75, spin: { x: 0, y: 0 } }
+    )
+    check('alice game:update', true)
+    check('bob game:update', true)
   } catch (e) {
     check('alice game:update', false, (e as Error).message)
-  }
-  try {
-    bu = await bUpdate
-  } catch (e) {
     check('bob game:update', false, (e as Error).message)
   }
   if (au && bu) {
@@ -345,14 +438,17 @@ async function main(): Promise<void> {
   check('practice seat 0', pj.seat === 0, pj)
   await pStart
   let pUpdates = 0
-  const pUpdatePromise = waitFor<any>(sp, 'game:update')
-  sp.emit('shot:play', { matchId: practiceId, input: { aimAngle: 0.3, power: 0.7, spin: { x: 0, y: 0 } } })
-  const firstUpd = await pUpdatePromise
+  const [firstUpd] = await playShotLikeAClient(
+    practiceId,
+    sp,
+    [sp],
+    { aimAngle: 0.3, power: 0.7, spin: { x: 0, y: 0 } }
+  )
   pUpdates++
   check('alice shot produced game:update', Array.isArray(firstUpd.events), firstUpd)
   let robotMoved = false
   try {
-    const second = await waitFor<any>(sp, 'game:update', 8000)
+    const second = await watchShotLikeAClient(sp, practiceId, 8000)
     pUpdates++
     robotMoved = Array.isArray(second.events)
   } catch {
@@ -424,12 +520,8 @@ async function main(): Promise<void> {
   const MAX_SIM_STROKES = 1600
   while (totalStrokes < MAX_SIM_STROKES && frameWins === null) {
     const seat = shadow.turnIndex
-    const shooter = seat === 0 ? sa2 : sb2
-    const aUp = waitFor<any>(sa2, 'game:update', 45000)
-    const bUp = waitFor<any>(sb2, 'game:update', 45000)
     const move = computeBotShot(shadow, 'HARD', `nat-${lastFrameIndex}-${strokeSeq}`)
-    shooter.emit('shot:play', { matchId: natMatchId, input: move.shot })
-    const [uA, uB] = await Promise.all([aUp, bUp])
+    const [uA, uB] = await playShotLikeAClient(natMatchId, seat === 0 ? sa2 : sb2, [sa2, sb2], move.shot)
     strokeSeq++
     totalStrokes++
     if (uA.frame && uB.frame && (uA.frame.turnIndex !== uB.frame.turnIndex || uA.frame.scores.player0 !== uB.frame.scores.player0 || uA.frame.scores.player1 !== uB.frame.scores.player1)) {
@@ -611,20 +703,27 @@ async function main(): Promise<void> {
   let pShadow = frameFromSnapshot(npStartData.snapshot as FrameSnapshot)
   let pOver = false
   let pStrokes = 0
+  let pEnd = 'stroke-limit'
   while (!pOver && pStrokes < 700) {
     if (pShadow.turnIndex === 0) {
       const move = computeBotShot(pShadow, 'HARD', `prac-notif-${pStrokes}`)
-      const up = waitFor<any>(spPrac, 'game:update', 45000)
-      spPrac.emit('shot:play', { matchId: notifyPracticeId, input: move.shot })
-      const upd = await up
-      if (upd.frame?.phase === 'FRAME_END') pOver = true
-      else pShadow = frameFromSnapshot(upd.frame ?? pShadow)
+      const [upd] = await playShotLikeAClient(notifyPracticeId, spPrac, [spPrac], move.shot)
+      if (upd.frame?.phase === 'FRAME_END') {
+        pOver = true
+        pEnd = 'frame-end'
+      } else pShadow = frameFromSnapshot(upd.frame ?? pShadow)
     } else {
+      // The bot's turn: the harness plays no shot, but it still watches the bot's
+      // playback and acknowledges it, exactly as the browser client does. Without
+      // that the room's hold keeps the bot from ever taking its next shot.
       try {
-        const up = await waitFor<any>(spPrac, 'game:update', 30000)
-        if (up.frame?.phase === 'FRAME_END') pOver = true
-        else pShadow = frameFromSnapshot(up.frame ?? pShadow)
+        const upd = await watchShotLikeAClient(spPrac, notifyPracticeId, 30000)
+        if (upd.frame?.phase === 'FRAME_END') {
+          pOver = true
+          pEnd = 'frame-end'
+        } else pShadow = frameFromSnapshot(upd.frame ?? pShadow)
       } catch {
+        pEnd = 'bot-wait-timeout'
         break
       }
     }
@@ -638,7 +737,7 @@ async function main(): Promise<void> {
     res = await api('/api/notifications', { token: pracUser.token })
     pracChatted = ((res.json?.data?.items as any[]) ?? []).some((n) => n.kind === 'PRACTICE')
   }
-  check('practice completion produced notification', pracChatted)
+  check('practice completion produced notification', pracChatted, { pEnd, pStrokes })
 
   res = await api('/api/notifications', { token: alice.token })
   const unreadBefore = res.json?.data?.unread as number | undefined
@@ -838,10 +937,9 @@ async function main(): Promise<void> {
       sr1.disconnect()
       const goneData = await gone
       check('opponent notified of seat disconnect', goneData.seat === 0, goneData)
-      const gonePlay = waitFor<any>(sr2, 'game:update', 30000)
       const goneMove = computeBotShot(reShadow, 'HARD', `reconn-gone-${reStrokes}`)
-      sr2.emit('shot:play', { matchId: reId, input: goneMove.shot })
-      const goneUpd = await gonePlay
+      // Seat 0 is disconnected here, so only the connected seat is waited on.
+      const [goneUpd] = await playShotLikeAClient(reId, sr2, [sr2], goneMove.shot)
       missedSeqList = ((goneUpd.events ?? []) as Array<{ seq: number }>).map((e) => e.seq)
       check('turn played while opponent absent', missedSeqList.length > 0, missedSeqList)
       reShadow = frameFromSnapshot(goneUpd.frame ?? reShadow)
@@ -874,11 +972,8 @@ async function main(): Promise<void> {
       const backData = await backNotice
       check('opponent told player reconnected', backData.seat === 0, backData)
     } else {
-      const up1 = waitFor<any>(sr1, 'game:update', 30000)
-      const up2 = waitFor<any>(sr2, 'game:update', 30000)
       const move = computeBotShot(reShadow, 'HARD', `reconn-${reStrokes}`)
-      sr1.emit('shot:play', { matchId: reId, input: move.shot })
-      const [u1, u2] = await Promise.all([up1, up2])
+      const [u1, u2] = await playShotLikeAClient(reId, sr1, [sr1, sr2], move.shot)
       const frame = u1.frame ?? u2.frame
       const events = (u1.events ?? []) as Array<{ type: string }>
       const frameEnded = frame.phase === 'FRAME_END' || events.some((e) => e.type === 'FRAME_END')
@@ -1051,7 +1146,7 @@ async function main(): Promise<void> {
   await thS2
   const floodShooter = thStart.snapshot.turnIndex === 0 ? sth1 : sth2
 
-  const shotFeedback = (s: Socket, input: unknown, windowMs = 5000): Promise<string> =>
+  const shotFeedback = (s: Socket, matchId: string, input: unknown, windowMs = 5000): Promise<string> =>
     new Promise((resolve) => {
       let done = false
       const finish = (v: string) => {
@@ -1062,26 +1157,31 @@ async function main(): Promise<void> {
         resolve(v)
       }
       const onErr = (d: { code?: string }) => finish(d?.code ?? 'unknown')
-      const onUpd = () => finish('accepted')
+      const onUpd = () => {
+        // The shot was really taken, so the client that played it acknowledges the
+        // playback and releases the room's hold.
+        ackShot(s, matchId)
+        finish('accepted')
+      }
       s.on('error', onErr)
       s.on('game:update', onUpd)
       setTimeout(() => finish('timeout'), windowMs)
-      s.emit('shot:play', { matchId: thId, input })
+      s.emit('shot:play', { matchId, input })
     })
 
   const vIn = { aimAngle: 0.5, power: 0.5, spin: { x: 0, y: 0 }, timestamp: Date.now() }
-  const dup1 = await shotFeedback(floodShooter, { ...vIn })
-  const dup2 = await shotFeedback(floodShooter, { ...vIn })
+  const dup1 = await shotFeedback(floodShooter, thId, { ...vIn })
+  const dup2 = await shotFeedback(floodShooter, thId, { ...vIn })
   check('first valid attempt accepted', dup1 === 'accepted', dup1)
   check('identical re-input rejected as replay', dup2 === 'duplicate_shot', dup2)
 
-  const badTs = await shotFeedback(floodShooter, { ...vIn, timestamp: Date.now() + 1_000_000 })
+  const badTs = await shotFeedback(floodShooter, thId, { ...vIn, timestamp: Date.now() + 1_000_000 })
   check('pre-dated / future client timestamp rejected', badTs === 'bad_timestamp', badTs)
-  const badPower = await shotFeedback(floodShooter, { ...vIn, power: 2 })
+  const badPower = await shotFeedback(floodShooter, thId, { ...vIn, power: 2 })
   check('over-power shot rejected', badPower === 'bad_power', badPower)
-  const badSpin = await shotFeedback(floodShooter, { ...vIn, spin: 'english' })
+  const badSpin = await shotFeedback(floodShooter, thId, { ...vIn, spin: 'english' })
   check('malformed spin rejected', badSpin === 'bad_spin', badSpin)
-  const badCue = await shotFeedback(floodShooter, { ...vIn, cuePos: { x: 'off-table', y: 0 } })
+  const badCue = await shotFeedback(floodShooter, thId, { ...vIn, cuePos: { x: 'off-table', y: 0 } })
   check('malformed cue position rejected', badCue === 'bad_cue_pos', badCue)
 
   let floodRateLimited = 0
@@ -1102,8 +1202,8 @@ async function main(): Promise<void> {
   check('shot flood produced rate_limited responses', floodRateLimited >= 80, floodRateLimited)
 
   await new Promise((r) => setTimeout(r, 2000))
-  const backA = await shotFeedback(sth1, { ...vIn, timestamp: Date.now() })
-  const backB = await shotFeedback(sth2, { ...vIn, timestamp: Date.now() })
+  const backA = await shotFeedback(sth1, thId, { ...vIn, timestamp: Date.now() })
+  const backB = await shotFeedback(sth2, thId, { ...vIn, timestamp: Date.now() })
   check('valid shot accepted after throttle backoff', backA === 'accepted' || backB === 'accepted', { backA, backB })
   sth1.disconnect()
   sth2.disconnect()
@@ -1138,7 +1238,12 @@ async function main(): Promise<void> {
         resolve(v)
       }
       const onErr = (d: { code?: string }) => finish(d?.code ?? 'unknown')
-      const onUpd = () => finish('accepted')
+      const onUpd = () => {
+        // The shot was really taken, so the client that played it acknowledges the
+        // playback and releases the room's hold.
+        ackShot(s, matchId)
+        finish('accepted')
+      }
       s.on('error', onErr)
       s.on('game:update', onUpd)
       setTimeout(() => finish('timeout'), windowMs)
@@ -1209,18 +1314,25 @@ async function main(): Promise<void> {
   }
 
   await resetSettings()
-
-  console.log('')
-  console.log(`RESULT: ${passed} passed, ${failures} failed`)
-  if (failures > 0) process.exitCode = 1
 }
 
 main()
   .catch((error) => {
     console.error('E2E crashed', error)
     failures++
-    process.exitCode = 1
   })
   .finally(async () => {
-    await prisma.$disconnect()
+    console.log('')
+    console.log(`RESULT: ${passed} passed, ${failures} failed`)
+    try {
+      await prisma.$disconnect()
+    } catch {
+      // Best effort: the run is over and the process is about to exit either way.
+    }
+    // The exit is forced deliberately. A crashed run used to hang instead of
+    // returning, because the open socket connections and the timers behind waits that
+    // were abandoned mid-race keep the event loop alive indefinitely, and
+    // `process.exitCode` alone never interrupts that. Ending the process here means a
+    // failure is always reported promptly, and a clean run never lingers either.
+    process.exit(failures > 0 ? 1 : 0)
   })

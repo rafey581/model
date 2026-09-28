@@ -70,13 +70,20 @@ export interface ShotPlayback {
   pots: Array<[number, number]>
 }
 
+/**
+ * The event records the server writes to the match log.
+ *
+ * The payload shapes here are what the room actually broadcasts. They name the
+ * seat rather than the player index, because a log row has to read sensibly on
+ * its own once the match is over and the seats are no longer mapped to anybody.
+ */
 export type GameUpdate =
   | { type: 'SHOT'; seq: number; shot: ShotInput; byIndex: number }
-  | { type: 'BALL_POTTED'; seq: number; ballId: number; byIndex: number }
-  | { type: 'FOUL'; seq: number; penalty: number; reason: string; byIndex: number }
-  | { type: 'TURN_CHANGE'; seq: number; turnIndex: number }
-  | { type: 'FRAME_END'; seq: number; winnerIndex: number; scores: { player0: number; player1: number } }
-  | { type: 'MATCH_END'; seq: number; winnerIndex: number; reason: string }
+  | { type: 'BALL_POTTED'; seq: number; ballId: number; bySeat: number }
+  | { type: 'FOUL'; seq: number; penalty: number; reason: string; bySeat: number }
+  | { type: 'TURN_CHANGE'; seq: number; turnSeat: number }
+  | { type: 'FRAME_END'; seq: number; winnerSeat: number; scores: { player0: number; player1: number } }
+  | { type: 'MATCH_END'; seq: number; winnerSeat: number; reason: string }
 
 import type { BallState } from './state.js'
 import type { Vec2 } from './vec.js'

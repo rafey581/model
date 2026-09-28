@@ -293,6 +293,21 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
       shots.recordAccepted(socket.id, input)
     })
 
+    // A client reports that a shot has finished animating. The room holds the next
+    // shot until it hears this, which is what stops a bot firing a new shot into the
+    // middle of the previous one's replay. It is a pacing signal, not a game
+    // action, so it is not rate limited as a shot is and it can change no state of
+    // its own.
+    socket.on('shot:done', (payload: { matchId: string }) => {
+      const { matchId } = payload ?? {}
+      if (!matchId) return
+      const room = getOrCreateRoom(matchId)
+      if (!room) return
+      // The room itself checks that this user is seated in the match, so an
+      // outsider who guessed the id cannot release somebody else's hold.
+      room.noteShotPlayed(socket.data.userId)
+    })
+
     socket.on('concede', (payload: { matchId: string }) => {
       const { matchId } = payload ?? {}
       if (!matchId) {

@@ -242,24 +242,44 @@ function computePotMove(frame: FrameState, candidates: PotCandidate[], config: B
   const pool = candidates.slice(0, config.pool)
   let bestLegal: BotMove | null = null
   for (const candidate of pool) {
-    for (const offset of POT_OFFSETS) {
-      const base = withJitter(
-        { aimAngle: candidate.angle + offset, power: candidate.basePower, spin: vec(0, 0), timestamp: 0 },
-        config,
-        rng
-      )
-      const sim = simulateStroke(frame.balls, base, { maxTicks: VALIDATION_TICKS })
-      const targetPotted = sim.pottedIds.includes(candidate.targetId)
-      const foul = sim.cuePotted || sim.firstContactId !== candidate.targetId
-      if (targetPotted && !foul) {
-        return { shot: base }
-      }
-      if (!foul && sim.firstContactId !== null && !bestLegal) {
-        bestLegal = { shot: base }
+    // The power a shot needs is not a fixed multiple of the distance to the pocket:
+    // it depends on how much of the cue ball's pace the cut actually passes on, and
+    // on how the cloth slows the ball over the two legs of the shot. A closed form
+    // for that has to be re-derived whenever the cloth model changes, and when it is
+    // even slightly out the ball arrives with too much pace and runs through the
+    // pocket. Searching a ladder of powers and letting the simulation decide keeps
+    // the bot honest about the physics it is actually playing on, and it also gives
+    // the weaker levels a coarser, sloppier ladder so they miss more.
+    for (const scale of powerLadder(config)) {
+      for (const offset of POT_OFFSETS) {
+        const base = withJitter(
+          { aimAngle: candidate.angle + offset, power: clamp(candidate.basePower * scale, 0.15, 1), spin: vec(0, 0), timestamp: 0 },
+          config,
+          rng
+        )
+        const sim = simulateStroke(frame.balls, base, { maxTicks: VALIDATION_TICKS })
+        const targetPotted = sim.pottedIds.includes(candidate.targetId)
+        const foul = sim.cuePotted || sim.firstContactId !== candidate.targetId
+        if (targetPotted && !foul) {
+          return { shot: base }
+        }
+        if (!foul && sim.firstContactId !== null && !bestLegal) {
+          bestLegal = { shot: base }
+        }
       }
     }
   }
   return bestLegal
+}
+
+/**
+ * Powers to try around the candidate's estimate, nearest first. The stronger the
+ * level, the closer it sticks to the estimate, so a stronger bot is not simply a
+ * stronger bot with a wider search.
+ */
+function powerLadder(config: BotSkillProfile): number[] {
+  if (config.validate) return [1, 0.88, 1.12, 0.78, 1.24]
+  return [1, 0.85, 1.15]
 }
 
 function formShot(candidate: PotCandidate, config: BotSkillProfile, rng: () => number): ShotInput {

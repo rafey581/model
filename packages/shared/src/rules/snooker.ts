@@ -42,8 +42,12 @@ export function resolveStroke(frame: FrameState, shooterIndex: number, pottedIds
   } else {
     if (pottedReds > 0) {
       foul = true
-    } else if (pottedColours.length === 1 && pottedColours[0] === requiredColorId) {
-      points += COLOR_VALUES[requiredColorId] ?? 0
+    } else if (pottedColours.length === 1 && legalContact) {
+      // After a red the striker nominates a colour of their own choice, so any
+      // colour they may legally hit scores at its own value. Requiring the lowest
+      // remaining colour would have called a perfectly good pot of the black a
+      // foul for missing the ball on, and scored it at the yellow's value.
+      points += COLOR_VALUES[pottedColours[0]!] ?? 0
     } else if (pottedColours.length > 0) {
       foul = true
     }
@@ -201,6 +205,11 @@ function requiredColourId(ballOn: BallOn, frame: FrameState): number {
 
 function isLegalContact(ballId: number, ballOn: BallOn, requiredColorId: number): boolean {
   if (ballOn === 'RED') return isRedId(ballId)
+  // After a red the ball on is "a colour of the striker's choice", so any colour
+  // that is still on the table may be struck first and counts as a legal contact.
+  // Demanding one particular colour turned every legal colour-after-a-red shot
+  // into a "no legal contact" foul.
+  if (ballOn === 'ANY_COLOUR') return isColourId(ballId)
   return ballId === requiredColorId
 }
 
