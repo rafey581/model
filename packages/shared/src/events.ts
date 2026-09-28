@@ -68,6 +68,15 @@ export interface ShotPlayback {
   duration: number
   keyframes: SimKeyframe[]
   pots: Array<[number, number]>
+  /**
+   * Identifies this particular shot for the `shot:done` acknowledgement.
+   *
+   * A client sends the token back when the replay finishes, so the room can tell an
+   * acknowledgement of the shot on screen from one that was delayed, replayed after a
+   * reconnect, or duplicated. Anything that does not match the shot currently being
+   * held is ignored, so a stale report cannot release a newer hold early.
+   */
+  token?: number
 }
 
 /**

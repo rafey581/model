@@ -288,6 +288,50 @@ function drawBall(
 }
 
 /**
+ * Draws where the cue ball itself goes after the contact, turning where it meets a
+ * cushion.
+ *
+ * This is a separate claim from the two above: the dotted line says where the cue
+ * ball is going, the arrow says where the ball it hits is going, and this says
+ * where the cue ball ends up. On a full ball there is nothing to draw, because the
+ * cue ball stops dead on the spot, and showing a path there would be a lie.
+ *
+ * Drawn in a cooler, thinner line than the object-ball arrow so the two departures
+ * are never read as one, and dashed so a path crossing the aim line still reads as a
+ * crossing rather than a junction.
+ */
+function drawCuePath(
+  ctx: CanvasRenderingContext2D,
+  offsetX: number,
+  offsetY: number,
+  scale: number,
+  guide: AimGuide
+): void {
+  if (guide.cuePath.length === 0) return
+
+  ctx.strokeStyle = 'rgba(150,205,255,0.75)'
+  ctx.lineWidth = 1.5
+  ctx.setLineDash([3, 5])
+  ctx.beginPath()
+  ctx.moveTo(offsetX + guide.cuePath[0]!.from.x * scale, offsetY + guide.cuePath[0]!.from.y * scale)
+  for (const segment of guide.cuePath) {
+    ctx.lineTo(offsetX + segment.to.x * scale, offsetY + segment.to.y * scale)
+  }
+  ctx.stroke()
+  ctx.setLineDash([])
+
+  // A small tick at the end so the path reads as a route with a destination rather
+  // than as a stray line across the cloth.
+  const last = guide.cuePath[guide.cuePath.length - 1]!
+  const tipX = offsetX + last.to.x * scale
+  const tipY = offsetY + last.to.y * scale
+  ctx.fillStyle = 'rgba(150,205,255,0.85)'
+  ctx.beginPath()
+  ctx.arc(tipX, tipY, 2.5 * scale * 0.5, 0, Math.PI * 2)
+  ctx.fill()
+}
+
+/**
  * Draws the aim. With a ball in the way it is two lines: a dotted line from the
  * cue ball out to the exact point the cue ball touches it, and a solid arrow
  * continuing past that point along the line of centres to show which way the
@@ -322,6 +366,7 @@ function drawAim(
 
   if (guide) {
     drawContactMarker(ctx, offsetX, offsetY, scale, guide)
+    drawCuePath(ctx, offsetX, offsetY, scale, guide)
   } else {
     // Nothing to contact, so there is no contact dot, no ring and no object-ball
     // arrow -- just a soft cap marking where the line stops.

@@ -1,4 +1,4 @@
-import { BALL_RADIUS } from '@snooker/shared'
+import { BALL_RADIUS, TABLE_LENGTH, TABLE_WIDTH } from '@snooker/shared'
 
 /**
  * Where the cue ball is aiming, and what it will meet.
@@ -25,6 +25,23 @@ export interface AimGuide {
    * from the aim line because on a cut the two are visibly different directions.
    */
   lineOfCentres: { x: number; y: number }
+  /**
+   * Where the cue ball itself goes after the contact, as a chain of straight runs
+   * that turn where they meet a cushion.
+   *
+   * This is the half of the collision the object-ball arrow does not show. On a
+   * full hit the cue ball has nowhere to go and stops dead, and this is empty. On
+   * a cut it leaves along the tangent, at right angles to the line of centres,
+   * running further the thinner the cut. Predicting that is what lets a player see
+   * a shot is safe before playing it rather than after.
+   */
+  cuePath: AimSegment[]
+}
+
+/** One straight run of a predicted path, from one bounce to the next. */
+export interface AimSegment {
+  from: { x: number; y: number }
+  to: { x: number; y: number }
 }
 
 export interface AimGuideBall {
@@ -44,6 +61,103 @@ export const OBJECT_DIR_ARROW_LENGTH = 190
 /** The head of the object-ball arrow, as an angle, for drawing the barbs. */
 const ARROW_HEAD_LENGTH = 46
 const ARROW_HEAD_ANGLE = Math.PI / 7
+
+/**
+ * How far the predicted cue-ball path is drawn, in millimetres.
+ *
+ * This is a drawing length, not a distance prediction. How far the cue ball really
+ * runs after contact depends on the power it was struck with and on how long it
+ * takes for the cloth to take that speed away, and neither is known while aiming.
+ * What the guide does commit to is the direction, which is exact: right angles to
+ * the line of centres, whichever way the cut was made. So the path is drawn the same
+ * length whatever the cut, and the one thing that decides whether there is a path at
+ * all is whether any sideways motion survived the collision.
+ */
+const CUE_PATH_LENGTH = 520
+
+/** Cushion turns the predicted path will take before it is given up on. */
+const CUE_PATH_MAX_BOUNCES = 2
+
+/**
+ * Where the cue ball goes once it has hit the target.
+ *
+ * Momentum only passes along the line of centres, so what is left of the cue ball's
+ * own velocity is the part travelling across that line, and it leaves along the
+ * tangent to the contact:
+ *
+ *     n = unit(target - cue at contact)
+ *     t = (-n.y, n.x)
+ *     v_cue' = (v_cue . t) t
+ *
+ * Because the incoming velocity runs along the aim line, `v_cue . t` is just the
+ * sine of the cut angle, which is why a full ball leaves nothing behind and a thin
+ * cut sends the cue ball the full length of the table. The runs are then turned off
+ * the cushions so the line reads as a path across the cloth rather than a ray into
+ * the rail.
+ *
+ * The sign matters: cutting the other way sends the cue ball off in the opposite
+ * tangent direction, so the guide has to carry it rather than assume one side.
+ */
+function predictCuePath(
+  ghost: { x: number; y: number },
+  lineOfCentres: { x: number; y: number },
+  incoming: { x: number; y: number },
+  length: number
+): AimSegment[] {
+  // The tangent is the line of centres turned a quarter turn.
+  const tx = -lineOfCentres.y
+  const ty = lineOfCentres.x
+  // Only the sideways part of the strike survives the collision.
+  const along = incoming.x * tx + incoming.y * ty
+  // A full ball leaves the cue ball with no sideways motion at all, so it stops.
+  if (Math.abs(along) < 0.02) return []
+
+  const dirX = Math.sign(along) * tx
+  const dirY = Math.sign(along) * ty
+
+  const segments: AimSegment[] = []
+  let x = ghost.x
+  let y = ghost.y
+  let dx = dirX
+  let dy = dirY
+  let remaining = length
+
+  for (let bounce = 0; bounce <= CUE_PATH_MAX_BOUNCES && remaining > 1; bounce++) {
+    // Distance to each rail the path is heading for, and which rail that is.
+    const bounds = {
+      left: BALL_RADIUS,
+      right: TABLE_LENGTH - BALL_RADIUS,
+      top: BALL_RADIUS,
+      bottom: TABLE_WIDTH - BALL_RADIUS
+    }
+    const toRight = dx > 0 ? (bounds.right - x) / dx : Infinity
+    const toLeft = dx < 0 ? (bounds.left - x) / dx : Infinity
+    const toBottom = dy > 0 ? (bounds.bottom - y) / dy : Infinity
+    const toTop = dy < 0 ? (bounds.top - y) / dy : Infinity
+    const rail = Math.min(toRight, toLeft, toBottom, toTop)
+
+    // Nothing left to run, or the path is already off the cloth.
+    if (!Number.isFinite(rail) || rail <= 0) break
+
+    if (rail <= remaining) {
+      // It reaches the cushion: draw up to it, then turn.
+      const to = { x: x + dx * rail, y: y + dy * rail }
+      segments.push({ from: { x, y }, to })
+      x = to.x
+      y = to.y
+      remaining -= rail
+      // Only the component into the rail is turned back; the rest runs along it,
+      // which is the same split the cushion itself uses.
+      if (rail === toTop || rail === toBottom) dy = -dy
+      else dx = -dx
+    } else {
+      segments.push({ from: { x, y }, to: { x: x + dx * remaining, y: y + dy * remaining } })
+      remaining = 0
+    }
+  }
+
+  return segments
+}
 
 export interface ObjectDirection {
   /** Where the arrow starts: the contact point on the target ball. */
@@ -93,7 +207,8 @@ export function computeAimGuide(
   cue: { x: number; y: number; id?: number },
   angle: number,
   balls: AimGuideBall[],
-  radius: number = BALL_RADIUS
+  radius: number = BALL_RADIUS,
+  cuePathLength: number = CUE_PATH_LENGTH
 ): AimGuide | null {
   const dirX = Math.cos(angle)
   const dirY = Math.sin(angle)
@@ -128,14 +243,24 @@ export function computeAimGuide(
     const ny = ball.y - ghostY
     const length = Math.hypot(nx, ny) || 1
 
+    const lineOfCentres = { x: nx / length, y: ny / length }
+
     best = {
       targetId: ball.id,
       travel,
       ghost: { x: ghostX, y: ghostY },
       contact: { x: ball.x - (nx / length) * radius, y: ball.y - (ny / length) * radius },
-      lineOfCentres: { x: nx / length, y: ny / length }
+      lineOfCentres,
+      cuePath: predictCuePath(
+        { x: ghostX, y: ghostY },
+        lineOfCentres,
+        { x: dirX, y: dirY },
+        cuePathLength
+      )
     }
   }
 
   return best
 }
+
+

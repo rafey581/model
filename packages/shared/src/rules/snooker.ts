@@ -71,7 +71,7 @@ export function resolveStroke(frame: FrameState, shooterIndex: number, pottedIds
 
   if (foul) {
     resolution.nextBallOn = nextBallOnAfterVisit(frame)
-    resolution.reason = foulReason(cuePotted, legalContact, ballOn, pottedReds, pottedColours)
+    resolution.reason = foulReason(cuePotted, firstContactId, legalContact, ballOn, pottedReds, pottedColours)
     return resolution
   }
 
@@ -223,9 +223,26 @@ function computeFoulValue(ballOn: BallOn, requiredColorId: number, pottedIds: nu
   return Math.max(4, worst)
 }
 
-function foulReason(cuePotted: boolean, legalContact: boolean, ballOn: BallOn, pottedReds: number, pottedColours: number[]): string {
+/**
+ * Why the stroke was a foul.
+ *
+ * "No legal contact" and "hit the wrong ball" are different mistakes, and the old
+ * wording collapsed them: a stroke that reached the brown when a red was on made a
+ * contact perfectly well, so reporting it as having made none described a shot that
+ * did something as a shot that did nothing. The penalty is the same either way --
+ * it is decided by `computeFoulValue` from the ball on and the balls potted -- so
+ * only the label depends on which of the two happened.
+ */
+function foulReason(
+  cuePotted: boolean,
+  firstContactId: number | null,
+  legalContact: boolean,
+  ballOn: BallOn,
+  pottedReds: number,
+  pottedColours: number[]
+): string {
   if (cuePotted) return 'cue ball potted'
-  if (!legalContact) return 'no legal contact'
+  if (!legalContact) return firstContactId === null ? 'no legal contact' : 'wrong ball first'
   if (pottedReds > 0 && ballOn !== 'RED' || pottedColours.length > 0 && ballOn === 'RED' && pottedReds === 0) return 'wrong ball potted'
   return 'foul'
 }

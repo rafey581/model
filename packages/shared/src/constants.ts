@@ -16,7 +16,17 @@ export const CUSHION_TANGENTIAL_DAMP = 0.92
 
 export const BALL_RESTITUTION = 0.95
 
-export const ROLL_FRICTION = 90
+/**
+ * Cloth deceleration, in mm/s^2, applied to every rolling ball.
+ *
+ * A ball rolling on snooker cloth loses roughly 0.2-0.4 m/s^2, so 0.4 m/s^2 sits at
+ * the brisk end of real cloth. The figure that matters most is the settle time: at
+ * this value a routine shot comes to rest in 4-5 seconds and a full-power break in
+ * 5-7, which is what a real table does. The previous 0.09 m/s^2 let a ball coast for
+ * 13-19 seconds, roughly three times too long, so shots hung around long after the
+ * players had read them.
+ */
+export const ROLL_FRICTION = 400
 // Fractional spin bleed-off per second: spin retains (1 - SPIN_FRICTION)^TICK_RATE
 // each second, i.e. about 37% per second at 1.
 export const SPIN_FRICTION = 1
@@ -43,14 +53,17 @@ export const MAX_SIM_TICKS = TICK_RATE * 60
  * client's replay will run so it can hold the next shot until that replay has
  * finished. The two sides therefore have to agree on one number.
  *
- * A full-power break is the long pole, settling in around 12-19 seconds of
- * simulated time on the current cloth. At 6x that plays out in 2-3 seconds,
- * which is long enough to follow where each ball went and short enough that a
- * visit does not stall the table. The speed is a presentation choice only: the
+ * The current cloth brings a routine shot to rest in 4-5 seconds and a full-power
+ * break in 5-7. Replayed at 2x that is roughly 2-3.5 seconds on screen, which is
+ * slow enough to follow any individual ball with your eye as it runs and settles
+ * rather than having the whole position snap into place. Six times too fast made
+ * the table look like it was twitching.
+ *
+ * This is a presentation choice only, and it is meant to be tuned by eye: the
  * simulation is unaffected by it, and the server's playback hold is derived from
  * it so the two cannot drift apart.
  */
-export const SHOT_PLAYBACK_SPEED = 6
+export const SHOT_PLAYBACK_SPEED = 2
 
 export const RED_VALUE = 1
 

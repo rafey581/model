@@ -276,6 +276,7 @@ export class Scene3D {
   private contactRing!: THREE.Mesh
   private contactDot!: THREE.Mesh
   private objectArrow!: THREE.LineSegments
+  private cuePathLine!: THREE.Line
   private spinLine!: THREE.Line
   private stick!: THREE.Group
   private lastTime = 0
@@ -551,6 +552,21 @@ export class Scene3D {
     this.objectArrow.renderOrder = 3
     this.scene.add(this.objectArrow)
 
+    // The cue ball's own route after the contact, which turns at the cushions. Four
+    // points cover a first contact plus two bounces, which is as far as the
+    // prediction is carried; unused points are collapsed onto the last one.
+    this.cuePathLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(), new THREE.Vector3(),
+        new THREE.Vector3(), new THREE.Vector3()
+      ]),
+      new THREE.LineBasicMaterial({ color: 0x96cdff, transparent: true, opacity: 0.8 })
+    )
+    this.cuePathLine.visible = false
+    this.cuePathLine.frustumCulled = false
+    this.cuePathLine.renderOrder = 3
+    this.scene.add(this.cuePathLine)
+
     this.aimGlow = new THREE.Mesh(
       new THREE.PlaneGeometry(90, 90),
       new THREE.MeshBasicMaterial({ map: glowTexture(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
@@ -694,6 +710,7 @@ export class Scene3D {
       this.contactRing.visible = false
       this.contactDot.visible = false
       this.objectArrow.visible = false
+      this.cuePathLine.visible = false
     }
 
     const spinX = aim.spinX ?? 0
@@ -748,6 +765,37 @@ export class Scene3D {
     attr.needsUpdate = true
     this.objectArrow.geometry.computeBoundingSphere()
     this.objectArrow.visible = true
+
+    this.showCuePath(guide)
+  }
+
+  /**
+   * Lays the predicted cue-ball route onto the cloth, turning where it meets a
+   * cushion. Kept off the object-ball arrow deliberately: the two are different
+   * facts about different balls, and a player judging a safety needs to see them
+   * separately.
+   */
+  private showCuePath(guide: AimGuide): void {
+    if (guide.cuePath.length === 0) {
+      // A full ball leaves the cue ball with nothing to show.
+      this.cuePathLine.visible = false
+      return
+    }
+
+    const attr = this.cuePathLine.geometry.getAttribute('position') as THREE.BufferAttribute
+    const y = 1.4
+    // One start point plus one per segment. A shorter path collapses its unused
+    // points onto the last real one, so no stray vertex trails off the cloth.
+    let previous = guide.cuePath[0]!.from
+    attr.setXYZ(0, tableX(previous.x), y, tableZ(previous.y))
+    for (let i = 0; i < 3; i++) {
+      const segment = guide.cuePath[i]
+      previous = segment ? segment.to : previous
+      attr.setXYZ(i + 1, tableX(previous.x), y, tableZ(previous.y))
+    }
+    attr.needsUpdate = true
+    this.cuePathLine.geometry.computeBoundingSphere()
+    this.cuePathLine.visible = true
   }
 
   private setLine(line: THREE.Line, ax: number, ay: number, az: number, bx: number, by: number, bz: number): void {
@@ -767,6 +815,7 @@ export class Scene3D {
     this.contactRing.visible = false
     this.contactDot.visible = false
     this.objectArrow.visible = false
+    this.cuePathLine.visible = false
     if (this.stick) this.stick.visible = false
   }
 

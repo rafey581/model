@@ -264,6 +264,18 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
 
     socket.on('shot:play', (payload: { matchId: string; input: ShotInputDto }) => {
       const { matchId, input } = payload ?? {}
+      // A shot that lands while the table is still replaying is the striker obeying
+      // the pacing rule, so it is refused here, before the rate limiter sees it. The
+      // limiter used to take a token first, which meant a player who waited as told
+      // could empty the bucket purely by retrying, and the resulting rate_limited
+      // rejection is recorded as a shot flood against them. Nothing is simulated on
+      // this path and no state changes, so the exemption costs the flood guard
+      // nothing; once the replay clears, the bucket applies to this shot again.
+      const pacing = getOrCreateRoom(matchId)?.pacingRejection(userId)
+      if (pacing) {
+        socket.emit('error', { code: pacing })
+        return
+      }
       if (!shots.take(socket.id, userId)) {
         socket.emit('error', { code: 'rate_limited' })
         signalAbuse('rate_limited')
@@ -298,14 +310,18 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
     // middle of the previous one's replay. It is a pacing signal, not a game
     // action, so it is not rate limited as a shot is and it can change no state of
     // its own.
-    socket.on('shot:done', (payload: { matchId: string }) => {
-      const { matchId } = payload ?? {}
+    socket.on('shot:done', (payload: { matchId: string; token?: number }) => {
+      const { matchId, token } = payload ?? {}
       if (!matchId) return
       const room = getOrCreateRoom(matchId)
       if (!room) return
       // The room itself checks that this user is seated in the match, so an
-      // outsider who guessed the id cannot release somebody else's hold.
-      room.noteShotPlayed(socket.data.userId)
+      // outsider who guessed the id cannot release somebody else's hold. It also
+      // checks the token, so an acknowledgement delayed past the shot it belonged
+      // to cannot cut short the shot that is on screen now, and it checks that this
+      // socket was one of the ones watching, so a tab that joined late or reconnected
+      // cannot end a replay it never saw.
+      room.noteShotPlayed(socket.data.userId, token, socket.id)
     })
 
     socket.on('concede', (payload: { matchId: string }) => {

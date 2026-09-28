@@ -60,6 +60,14 @@ let queuedUpdate: GameUpdatePayload | null = null
 let shotInFlight = false
 /** Pots whose sound was deferred until the replay reached the drop. */
 let deferredPots: number[] = []
+/**
+ * The shot's verdict (foul or frame win) held back until the replay reaches the end of
+ * the shot. A verdict describes what the cue ball did, so announcing it while the balls
+ * are still rolling reports a foul before the striker has even reached the contact.
+ */
+let deferredVerdict: Array<() => void> = []
+/** The token of the replay currently on screen, returned with the `shot:done`. */
+let playedToken: number | undefined
 let players: Array<{ id: string; userId: string; seat: number; user: { id: string; username: string } }> = []
 let matchFormat = 'BO3'
 let framesWon: [number, number] = [0, 0]
@@ -1418,6 +1426,13 @@ function abandonPlayback(): void {
   queuedUpdate = null
   shotInFlight = false
   deferredPots = []
+  // Nothing is being watched any more, so there is no shot to acknowledge. Clearing
+  // the token stops a later finish from claiming credit for a replay that was
+  // dropped, which would release a hold this client never watched through.
+  playedToken = undefined
+  // A held verdict belongs to a replay that is being thrown away. The authoritative
+  // snapshot arrives with its own events, so reporting this one now would be stale.
+  deferredVerdict = []
 }
 
 function applyGameUpdate(data: GameUpdatePayload): void {
@@ -1425,10 +1440,21 @@ function applyGameUpdate(data: GameUpdatePayload): void {
   frame = data.frame
   myTurn = mySeat !== undefined && data.frame.turnIndex === mySeat
 
+  // The score, the turn and the ball on are taken from the server's snapshot the
+  // instant it arrives, and are deliberately not held back for the replay. They are
+  // facts about the frame rather than commentary on the shot, and holding them would
+  // mean the scoreboard and the table disagreed with each other for the length of
+  // the animation. What does wait is the shot's verdict: the foul buzzer, the pot
+  // sounds and the messages, because those describe what the balls just did and are
+  // only meaningful once the striker has watched them do it.
+  //
   // A streamed shot replays from where the table was before the update landed,
   // so the animation starts from the true pre-shot positions.
   shotPlayer = null
   deferredPots = []
+  playedToken = data.playback?.token
+  const heldVerdict = deferredVerdict
+  deferredVerdict = []
   if (data.playback && data.playback.keyframes.length && previous) {
     shotPlayer = new ShotPlayer(data.playback, previous.balls as PlaybackBall[])
     shotInFlight = true
@@ -1438,34 +1464,64 @@ function applyGameUpdate(data: GameUpdatePayload): void {
     shotInFlight = true
     finishShot()
   }
+  // A running replay gets the verdict only once the balls have finished moving.
+  const verdictDeferred = shotPlayer !== null
 
   const potted: number[] = []
   for (const ev of data.events ?? []) {
     if (ev.type === 'BALL_POTTED') {
       const d = ev.data as { ballId: number }
       potted.push(d.ballId)
-      playCushion()
     } else if (ev.type === 'FOUL') {
       const d = ev.data as { penalty: number; reason?: string }
-      playFoul()
-      toast(d.reason ? `Foul: ${d.reason} (-${d.penalty})` : `Foul! -${d.penalty}`, 'error')
+      // The buzzer waits with the message. Hearing a foul announced over the sound of
+      // balls still rolling tells the striker the outcome before they have watched the
+      // shot that caused it.
+      const show = (): void => {
+        playFoul()
+        toast(d.reason ? `Foul: ${d.reason} (-${d.penalty})` : `Foul! -${d.penalty}`, 'error')
+      }
+      if (verdictDeferred) deferredVerdict.push(show)
+      else show()
     } else if (ev.type === 'FRAME_END') {
       const d = ev.data as { winnerSeat: number }
       framesWon = d.winnerSeat === 0 ? [framesWon[0] + 1, framesWon[1]] : [framesWon[0], framesWon[1] + 1]
-      playFrameEnd()
-      toast(`Frame ${frameIndex} won by ${seatName(d.winnerSeat)}`)
+      const show = (): void => {
+        playFrameEnd()
+        toast(`Frame ${frameIndex} won by ${seatName(d.winnerSeat)}`)
+      }
+      if (verdictDeferred) deferredVerdict.push(show)
+      else show()
     }
+  }
+  // Verdicts that are not tied to a replay still have to run; a held verdict from an
+  // earlier shot can only be here if its replay was replaced, so flush it now.
+  if (!verdictDeferred && heldVerdict.length) {
+    for (const show of heldVerdict) show()
   }
   if (potted.length) {
     if (shotPlayer) {
       // Hold the pot feedback until the replay actually drops the ball.
       deferredPots = potted
     } else {
-      playPot(potted.length)
-      toast(`Potted: ${potted.map(ballName).join(', ')}`)
+      announcePot(potted)
     }
   }
   updateHud()
+}
+
+/**
+ * The sound and the message for balls dropping, at the moment they drop.
+ *
+ * Both halves belong together: the click and the pot noise are what the shot
+ * sounds like, so hearing them before the ball reaches the pocket gives the
+ * result away ahead of the animation that explains it.
+ */
+function announcePot(ids: number[]): void {
+  if (ids.length === 0) return
+  playCushion()
+  playPot(ids.length)
+  toast(`Potted: ${ids.map(ballName).join(', ')}`)
 }
 
 function handleSocketEvents(socket: Socket): void {
@@ -1622,7 +1678,9 @@ function loop(): void {
 function finishShot(): void {
   if (!shotInFlight) return
   shotInFlight = false
-  if (activeMatchId) getSocket().emit('shot:done', { matchId: activeMatchId })
+  // The token identifies the replay that was just watched, so an acknowledgement that
+  // arrives after the server has moved on cannot release a newer hold.
+  if (activeMatchId) getSocket().emit('shot:done', { matchId: activeMatchId, token: playedToken })
 }
 
 /**
@@ -1635,10 +1693,7 @@ function stepShotPlayback(target: FrameSnapshotData, dtSeconds: number): FrameSn
       const due = shotPlayer.takeDuePots()
       if (due.length) {
         const ids = deferredPots.filter((id) => due.includes(id))
-        if (ids.length) {
-          playPot(ids.length)
-          toast(`Potted: ${ids.map(ballName).join(', ')}`)
-        }
+        announcePot(ids)
         deferredPots = deferredPots.filter((id) => !due.includes(id))
       }
     }
@@ -1647,8 +1702,13 @@ function stepShotPlayback(target: FrameSnapshotData, dtSeconds: number): FrameSn
     }
     // A pot whose timestamp never arrived would otherwise be silently dropped.
     if (deferredPots.length) {
-      playPot(deferredPots.length)
-      toast(`Potted: ${deferredPots.map(ballName).join(', ')}`)
+      announcePot(deferredPots)
+    }
+    // The balls have stopped moving, so the shot's verdict can be reported now.
+    if (deferredVerdict.length) {
+      const verdicts = deferredVerdict
+      deferredVerdict = []
+      for (const show of verdicts) show()
     }
     shotPlayer = null
     deferredPots = []

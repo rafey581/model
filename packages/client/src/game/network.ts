@@ -43,6 +43,20 @@ function statusMessage(status: number): string {
   return 'request failed'
 }
 
+/**
+ * Wording that replaces the server's own message, for the statuses where the server
+ * reports a database constraint in words a player can do nothing with.
+ *
+ * The server checks for a duplicate with a query against the unique email and username
+ * columns and answers `email or username already taken`, which reads like a storage
+ * error rather than an instruction. This status is safe to speak for unconditionally:
+ * it is raised only by registration, and unlike a 401 the right wording does not
+ * depend on whether the player was logging in or playing.
+ */
+const serverErrorWording: Record<number, string> = {
+  409: 'That email or username is already registered. Try logging in instead.'
+}
+
 export async function api<T>(path: string, options: { method?: string; body?: unknown } = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: options.method ?? 'GET',
@@ -64,8 +78,13 @@ export async function api<T>(path: string, options: { method?: string; body?: un
 
   if (!response.ok || !json?.ok) {
     const serverError = json?.error
-    if (typeof serverError === 'string' && serverError.length > 0) throw new Error(serverError)
+    // Field-level validation is the most specific thing the server can say, so it is
+    // asked first. After that, a status we have better wording for wins over the
+    // server's own phrasing, and only then does the server's string get used.
     if (isFlattenedValidation(serverError)) throw new Error(describeValidation(serverError))
+    const spoken = serverErrorWording[response.status]
+    if (spoken) throw new Error(spoken)
+    if (typeof serverError === 'string' && serverError.length > 0) throw new Error(serverError)
     throw new Error(statusMessage(response.status))
   }
   return json.data as T

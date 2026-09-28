@@ -4,6 +4,7 @@ import {
   simulateStroke,
   createFrame,
   applyStroke,
+  isRedId,
   framesToWin,
   createMatch,
   BALL_IDS,
@@ -47,6 +48,26 @@ function loneCueBall(x: number, y: number): BallState[] {
   return balls
 }
 
+/**
+ * The speed the cue ball leaves the tip at, recovered from a single tick of travel.
+ *
+ * Measuring the launch rather than reading it off the ball keeps the test honest
+ * about the thing that matters: what the player actually put on the table. A ball at
+ * rest does not move, so the recovery has to allow for the ball's own starting speed
+ * and comes back a fraction low; a percent of slack absorbs that.
+ */
+function launchSpeed(power: number): number {
+  const startX = 700
+  const out = simulateStroke(
+    loneCueBall(startX, TABLE_WIDTH / 2),
+    { aimAngle: 0, power, spin: { x: 0, y: 0 } },
+    { maxTicks: 1 }
+  )
+  const cue = out.balls.find((b) => b.isCue)!
+  const travelled = cue.pos.x - startX
+  return (travelled + 0.5 * ROLL_FRICTION * TICK_DT * TICK_DT) / TICK_DT
+}
+
 describe('physics', () => {
   it('places 22 balls on the table with no overlaps', () => {
     const balls = layoutTableBalls()
@@ -78,6 +99,26 @@ describe('physics', () => {
     const result = simulateStroke(balls, { aimAngle: 0, power: 1, spin: { x: 0, y: 0 } }, { maxTicks: 2 })
     expect(result.settled).toBe(false)
     expect(result.balls.some((b) => !b.potted && (b.vel.x !== 0 || b.vel.y !== 0))).toBe(true)
+  })
+
+  it('brings a routine shot to rest within a few seconds, the way cloth does', () => {
+    // A real ball rolling on snooker cloth sheds 0.2-0.4 m/s^2, which puts a shot
+    // out of play in three to six seconds. The previous figure let a ball coast
+    // for 13-19 seconds, so the replay dragged on long after the position was
+    // readable. This guards the feel rather than a constant: anyone raising
+    // ROLL_FRICTION to make a ball stop dead has to move this band deliberately.
+    const settle = (power: number): number => {
+      const balls = loneCueBall(200, TABLE_WIDTH / 2)
+      const result = simulateStroke(balls, { aimAngle: 0, power, spin: { x: 0, y: 0 } })
+      expect(result.settled).toBe(true)
+      return result.simSeconds
+    }
+    // Soft, routine and full power, all measured on an open table with no pack to
+    // absorb the energy, so these are the worst case for time taken to settle.
+    expect(settle(0.2)).toBeGreaterThan(2)
+    expect(settle(0.2)).toBeLessThan(6)
+    expect(settle(0.5)).toBeLessThan(9)
+    expect(settle(1)).toBeLessThan(11)
   })
 })
 
@@ -179,17 +220,30 @@ describe('spin', () => {
   })
 
   it('draw pulls the cue ball back off a full-blooded shot', () => {
-    const contactX = 1400 - BALL_DIAMETER
+    // Measured on the tick the balls first touch, not where they end up. Let the
+    // shot run to rest and the object ball has already gone up the table, rebounded
+    // off a cushion and knocked the cue ball about again, so the final resting
+    // positions say more about cushion restitution than about the shot that was
+    // played. Spin is settled at contact, so that is where it has to be read.
+    //
+    // The cue ball's pace along the table at that moment is the measurement: draw
+    // reverses it, stun leaves the ball drifting on, follow sends it through.
     const run = (spinY: number): number => {
-      const result = simulateStroke(twoBallRack(), { aimAngle: 0, power: 0.6, spin: { x: 0, y: spinY } })
-      return result.balls.find((b) => b.isCue)!.pos.x
+      for (let maxTicks = 1; maxTicks <= 200; maxTicks++) {
+        const result = simulateStroke(twoBallRack(), { aimAngle: 0, power: 0.6, spin: { x: 0, y: spinY } }, { maxTicks })
+        if (result.firstContactId !== null) return result.balls.find((b) => b.isCue)!.vel.x
+      }
+      throw new Error('cue ball never reached the object ball within 200 ticks')
     }
     const stun = run(0)
     const draw = run(-1)
     const follow = run(1)
 
+    // Draw sends the cue ball back down the table it came from...
+    expect(draw, 'draw should reverse the cue ball').toBeLessThan(0)
     expect(draw).toBeLessThan(stun)
-    expect(draw).toBeLessThan(contactX)
+    // ...stun leaves it drifting forward, and follow carries it on through.
+    expect(stun, 'stun should leave the cue ball on its way').toBeGreaterThan(0)
     expect(follow).toBeGreaterThan(stun)
   })
 
@@ -239,7 +293,11 @@ describe('ball contact', () => {
     // A gentle pace keeps each step of travel small, so the contact is detected
     // close to the true point of contact, and gentle enough that neither ball
     // reaches a cushion: a rebound would destroy the straight-line measurement.
-    const atContact = 220
+    // It also has to be quick enough that the object ball is still rolling when
+    // it stops. The cloth now takes 0.4 m/s^2 off a ball every second, so a
+    // slower contact pace than this leaves a 60 degree cut barely moving before
+    // friction halts it, and there is no line left to measure a throw against.
+    const atContact = 400
     const gap = along - BALL_DIAMETER * Math.cos(theta)
     const launch = Math.sqrt(atContact * atContact + 2 * ROLL_FRICTION * gap)
     const result = simulateStroke(balls, { aimAngle: 0, power: launch / MAX_CUE_SPEED, spin: { x: 0, y: 0 } })
@@ -338,6 +396,186 @@ describe('ball contact', () => {
   })
 })
 
+describe('only struck balls move', () => {
+  /** The ids that took part in at least one ball-on-ball contact. */
+  function contactedIds(result: ReturnType<typeof simulateStroke>): Set<number> {
+    const ids = new Set<number>()
+    for (const e of result.events) {
+      if (e.type === 'BALL_HIT' && e.otherBallId !== undefined) {
+        ids.add(e.ballId)
+        ids.add(e.otherBallId)
+      }
+    }
+    return ids
+  }
+
+  it('starts every layout without a single overlapping pair', () => {
+    // The collision resolver separates any pair that overlaps, so a resting layout
+    // that started overlapped would have untouched balls shoved apart before the
+    // cue was ever struck.
+    expect(createFrame(0).balls).toHaveLength(22)
+    const shot = createFrame(0)
+    applyStroke(shot, 0, { aimAngle: 0.4, power: 0.5, spin: { x: 0, y: 0 } })
+    for (const balls of [createFrame(0).balls, shot.balls]) {
+      for (let i = 0; i < balls.length; i++) {
+        for (let j = i + 1; j < balls.length; j++) {
+          const a = balls[i]!
+          const b = balls[j]!
+          if (a.potted || b.potted) continue
+          const d = Math.hypot(b.pos.x - a.pos.x, b.pos.y - a.pos.y)
+          expect(d).toBeGreaterThanOrEqual(BALL_DIAMETER - 1e-9)
+        }
+      }
+    }
+  })
+
+  it('never moves a ball that took no part in a contact', () => {
+    // Across the whole power range, every ball that ends up somewhere else must
+    // have a recorded contact to explain it. A ball that drifted without a contact
+    // would mean the resolver is nudging balls it should be leaving alone.
+    for (const power of [0.2, 0.5, 0.85, 1]) {
+      const frame = createFrame(0)
+      const before = new Map(frame.balls.map((b) => [b.id, { x: b.pos.x, y: b.pos.y }]))
+      const { sim } = applyStroke(frame, 0, { aimAngle: 0.9, power, spin: { x: 0, y: 0 } })
+      const contacted = contactedIds(sim)
+      expect(contacted.size).toBeGreaterThan(0)
+      for (const ball of frame.balls) {
+        if (ball.potted) continue
+        const was = before.get(ball.id)!
+        const moved = Math.hypot(ball.pos.x - was.x, ball.pos.y - was.y)
+        if (moved > 0.5) expect(contacted.has(ball.id)).toBe(true)
+      }
+    }
+  })
+
+  it('carries a chain reaction only as far as the balls it actually reaches', () => {
+    // Three reds in a row on an otherwise empty table. The strike must move all
+    // three through the chain, and the chain must stop there rather than setting
+    // every other ball rolling.
+    const frame = createFrame(0)
+    const chainIds = frame.balls.filter((b) => isRedId(b.id)).slice(0, 3).map((b) => b.id)
+    const lineY = TABLE_WIDTH / 2
+    for (const ball of frame.balls) {
+      if (ball.isCue || chainIds.includes(ball.id)) continue
+      ball.potted = true
+    }
+    frame.balls
+      .filter((b) => chainIds.includes(b.id))
+      .forEach((b, i) => {
+        b.pos = vec(TABLE_LENGTH / 2 + i * 60, lineY)
+      })
+    const cue = frame.balls.find((b) => b.isCue)!
+    cue.pos = vec(TABLE_LENGTH / 2 - 600, lineY)
+
+    // `applyStroke` swaps in a fresh balls array, so the settled positions have to
+    // be read back off the new state rather than off the objects set up above.
+    const before = new Map(frame.balls.map((b) => [b.id, { x: b.pos.x, y: b.pos.y }]))
+    const { sim } = applyStroke(frame, 0, {
+      aimAngle: 0,
+      power: 0.5,
+      spin: { x: 0, y: 0 }
+    })
+    const contacted = contactedIds(sim)
+    const after = new Map(frame.balls.map((b) => [b.id, b]))
+    for (const id of chainIds) {
+      const was = before.get(id)!
+      const now = after.get(id)!
+      expect(Math.hypot(now.pos.x - was.x, now.pos.y - was.y)).toBeGreaterThan(1)
+      expect(contacted.has(id)).toBe(true)
+    }
+    // Every other ball was off the table, so nothing else can have moved.
+    for (const [id, ball] of after) {
+      if (ball.potted || id === BALL_IDS.CUE || chainIds.includes(id)) continue
+      const was = before.get(id)!
+      expect(Math.hypot(ball.pos.x - was.x, ball.pos.y - was.y)).toBe(0)
+    }
+  })
+})
+
+describe('launch and contact detection', () => {
+  const breakShot = { aimAngle: 0, power: 1, spin: { x: 0, y: 0 } }
+
+  it('launches the cue ball at a speed set only by the power', () => {
+    // A linear map, so half power is half the pace and full power is the whole of it.
+    for (const power of [0.1, 0.25, 0.5, 0.75, 1]) {
+      const speed = launchSpeed(power)
+      expect(Math.abs(speed - power * MAX_CUE_SPEED)).toBeLessThan(power * MAX_CUE_SPEED * 0.01)
+    }
+  })
+
+  it('clamps the launch to the power range the rules allow', () => {
+    // More than a full-blooded stroke is still a full-blooded stroke, and a negative
+    // power is a tap rather than a shot backwards.
+    expect(launchSpeed(1.5)).toBeCloseTo(launchSpeed(1), 0)
+    expect(launchSpeed(-0.5)).toBeCloseTo(launchSpeed(0), 0)
+  })
+
+  it('leaves the cue ball where it was when the player never strikes it', () => {
+    const startX = 700
+    const out = simulateStroke(
+      loneCueBall(startX, TABLE_WIDTH / 2),
+      { aimAngle: 0, power: 0, spin: { x: 0, y: 0 } },
+      { maxTicks: 1 }
+    )
+    expect(out.balls.find((b) => b.isCue)!.pos.x).toBe(startX)
+  })
+
+  it('never lets a hard cue ball pass through the ball in front of it', () => {
+    // At full power the cue ball covers 75mm in a tick, which is more than a whole
+    // ball is wide, so contact is only caught because the tick is subdivided. Without
+    // the subdivision a full-blooded shot would pass clean through its target and the
+    // contact would register as a glancing nothing.
+    for (const power of [0.25, 0.5, 0.75, 1]) {
+      const out = simulateStroke(twoBallRack(), { aimAngle: 0, power, spin: { x: 0, y: 0 } })
+      expect(out.events.filter((e) => e.type === 'BALL_HIT').length).toBeGreaterThan(0)
+      // The object ball was sent down the table rather than left sitting on its spot.
+      expect(out.balls.find((b) => b.id === BALL_IDS.RED_MIN)!.pos.x).toBeGreaterThan(1400)
+    }
+  })
+
+  it('advances each substep by far less than a ball radius, however hard it is hit', () => {
+    // The guarantee the contact test above depends on: whatever the speed, the tick is
+    // split finely enough that a ball cannot step over its neighbour.
+    for (const speed of [MAX_CUE_SPEED, MAX_CUE_SPEED / 2, MAX_CUE_SPEED / 10]) {
+      const substeps = Math.max(1, Math.ceil((speed * TICK_DT) / (BALL_RADIUS * 0.25)))
+      expect((speed * TICK_DT) / substeps).toBeLessThan(BALL_RADIUS)
+    }
+  })
+
+  it('never moves a ball between two samples further than its top speed allows', () => {
+    // A ball cannot be handed more pace than the cue ball started with, so a sample
+    // step wider than the top speed times the gap means a ball teleported. This is the
+    // visible symptom of a broken tick or a dropped collision, and it is what makes a
+    // replay look like it skips.
+    const result = simulateStroke(layoutTableBalls(), breakShot, {
+      maxTicks: 120 * 60,
+      playback: { rate: 30 }
+    })
+    const keyframes = result.keyframes
+    // Playback was asked for, so samples have to come back: a shot that silently
+    // produced none would make every assertion below pass over nothing.
+    expect(keyframes).toBeDefined()
+    const seen = new Map<number, { x: number; y: number; t: number }>()
+    let checked = 0
+    for (const frame of keyframes!) {
+      for (const [id, x, y] of frame.balls) {
+        const prev = seen.get(id)
+        if (prev) {
+          const gap = frame.t - prev.t
+          const step = Math.hypot(x - prev.x, y - prev.y)
+          // Positions are rounded to whole millimetres for the wire, which is the
+          // only slack the bound needs.
+          expect(step).toBeLessThanOrEqual(MAX_CUE_SPEED * gap + 2)
+          checked++
+        }
+        seen.set(id, { x, y, t: frame.t })
+      }
+    }
+    // Guard the guard: a vacuous pass over no samples would prove nothing.
+    expect(checked).toBeGreaterThan(1000)
+  })
+})
+
 describe('cushions', () => {
   it('damps the tangential component on the long rails', () => {
     const out = reflectCushionX({ x: -1000, y: 500 }, 0.8)
@@ -373,6 +611,178 @@ describe('cushions', () => {
     expect(glancing.y).toBeCloseTo(incoming * CUSHION_TANGENTIAL_DAMP, 10)
     expect(Math.abs(glancing.y)).toBeLessThan(incoming)
   })
+
+  it('mirrors the incoming angle about the cushion normal at every impact angle', () => {
+    // The real ball reaches a rail at every angle a player can aim, so the geometry
+    // has to hold along the whole arc and not just at the two angles that are easy to
+    // write a test for. A cushion is a mirror with a lossy finish: the normal
+    // component comes back reversed and damped by the restitution, the component
+    // running along the rail keeps its direction and loses a fixed fraction.
+    for (let deg = 5; deg <= 85; deg += 5) {
+      const rad = (deg * Math.PI) / 180
+      const speed = 2000
+      const incoming = { x: -Math.cos(rad) * speed, y: Math.sin(rad) * speed }
+      const out = reflectCushionX(incoming, BALL_RESTITUTION)
+
+      expect(out.x).toBeCloseTo(-incoming.x * BALL_RESTITUTION, 6)
+      expect(out.y).toBeCloseTo(incoming.y * CUSHION_TANGENTIAL_DAMP, 6)
+      // The ball leaves on the far side of the normal it arrived on, never back
+      // through the cushion, and it keeps the same sense along the rail.
+      expect(out.x).toBeGreaterThan(0)
+      expect(Math.sign(out.y)).toBe(Math.sign(incoming.y))
+    }
+  })
+
+  it('loses energy at every impact angle, and more of it the more square the hit', () => {
+    // Square on, the whole of the speed is normal and the ball keeps the restitution.
+    // Fully along the rail there is no normal part at all and it keeps only the
+    // tangential damp, which is the smaller of the two, so the hardest-looking rails
+    // shot is the one that gives back least.
+    const square = reflectCushionX({ x: -2000, y: 0 }, BALL_RESTITUTION)
+    const alongRail = reflectCushionX({ x: 0, y: -2000 }, BALL_RESTITUTION)
+    expect(Math.hypot(square.x, square.y)).toBeCloseTo(2000 * BALL_RESTITUTION, 6)
+    expect(Math.hypot(alongRail.x, alongRail.y)).toBeCloseTo(2000 * CUSHION_TANGENTIAL_DAMP, 6)
+
+    for (let deg = 0; deg <= 90; deg += 5) {
+      const rad = (deg * Math.PI) / 180
+      const speed = 2000
+      const before = speed
+      const out = reflectCushionX({ x: -Math.cos(rad) * speed, y: Math.sin(rad) * speed }, BALL_RESTITUTION)
+      const after = Math.hypot(out.x, out.y)
+      // Some pace is always lost, and never more than all of it.
+      expect(after).toBeLessThan(before)
+      expect(after).toBeGreaterThan(0)
+      // The retained fraction is a blend of the two coefficients, so it always sits
+      // between them and slides from one to the other as the aim opens up.
+      const kept = after / before
+      expect(kept).toBeGreaterThanOrEqual(Math.min(BALL_RESTITUTION, CUSHION_TANGENTIAL_DAMP))
+      expect(kept).toBeLessThanOrEqual(Math.max(BALL_RESTITUTION, CUSHION_TANGENTIAL_DAMP))
+    }
+  })
+
+  it('loses energy off a short rail the same way as off a long one', () => {
+    for (let deg = 5; deg <= 85; deg += 5) {
+      const rad = (deg * Math.PI) / 180
+      const speed = 1500
+      const out = reflectCushionY({ x: Math.sin(rad) * speed, y: -Math.cos(rad) * speed }, 0.75)
+      expect(out.y).toBeCloseTo(Math.cos(rad) * speed * 0.75, 6)
+      expect(out.x).toBeCloseTo(Math.sin(rad) * speed * CUSHION_TANGENTIAL_DAMP, 6)
+      expect(Math.hypot(out.x, out.y)).toBeLessThan(speed)
+    }
+  })
+})
+
+describe('shot scenarios', () => {
+  /**
+   * A frame with everything off the table except the cue ball and the given balls,
+   * so a scenario is testing the shot rather than the clutter around it.
+   */
+  function tableWith(ids: number[]): ReturnType<typeof createFrame> {
+    const frame = createFrame(0)
+    const keep = new Set([BALL_IDS.CUE, ...ids])
+    for (const ball of frame.balls) {
+      if (!keep.has(ball.id)) ball.potted = true
+    }
+    // Clearing balls off the table does not clear the frame's own running count, so it
+    // has to be brought into line or the rules are scoring shots that are not there.
+    frame.remainingReds = frame.balls.filter((b) => isRedId(b.id) && !b.potted).length
+    frame.phase = 'PLAYING'
+    frame.cueInHand = false
+    return frame
+  }
+
+  it('pots a red and puts the frame on the colours', () => {
+    // The everyday case: a red straight into a corner from a clear line. The pot has
+    // to be scored, not merely spotted, and the frame has to hand over to the colour
+    // on rather than leaving the striker on the reds.
+    const frame = tableWith([BALL_IDS.RED_MIN])
+    const red = frame.balls.find((b) => b.id === BALL_IDS.RED_MIN)!
+    const cue = frame.balls.find((b) => b.isCue)!
+    // On the 45 degree into the top left corner, the cue ball directly behind the red
+    // so the pot is a straight full-blooded hit rather than a cut.
+    red.pos = vec(400, 400)
+    red.vel = vec(0, 0)
+    cue.pos = vec(800, 800)
+    cue.vel = vec(0, 0)
+
+    const { resolution, sim } = applyStroke(frame, 0, {
+      aimAngle: (-3 * Math.PI) / 4,
+      power: 0.3,
+      spin: { x: 0, y: 0 }
+    })
+
+    expect(resolution.foul).toBe(false)
+    expect(sim.pottedIds).toContain(BALL_IDS.RED_MIN)
+    expect(resolution.points).toBe(1)
+    expect(sim.cuePotted).toBe(false)
+    expect(frame.remainingReds).toBe(0)
+    // A red potted hands the table to the colours, with the striker still at the table.
+    expect(frame.phase).toBe('COLOURING_UP')
+    expect(frame.turnIndex).toBe(0)
+  })
+
+  it('plays a safety that makes legal contact and keeps the cue ball on the table', () => {
+    // A safety is the shot that gives nothing away: it must touch the ball on, it must
+    // not pot, and above all the cue ball must survive, since losing it is a foul that
+    // hands the opponent the table with the reds still up.
+    const frame = tableWith([BALL_IDS.RED_MIN, BALL_IDS.BLACK])
+    const red = frame.balls.find((b) => b.id === BALL_IDS.RED_MIN)!
+    const cue = frame.balls.find((b) => b.isCue)!
+    cue.pos = vec(700, TABLE_WIDTH / 2)
+    cue.vel = vec(0, 0)
+    // The red is parked away from every pocket and off the cushion, so nothing is
+    // available to pot and the only way to reach it is a gentle roll.
+    red.pos = vec(TABLE_LENGTH / 2, TABLE_WIDTH / 2)
+    red.vel = vec(0, 0)
+
+    const { resolution, sim } = applyStroke(frame, 0, {
+      aimAngle: 0,
+      power: 0.12,
+      spin: { x: 0, y: 0 }
+    })
+
+    // Contact was made, and on the ball that was on.
+    expect(sim.firstContactId).toBe(BALL_IDS.RED_MIN)
+    expect(resolution.foul).toBe(false)
+    // Nothing was potted and the cue ball is still in play.
+    expect(sim.pottedIds).toHaveLength(0)
+    expect(sim.cuePotted).toBe(false)
+    expect(frame.balls.find((b) => b.isCue)!.potted).toBe(false)
+    // The red has to have been left where it was found, which is the whole point of
+    // rolling up to it rather than driving through it.
+    expect(frame.remainingReds).toBe(1)
+  })
+
+  it('opens a frame with a break that scatters the pack and comes to rest', () => {
+    // The break is the one shot every frame has to survive, at the highest speed the
+    // game ever reaches, with fifteen reds in a triangle. It has to scatter them, stay
+    // inside the tick budget, and leave a table a player can actually shoot from.
+    const frame = createFrame(0)
+    expect(frame.cueInHand).toBe(true)
+    const redsBefore = frame.remainingReds
+
+    const before = new Map(frame.balls.map((b) => [b.id, { x: b.pos.x, y: b.pos.y }]))
+    const { sim } = applyStroke(
+      frame,
+      0,
+      { aimAngle: 0, power: 1, spin: { x: 0, y: 0 }, cuePos: vec(700, 889) },
+      { maxTicks: 120 * 60 }
+    )
+
+    // The pack has to be broken open, not tapped.
+    const movedReds = frame.balls.filter((b) => {
+      if (!isRedId(b.id)) return false
+      const was = before.get(b.id)!
+      return Math.hypot(b.pos.x - was.x, b.pos.y - was.y) > 50
+    })
+    expect(movedReds.length).toBeGreaterThanOrEqual(10)
+    // And it has to come to rest inside the budget, which is what keeps the backstop
+    // from firing on an ordinary break.
+    expect(sim.settled).toBe(true)
+    expect(sim.simSeconds).toBeLessThan(20)
+    // The break is a legal shot on the reds, so no foul and no reds are awarded away.
+    expect(frame.remainingReds).toBeLessThanOrEqual(redsBefore)
+  })
 })
 
 describe('playback', () => {
@@ -407,9 +817,22 @@ describe('playback', () => {
       return result.balls[0]!.pos.x - from
     }
     // Power 0.3 needs several substeps a tick and power 0.03 needs one.
-    const fast = after(0.3)
-    const slow = after(0.03)
-    expect(fast / slow).toBeCloseTo(0.3 / 0.03, 1)
+    //
+    // Comparing the two against a plain speed ratio would be measuring friction
+    // rather than substepping. Friction removes a fixed slice of speed every
+    // tick whatever the ball was doing, so a slow ball loses a larger share of
+    // its pace and the ratio of distances drifts just above the ratio of speeds.
+    // The meaningful claim is that one tick of travel is the analytic amount,
+    // which is only true if the substeps divide the tick.
+    const expected = (power: number) => {
+      const v0 = power * MAX_CUE_SPEED
+      return v0 * TICK_DT - 0.5 * ROLL_FRICTION * TICK_DT * TICK_DT
+    }
+    expect(after(0.3)).toBeCloseTo(expected(0.3), 1)
+    expect(after(0.03)).toBeCloseTo(expected(0.03), 1)
+    // Friction costs both equally in absolute terms, so the faster ball must
+    // still cover proportionally more ground.
+    expect(after(0.3) / after(0.03)).toBeGreaterThan(0.3 / 0.03)
   })
 
   it('does not sample keyframes unless playback is requested', () => {
@@ -464,6 +887,91 @@ describe('playback', () => {
         expect(y).toBeGreaterThanOrEqual(0)
       }
     }
+  })
+
+  it('ends every moving ball on the exact position it settles at', () => {
+    // The replay holds a ball at its last sampled position, and the authoritative
+    // snapshot takes over when the replay ends. Those two positions have to be the
+    // same point, or the ball jumps by the difference at the moment playback ends.
+    // A ball is therefore sampled on the keyframe where it comes to rest, so its
+    // final sample is its resting place rather than wherever it was still creeping.
+    //
+    // The comparison allows the half-millimetre the keyframe format rounds to,
+    // which is a hundredth of a ball radius and cannot be seen. What it does not
+    // allow is the gap this test exists for: a ball still creeping when it stopped
+    // being sampled would be left a whole keyframe short of where it ended up.
+    const result = simulateStroke(layoutTableBalls(), breakShot, { maxTicks: 120 * 60, playback: { rate: 30 } })
+    const final = new Map<number, { x: number; y: number }>()
+    for (const ball of result.balls) final.set(ball.id, ball.pos)
+
+    const lastSample = new Map<number, { x: number; y: number }>()
+    for (const keyframe of result.keyframes!) {
+      for (const [id, x, y] of keyframe.balls) lastSample.set(id, { x, y })
+    }
+
+    const potted = new Set(result.pottedIds)
+    let movedBalls = 0
+    for (const [id, sample] of lastSample) {
+      if (potted.has(id)) continue
+      const settled = final.get(id)!
+      expect(Math.abs(sample.x - settled.x), `ball ${id} last keyframe x`).toBeLessThanOrEqual(0.5)
+      expect(Math.abs(sample.y - settled.y), `ball ${id} last keyframe y`).toBeLessThanOrEqual(0.5)
+      movedBalls++
+    }
+    expect(movedBalls).toBeGreaterThan(0)
+  })
+
+  it('never brings a ball back into the replay after it has stopped', () => {
+    // A moving ball is sampled in every keyframe and a ball at rest is sampled
+    // once more and then dropped, so each ball's appearances have to be one
+    // unbroken run. A ball reappearing after a gap would mean it was still being
+    // moved after the replay had already settled it, which is a jump.
+    const result = simulateStroke(layoutTableBalls(), breakShot, { maxTicks: 120 * 60, playback: { rate: 30 } })
+    const gapSinceLastSeen = new Map<number, number>()
+    result.keyframes!.forEach((keyframe, index) => {
+      const seen = new Set<number>()
+      for (const [id] of keyframe.balls) {
+        const gap = gapSinceLastSeen.get(id)
+        expect(gap, `ball ${id} came back after ${gap} keyframes without a sample`).toBeUndefined()
+        seen.add(id)
+      }
+      for (const id of gapSinceLastSeen.keys()) {
+        if (seen.has(id)) gapSinceLastSeen.delete(id)
+        else gapSinceLastSeen.set(id, (gapSinceLastSeen.get(id) ?? 0) + 1)
+      }
+    })
+  })
+
+  it('decelerates smoothly into the stop instead of arriving there in a jump', () => {
+    // The last stretch of a rolling ball has to keep shrinking, not hold a constant
+    // step and then stop. Sampling the cue ball's final keyframes and measuring each
+    // step catches a settle that teleports, and also catches a settle so abrupt that
+    // the ball appears to stop dead rather than run out of pace.
+    const result = simulateStroke(layoutTableBalls(), breakShot, { maxTicks: 120 * 60, playback: { rate: 30 } })
+    const trail = result.keyframes!.filter((k) => k.balls.some(([id]) => id === BALL_IDS.CUE))
+    expect(trail.length).toBeGreaterThan(4)
+    const steps: number[] = []
+    let previous: { x: number; y: number } | null = null
+    for (const keyframe of result.keyframes!) {
+      const sample = keyframe.balls.find(([id]) => id === BALL_IDS.CUE)
+      if (!sample) {
+        previous = null
+        continue
+      }
+      if (previous) steps.push(Math.hypot(sample[1] - previous.x, sample[2] - previous.y))
+      previous = { x: sample[1], y: sample[2] }
+    }
+    const movingSteps = steps.filter((s) => s > 0)
+    expect(movingSteps.length).toBeGreaterThan(3)
+    // The first sampled step is taken at full pace; by the end the ball has to be
+    // covering a small fraction of it, which is what "ran out of speed" looks like.
+    const first = movingSteps[0]!
+    const lastFew = movingSteps.slice(-3)
+    for (const step of lastFew) expect(step).toBeLessThan(first * 0.5)
+    // Nothing anywhere in the shot jumps further than the shot's own peak step, so a
+    // single bad keyframe cannot read as a teleport.
+    const peak = Math.max(...movingSteps)
+    for (const step of movingSteps) expect(step).toBeLessThanOrEqual(peak + 1e-6)
   })
 
   it('sampling never changes the simulation it is sampling', () => {

@@ -6,7 +6,7 @@ import type { FrameState } from '../state.js'
 import { applyFrameWinner, applyStroke, createFrame, createMatch, frameSnapshot, framesToWin, matchWinnerIndex, maybeEndFrame } from './frame.js'
 import { applyResolution, isRedId, resolveStroke, respotBall, applyTimeoutFoul } from './snooker.js'
 
-function stroke(frame: FrameState, shooterIndex: number, pottedIds: number[], cuePotted: boolean, firstContactId: number | null): { frameEnded: boolean; frameWinner: number | null } {
+function stroke(frame: FrameState, shooterIndex: number, pottedIds: number[], cuePotted: boolean, firstContactId: number | null): { frameEnded: boolean; frameWinner: number | null; reason?: string } {
   const resolution = resolveStroke(frame, shooterIndex, pottedIds, cuePotted, firstContactId)
   const pottedReds = pottedIds.filter(isRedId).length
   frame.remainingReds -= resolution.foul ? 0 : pottedReds
@@ -17,7 +17,8 @@ function stroke(frame: FrameState, shooterIndex: number, pottedIds: number[], cu
   }
   applyResolution(frame, resolution, frame.remainingReds)
   if (cuePotted) respotBall(frame, BALL_IDS.CUE)
-  return maybeEndFrame(frame)
+  const ended = maybeEndFrame(frame)
+  return { ...ended, reason: resolution.reason }
 }
 
 function ball(frame: FrameState, id: number) {
@@ -113,6 +114,37 @@ describe('fouls', () => {
     expect(f.remainingReds).toBe(TOTAL_REDS)
     expect(ball(f, BALL_IDS.BLACK).potted).toBe(false)
     expect(f.ballOn).toBe('RED')
+  })
+
+  it('names a wrong first contact "wrong ball first", not "no legal contact"', () => {
+    // The reported case: a red was on and the cue ball reached the brown. Contact
+    // certainly happened, so calling it a miss describes a stroke that did something
+    // as a stroke that did nothing. The penalty is the brown's 4 either way.
+    const f = createFrame(0)
+    expect(f.ballOn).toBe('RED')
+    const out = stroke(f, 0, [], false, BALL_IDS.BROWN)
+    expect(out.reason).toBe('wrong ball first')
+    expect(f.scores.player1).toBe(4)
+    expect(f.turnIndex).toBe(1)
+  })
+
+  it('names a stroke that touched nothing "no legal contact"', () => {
+    // Nothing was hit at all, which is the only case that label describes.
+    const f = createFrame(0)
+    const out = stroke(f, 0, [], false, null)
+    expect(out.reason).toBe('no legal contact')
+    expect(f.scores.player1).toBe(4)
+    expect(f.turnIndex).toBe(1)
+  })
+
+  it('keeps calling a wrong contact after a red a wrong first contact', () => {
+    // With a colour on after a red, a red is the wrong ball to reach first. The
+    // contact is real, so it must not borrow the no-contact wording either.
+    const f = createFrame(0)
+    stroke(f, 0, [BALL_IDS.RED_MIN], false, BALL_IDS.RED_MIN)
+    expect(f.ballOn).toBe('ANY_COLOUR')
+    const out = stroke(f, 0, [], false, BALL_IDS.RED_MIN)
+    expect(out.reason).toBe('wrong ball first')
   })
 
   it('allows any colour to be nominated after a red, not just the lowest one', () => {

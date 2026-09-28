@@ -67,6 +67,12 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
   let nextSampleAt = 0
   /** Balls potted during the current substep, mapped to their pocket centre. */
   let justPotted: Array<[id: number, at: [number, number]]> = []
+  /**
+   * Ids that were still moving when the last keyframe was taken. A ball that was
+   * moving then and is at rest now is the one that has just settled, and it is the
+   * only ball whose resting position still has to be recorded.
+   */
+  let sampledAsMoving = new Set<number>()
 
   for (let tick = 0; tick < maxTicks; tick++) {
     ticksUsed = tick + 1
@@ -152,7 +158,22 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
       // A pot always forces a sample: without one the ball would sit at the
       // pocket lip until the replay ended and the snapshot took over.
       if (due || justPotted.length) {
-        keyframes.push(captureKeyframe(balls, simTime, justPotted))
+        // A ball that has just stopped is sampled once more, on the keyframe where
+        // it came to rest. Without it the ball's last sample was taken while it
+        // was still creeping, and the replay held it at that sample for the rest
+        // of the shot -- so the position the animation finished on was up to one
+        // keyframe short of the authoritative resting position, and the
+        // authoritative snapshot that replaced it produced a small jump.
+        const newlySettled: Set<number> = new Set()
+        const stillMoving = new Set<number>()
+        for (const ball of balls) {
+          if (ball.potted) continue
+          const moving = ball.vel.x !== 0 || ball.vel.y !== 0
+          if (moving) stillMoving.add(ball.id)
+          else if (sampledAsMoving.has(ball.id)) newlySettled.add(ball.id)
+        }
+        keyframes.push(captureKeyframe(balls, simTime, justPotted, newlySettled))
+        sampledAsMoving = stillMoving
         justPotted = []
         nextSampleAt = simTime + (due ? sampleInterval : 0)
       }
@@ -183,17 +204,23 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
 }
 
 /**
- * Samples the balls that are still in motion. Rounding to whole millimetres
- * costs nothing visually against a 26mm ball and roughly halves the JSON size.
- * A ball that has come to rest keeps its last sampled position, which is within
- * `MIN_SPEED` of its true resting place, so omitting it is safe.
+ * Samples the balls that are still in motion, plus any that came to rest on this
+ * keyframe. Rounding to whole millimetres costs nothing visually against a 26mm
+ * ball and roughly halves the JSON size. A ball that stopped on an earlier
+ * keyframe keeps that keyframe's position, which is exactly where it settled, so
+ * omitting it from later keyframes does not move it.
  *
  * A ball potted in this substep is emitted at its pocket's centre rather than
  * where it crossed the capture radius, so the replay shows it dropping in
  * instead of stopping at the lip. The simulation state itself is left alone:
  * this is presentation data, not a change to where the ball actually is.
  */
-function captureKeyframe(balls: BallState[], t: number, justPotted: Array<[number, [number, number]]>): SimKeyframe {
+function captureKeyframe(
+  balls: BallState[],
+  t: number,
+  justPotted: Array<[number, [number, number]]>,
+  newlySettled: Set<number>
+): SimKeyframe {
   const sampled: SimKeyframe['balls'] = []
   const dropped = justPotted.length ? new Map(justPotted) : null
   for (const ball of balls) {
@@ -203,7 +230,9 @@ function captureKeyframe(balls: BallState[], t: number, justPotted: Array<[numbe
       continue
     }
     if (ball.potted) continue
-    if (ball.vel.x === 0 && ball.vel.y === 0) continue
+    // At rest and already recorded at rest: nothing has moved, so there is nothing
+    // to send. A ball captured on the keyframe where it stopped keeps that sample.
+    if (ball.vel.x === 0 && ball.vel.y === 0 && !newlySettled.has(ball.id)) continue
     sampled.push([ball.id, round(ball.pos.x), round(ball.pos.y)])
   }
   return { t: round(t, 3), balls: sampled }

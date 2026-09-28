@@ -9,6 +9,18 @@ import { computeBotShot } from '../src/bot/bot.js'
 import { ledger, runInTransaction } from '../src/wallet/service.js'
 
 const BASE = 'http://localhost:4000'
+
+/**
+ * Rejections that mean "not yet, try again" rather than "that shot was bad".
+ *
+ * All three leave the table exactly as it was, so retrying is the correct client
+ * behaviour and none of them should end the test.
+ */
+const PACE_REJECTIONS = new Set([
+  'wait for the table to settle',
+  'rate_limited',
+  'duplicate_shot'
+])
 const prisma = new PrismaClient()
 let failures = 0
 let passed = 0
@@ -118,9 +130,15 @@ type ShotInput = {
  * watches - its own, the opponent's, or the bot's - because the point of the hold is
  * that the table must be seen to settle before the next shot is broadcast. The
  * acknowledgement is idempotent, so sending it when no hold is active is a no-op.
+ *
+ * The token has to be echoed back. The room stamps every shot it broadcasts with a
+ * number and only accepts an acknowledgement carrying the current one, so a report
+ * left over from a shot that has already been released cannot cut short the shot
+ * that is on screen now. A client that is behind sends no token, and the room
+ * ignores that rather than guessing which shot it meant.
  */
-function ackShot(socket: Socket, matchId: string): void {
-  socket.emit('shot:done', { matchId })
+function ackShot(socket: Socket, matchId: string, token?: number): void {
+  socket.emit('shot:done', token === undefined ? { matchId } : { matchId, token })
 }
 
 /**
@@ -132,7 +150,7 @@ function ackShot(socket: Socket, matchId: string): void {
 async function watchShotLikeAClient(socket: Socket, matchId: string, timeoutMs = 45000): Promise<any> {
   try {
     const update = await waitFor<any>(socket, 'game:update', timeoutMs)
-    ackShot(socket, matchId)
+    ackShot(socket, matchId, update?.playback?.token)
     return update
   } catch (error) {
     ackShot(socket, matchId)
@@ -185,15 +203,25 @@ async function playShotLikeAClient(
     const result = await Promise.race([update, rejection])
     if (result.kind === 'update') {
       // The shooter's own playback is over the moment it holds the result, which is
-      // exactly when the browser client releases the room's hold.
-      ackShot(shooter, matchId)
+      // exactly when the browser client releases the room's hold. Both seats were sent
+      // the same update, so the token off any one of them is the current one.
+      ackShot(shooter, matchId, result.list[0]?.playback?.token)
       return result.list
     }
-    if (result.code !== 'wait for the table to settle') {
+    // Every one of these means the same thing to a client: nothing was played, try
+    // again later. The server is holding the table for a replay, and the two guards
+    // that answer for a shot sent too early or too often are pacing answers, not
+    // judgements on the shot. Retrying is what a real client does, so the harness
+    // retries and backs off, rather than treating them as a failed shot.
+    if (!PACE_REJECTIONS.has(result.code)) {
       throw new Error(`shot:play rejected on ${matchId}: ${result.code}`)
     }
     if (attempt >= 40) throw new Error(`table never settled on ${matchId}`)
-    await new Promise((r) => setTimeout(r, 100))
+    // Back off rather than polling flat out. The server is holding the table on
+    // purpose and a replay at the slower playback rate can run for seconds, so a
+    // fixed 100ms poll spends the whole of that hammering the socket. The duplicate
+    // window is a few seconds wide, so the backoff has to outlast it to get through.
+    await new Promise((r) => setTimeout(r, Math.min(100 + attempt * 50, 600)))
   }
 }
 
@@ -1157,10 +1185,10 @@ async function main(): Promise<void> {
         resolve(v)
       }
       const onErr = (d: { code?: string }) => finish(d?.code ?? 'unknown')
-      const onUpd = () => {
+      const onUpd = (update: any) => {
         // The shot was really taken, so the client that played it acknowledges the
-        // playback and releases the room's hold.
-        ackShot(s, matchId)
+        // playback and releases the room's hold, echoing the token it was sent.
+        ackShot(s, matchId, update?.playback?.token)
         finish('accepted')
       }
       s.on('error', onErr)
@@ -1238,10 +1266,10 @@ async function main(): Promise<void> {
         resolve(v)
       }
       const onErr = (d: { code?: string }) => finish(d?.code ?? 'unknown')
-      const onUpd = () => {
+      const onUpd = (update: any) => {
         // The shot was really taken, so the client that played it acknowledges the
-        // playback and releases the room's hold.
-        ackShot(s, matchId)
+        // playback and releases the room's hold, echoing the token it was sent.
+        ackShot(s, matchId, update?.playback?.token)
         finish('accepted')
       }
       s.on('error', onErr)

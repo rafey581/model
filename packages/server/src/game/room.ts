@@ -66,6 +66,41 @@ export class GameRoom {
    */
   private awaitingPlayback = false
   /**
+   * Identifies the shot currently being held for, so an acknowledgement can be
+   * matched against the shot it claims to have watched.
+   *
+   * A client that reconnects mid-replay, or whose queued `shot:done` is delivered
+   * after the server has already moved on, must not be able to release a *newer*
+   * hold it never saw. The token is bumped for every held shot, so a stale
+   * acknowledgement is simply ignored instead of cutting the next animation short.
+   */
+  private playbackToken = 0
+  /**
+   * The token of the shot whose playback is being held right now, or null when
+   * nothing is held.
+   *
+   * This is deliberately not the same thing as `playbackToken`. That counter moves on
+   * for every shot, including the many that create no hold at all because nobody was
+   * connected to watch them, so it names the most recent shot rather than the shot
+   * someone is actually watching. Matching an acknowledgement against it would let a
+   * client holding a stale token for a shot that was never held release the current
+   * hold early, which is the thing the hold exists to prevent.
+   */
+  private heldToken: number | null = null
+  /**
+   * The sockets that were attached when the current hold started, and so may still
+   * be watching the replay it is protecting.
+   *
+   * This is what makes an acknowledgement mean something. "Is seated in this match"
+   * is not enough: a seated player's tab can have joined late, reconnected, or already
+   * finished and moved on, and any of those sends a report about a shot it never saw.
+   * A socket that arrived after the hold began is deliberately not listed, because a
+   * client that joins is sent the settled snapshot and abandons whatever replay it was
+   * showing. When the list empties, nobody is left who can end the hold, so it is
+   * released rather than left to stall against the backstop.
+   */
+  private replayWatchers = new Set<string>()
+  /**
    * Backstop for the playback gate. A client that never reports back, because it
    * was closed or its tab was backgrounded, must not stall the match for ever, so
    * the hold is released after a generous multiple of the shot's own playback time.
@@ -102,6 +137,12 @@ export class GameRoom {
     if (this.disconnectedAt.delete(seat)) {
       this.broadcast('opponent:reconnected', { seat })
     }
+    // A socket that arrives while a shot is being held is sent the settled snapshot
+    // and abandons the replay it was showing, so it can never end that hold. Dropping
+    // it here is what lets the hold be released once the sockets that really were
+    // watching have gone, instead of stalling the match to the backstop.
+    this.replayWatchers.delete(socketId)
+    this.releaseHoldIfNoWatchers()
     this.armTurnTimer()
   }
 
@@ -117,6 +158,41 @@ export class GameRoom {
         this.broadcast('opponent:disconnected', { seat })
       }
     }
+    this.replayWatchers.delete(socketId)
+    this.releaseHoldIfNoWatchers()
+  }
+
+  /**
+   * Releases a playback hold once no client is left who could end it.
+   *
+   * The hold exists to stop the next shot arriving before the current animation has
+   * been seen. When every socket that was watching has gone, or has rejoined and
+   * abandoned the replay, there is no animation left to protect: waiting out the
+   * backstop would only stall the match for the full grace period before anything
+   * could happen. Whoever comes back gets the authoritative snapshot and the settled
+   * state, which is the truth anyway.
+   */
+  private releaseHoldIfNoWatchers(): void {
+    if (!this.awaitingPlayback) return
+    if (this.replayWatchers.size > 0) return
+    this.releasePlayback()
+  }
+
+  /** True while at least one seated player still has a socket attached. */
+  private anySocketWatching(): boolean {
+    for (const sockets of this.socketIds.values()) {
+      if (sockets.size > 0) return true
+    }
+    return false
+  }
+
+  /** Every socket currently attached to a seat. */
+  private allSocketIds(): string[] {
+    const ids: string[] = []
+    for (const sockets of this.socketIds.values()) {
+      for (const id of sockets) ids.push(id)
+    }
+    return ids
   }
 
   getSeat(userId: string): number | undefined {
@@ -223,6 +299,21 @@ export class GameRoom {
     }
   }
 
+  /**
+   * The pacing refusal this player's shot would get right now, or null if that is not
+   * the reason it would be turned away. This asks only about the one case where a
+   * refused shot is the player doing as they were told, so a caller can exempt it
+   * without exempting a shot that is out of turn, from another match, or malformed.
+   */
+  pacingRejection(userId: string): string | null {
+    const frame = this.match.currentFrame
+    if (!frame) return null
+    // Only the striker is ever waiting on a replay. Anyone else refused while a replay
+    // runs is refused for their own reasons, and must still be counted.
+    if (this.seatOfUser.get(userId) !== frame.turnIndex) return null
+    return this.awaitingPlayback ? 'wait for the table to settle' : null
+  }
+
   handleShot(userId: string, shot: ShotInputDto): { accepted: boolean; error?: string } {
     const frame = this.match.currentFrame
     if (!frame) return { accepted: false, error: 'frame not running' }
@@ -236,10 +327,6 @@ export class GameRoom {
     if (this.awaitingPlayback) return { accepted: false, error: 'wait for the table to settle' }
     if (this.isBotTurn()) return { accepted: false, error: 'robot is thinking' }
     return this.executeShot(seat, shot)
-  }
-
-  handleBotShot(shot: ShotInputDto): void {
-    this.executeShot(1, shot)
   }
 
   private executeShot(seat: number, shot: ShotInputDto): { accepted: boolean; error?: string } {
@@ -287,8 +374,11 @@ export class GameRoom {
     frameEnded: boolean,
     frameWinner: number | null,
     persistOnly: GameUpdateEvent[] = [],
-    playback?: ShotPlayback
+    rawPlayback?: ShotPlayback
   ): void {
+    // The token is claimed before the shot is broadcast, so the `shot:done` that comes
+    // back for this animation can be matched against it.
+    const playback = this.claimPlayback(rawPlayback)
     this.noteDelivered(events)
     void this.callbacks.persist([...persistOnly, ...events])
     if (frameEnded && frameWinner !== null) {
@@ -301,6 +391,19 @@ export class GameRoom {
       this.armTurnTimer()
       this.scheduleBotIfNeeded()
     }
+  }
+
+  /**
+   * Stamps a playback payload with the token for the shot it describes.
+   *
+   * Bumping here, before the broadcast, is what makes the token meaningful: a
+   * `shot:done` carrying this token can only have come from a client that received
+   * this exact animation.
+   */
+  private claimPlayback(playback?: ShotPlayback): ShotPlayback | undefined {
+    if (!playback) return undefined
+    this.playbackToken += 1
+    return { ...playback, token: this.playbackToken }
   }
 
   private async handleFrameEnd(frameWinner: number, endedFrame: FrameState, playback?: ShotPlayback): Promise<void> {
@@ -372,10 +475,23 @@ export class GameRoom {
    * fires for a client that never will. The backstop is deliberately generous: it
    * only exists so a dead client cannot wedge the match, and is never what ends a
    * hold in normal play.
+   *
+   * A shot broadcast while every player is disconnected is not held at all. Nobody
+   * can watch an animation that has already finished unseen, so holding would only
+   * make the room sit out the backstop before it could move on. The frames the shot
+   * produced are already persisted, so a player who comes back rejoins a settled
+   * position rather than a stalled one.
    */
   private holdForPlayback(playback?: ShotPlayback): void {
     if (!playback) return
+    if (!this.anySocketWatching()) return
     this.awaitingPlayback = true
+    // Record what is being held, not merely what was last played, so an
+    // acknowledgement can only ever end the hold it is actually about.
+    this.heldToken = playback.token ?? this.playbackToken
+    // Everyone attached right now is about to start watching this shot, so each of
+    // them is able to end the hold. Sockets that arrive later are not added.
+    this.replayWatchers = new Set(this.allSocketIds())
     if (this.playbackTimer) clearTimeout(this.playbackTimer)
     const budgetMs = (playback.duration / SHOT_PLAYBACK_SPEED) * 1000
     this.playbackTimer = setTimeout(() => {
@@ -388,13 +504,35 @@ export class GameRoom {
    * Called when a client reports that a shot has finished animating. The room
    * resumes: the turn clock restarts and the bot takes its turn if it has one.
    *
-   * The acknowledgement is deliberately idempotent, and it is only accepted from
-   * someone actually seated in this match. Without that check any client that
-   * guessed the match id could release another player's hold and, worse, could
-   * release it early by acknowledging a shot it never watched.
+   * The report has to clear four bars, and each one closes a way of ending a shot
+   * that somebody is still watching.
+   *
+   * Seat membership: without it any client that guessed the match id could release
+   * another player's hold.
+   *
+   * A hold being active: with nothing held there is no animation to protect, so a
+   * report is meaningless rather than something to act on.
+   *
+   * The token matching the *held* shot: a client that is behind never received a
+   * token at all, and one that is ahead sends the token of a shot already released.
+   * Comparing against the held shot rather than the most recent one stops a stale
+   * participant ending the current animation early, because the most recent token
+   * also belongs to shots that were never held.
+   *
+   * The reporting socket having watched: this is what a seat check cannot do. Being
+   * seated says nothing about which animation the client is looking at, so a tab that
+   * joined late, reconnected, or has already moved on would otherwise be able to end
+   * a hold belonging to a shot it never saw.
    */
-  noteShotPlayed(userId: string): void {
+  noteShotPlayed(userId: string, token: number | undefined, socketId: string): void {
     if (this.seatOfUser.get(userId) === undefined) return
+    if (!this.awaitingPlayback) return
+    if (this.heldToken === null) return
+    // The token has to match exactly. A missing token used to be taken as a wildcard,
+    // which let a stale report end the wrong shot's hold; every client echoes the
+    // token it was sent, so there is no legitimate reason to accept one without it.
+    if (token !== this.heldToken) return
+    if (!this.replayWatchers.has(socketId)) return
     this.releasePlayback()
   }
 
@@ -405,6 +543,11 @@ export class GameRoom {
     }
     if (!this.awaitingPlayback) return
     this.awaitingPlayback = false
+    // Drop the held token and the watchers with the hold. A report still carrying
+    // either is now talking about a shot that is over, and there is nothing left for
+    // it to release.
+    this.heldToken = null
+    this.replayWatchers = new Set()
     this.armTurnTimer()
     this.scheduleBotIfNeeded()
   }
