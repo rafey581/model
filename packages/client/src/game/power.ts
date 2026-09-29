@@ -67,6 +67,28 @@ export function powerAdjust(current: number, delta: number): number {
   return clampPowerLoose(current + delta)
 }
 
+/**
+ * Power from where the slider handle sits.
+ *
+ * The slider's travel is 0..1 bottom-to-top and so is the power, but the mapping goes
+ * through this function rather than being assigned directly, so there is one place
+ * that owns the range and one floor to change. A drag is relative by design; a slider
+ * is absolute by design — the handle goes where the pointer lands — and the two
+ * gestures meet only here, in the value they both produce.
+ */
+export function powerFromSliderValue(value: number): number {
+  return clampPowerLoose(value)
+}
+
+/**
+ * Where the slider handle sits for a power, 0 at the bottom of the travel and 1 at
+ * the top. The exact inverse of `powerFromSliderValue`, so the control never shows a
+ * number the shot would not be sent as.
+ */
+export function sliderValueFromPower(power: number): number {
+  return clampPowerLoose(power)
+}
+
 /** The whole-number percentage shown next to the bar. */
 export function powerPercent(power: number): number {
   return Math.round(clampPowerLoose(power) * 100)

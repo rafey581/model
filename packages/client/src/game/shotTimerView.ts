@@ -16,6 +16,16 @@ export interface ShotTimerOptions {
 export interface ShotTimer {
   /** Adopts a deadline, or clears the clock when given null. */
   set: (timing: TurnTiming | null) => void
+  /**
+   * Holds the clock exactly where it is, for the length of a shot's animation.
+   *
+   * Freezing is different from clearing: the deadline stays adopted, so the next
+   * `set` with a stale or missing timing cannot rewind the ring to something the
+   * player has already watched expire. The server stops the clock for the shot and
+   * re-arms it when the table settles, and this bridge is what keeps the display
+   * honest between those two moments.
+   */
+  freeze: () => void
   destroy: () => void
 }
 
@@ -67,6 +77,13 @@ export function createShotTimer(options: ShotTimerOptions): ShotTimer {
   const step = (): void => {
     frame = 0
     if (!timing) return
+    // Frozen for a replay: the ring holds the instant the shot was taken. Nothing is
+    // recomputed and nothing is written — the clock simply stops until the server
+    // says what the next turn's timing is.
+    if (frozen) {
+      frame = requestAnimationFrame(step)
+      return
+    }
     const target = options.turnFrame()
     // The turn changed hands: take the clock with it rather than leaving it on the
     // player it no longer belongs to.
@@ -117,9 +134,12 @@ export function createShotTimer(options: ShotTimerOptions): ShotTimer {
     else stop()
   }
 
+  let frozen = false
+
   return {
     set: (next) => {
       timing = next
+      frozen = false
       if (!next) {
         stop()
         detach()
@@ -129,6 +149,11 @@ export function createShotTimer(options: ShotTimerOptions): ShotTimer {
       // was asleep and woke up — corrects itself from the next thing the server says
       // instead of counting from wherever it had got to.
       offset = clockOffsetMs(next, Date.now())
+      if (!frame) frame = requestAnimationFrame(step)
+    },
+    freeze: () => {
+      if (!timing) return
+      frozen = true
       if (!frame) frame = requestAnimationFrame(step)
     },
     destroy: () => {

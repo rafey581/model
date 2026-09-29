@@ -884,10 +884,61 @@ button.small {
   width: 30px;
   opacity: 0.55;
   transition: opacity 220ms ease;
+  cursor: pointer;
+  touch-action: none;
+  /* The overlay layer is transparent to the pointer; the rail opts back in, because
+     it is now the control. Kept to the rail only, so the rest of the table overlay
+     still passes aim gestures straight through to the canvas. */
+  pointer-events: auto;
 }
 
 .power-rail.is-charging {
   opacity: 1;
+}
+
+.power-rail.is-disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+/**
+ * The accessible slider itself.
+ *
+ * It covers the track and is the focus target; the visuals stay on the rail below.
+ * Zero own painting — just a focus ring so keyboard players can find it — and the
+ * pointer events pass through to the track, which is the hit target for the drag.
+ */
+.power-slider {
+  position: absolute;
+  inset: -8px;
+  border-radius: 12px;
+  outline: none;
+  /* Clicks go to the track beneath, which is the drag target; the slider is the
+     keyboard and screen-reader surface only. */
+  pointer-events: none;
+}
+
+.power-slider:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.power-rail-handle {
+  position: absolute;
+  left: 50%;
+  bottom: 0%;
+  width: 18px;
+  height: 10px;
+  border-radius: 5px;
+  background: #f0f6fc;
+  border: 1px solid rgba(6, 10, 14, 0.7);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+  transform: translate(-50%, 50%);
+  pointer-events: none;
+}
+
+.power-rail.is-disabled .power-rail-handle {
+  background: #8b949e;
 }
 
 .power-rail-value {
@@ -907,7 +958,9 @@ button.small {
   background: rgba(6, 10, 14, 0.55);
   border: 1px solid var(--border);
   box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.6);
-  overflow: hidden;
+  /* Deliberately not overflow:hidden: the handle is wider than the track and
+     overhangs it at both ends of its travel, and clipping it would cut the grip
+     down to a sliver. The fill rounds itself. */
 }
 
 .power-rail-fill {

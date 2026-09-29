@@ -126,10 +126,8 @@ Legend: `DONE` = built and verified · `PART` = works but incomplete · `TODO` =
 | 27 | Day 27 — Production readiness (ops, no real deploy yet) | all | DONE — env templates + fail-fast config, db:deploy/status for migration order, real /api/health + /api/ready probes, structured pino logs + redaction + graceful shutdown, recoverMatchValidity wired, SQLite->Postgres pg_dump backup/restore scripts, RUNBOOK.md + README/plan doc fixes (see Day 27 section; e2e 228/0) |
 | 28 | Day 28 — Final review vs Definition of Done + full regression | all | TODO |
 
-> Current focus: **Day 27 done (Production readiness — required env fail-fast, db:deploy
-> migration step, real /api/health + /api/ready probes, structured logs + redaction +
-> graceful shutdown, boot-time stale-match recovery, pg_dump backup/restore scripts + a
-> committed RUNBOOK; e2e 228/0)** — next planned phase:
+> Current focus: **Hotfix H2-follow-up done (Power slider UI + shot-clock reset — see
+> the Hotfix section below; e2e 231/0, ledger repaired)** — next planned phase:
 > **Day 28 — Final review vs Definition of Done + full regression**. Say "work on Day 28"
 > (or "next phase") to start.
 
@@ -920,6 +918,57 @@ Each phase: **Goal** · **Tasks** · **Done when** · **Notes**.
   Prisma 6; migrate to `prisma.config.ts` when upgrading). Cold-boot wipe-and-restore of
   a fresh postgres volume was documented (RUNBOOK restore steps) but not executed, to
   avoid destroying the dev DB.
+
+### Hotfix — Power slider UI + shot-clock reset (client + server, verified)
+- Goal: a visible, draggable power slider with a live percentage, and a shot clock
+  that restarts at 30 on every turn instead of sticking at 0 after the first shot.
+- Shot-clock root causes (all in `game/room.ts`, server-owned clock unchanged):
+  1. `releasePlayback()` re-armed the deadline after every replay but never told the
+     clients — the last thing they had been sent was the shot-commit message with a
+     null deadline, so the ring stayed down (0/absent) for the whole next turn. The
+     room now broadcasts a `turn:clock` message with the fresh deadline at release.
+  2. Same gap when the striker disconnects: `stopTurnTimer()` now announces the stop.
+  3. `armTurnTimer()` refused to arm on the robot's visit, so the clock never
+     attached to the bot's avatar; the clock is now armed on every visit (the ring
+     follows whoever is at the table) while `onTurnTimeout` still never fouls the bot
+     (unit-tested: 60 s past its deadline, seat 1 takes no timeout foul).
+  4. A frame-ending broadcast was stamped with the striker's already-spent deadline
+     (clients drew 0 through the frame ceremony); `handleFrameEnd` now clears the
+     deadline before its first broadcast.
+- Client (`main.ts`, `shotTimerView.ts`): new `turn:clock` socket listener adopts the
+  announced timings (with a `serverNow` out-of-order guard so a queued stale message
+  cannot rewind the clock); `frame:start` now passes its `turn` through (it was
+  dropped, so new frames never started a clock); `applyGameUpdate` freezes the ring
+  for the length of a shot replay (`ShotTimer.freeze()` — the clock holds where it
+  was while the balls move and restarts at 30 when the table settles).
+- Power slider (`hud.ts`, `power.ts`, `input.ts` untouched): the rail is now an
+  interactive control — a handle sits on the track, click/drag anywhere sets power
+  (pointer capture, clamped 0–100%), the live percentage sits above the track, and
+  the value is written straight into the cue controller's `aim.power` so the cue
+  pull-back tracks the handle. Keyboard-accessible (`role=slider`, arrows/PageUp-Down/
+  Home/End, `aria-valuenow`, focus ring, arrows are stopped from also driving spin).
+  The slider is disabled (dimmed, inert, `aria-disabled`) whenever `isVisitPlayable()`
+  is false — not your visit, or balls still moving — and re-enables when the table
+  settles. Power resets to 0 at the start of every new visit (existing
+  `resetPower` path) and after firing (existing behaviour).
+  - Follow-up fix: the rail was built complete but **never mounted** — `overlayRoot`
+    was an empty div at HEAD too (which is why the review called the slider missing).
+    It now hangs inside the overlay the game view attaches into the table frame
+    (`hud.ts` `overlay.appendChild(rail)`), layering over the 3D canvas via the
+    existing `.hud-overlay` (absolute inset-0, z-index 3, below the z-5 net overlay
+    so a dropped connection still covers it). Track `overflow:hidden` removed so the
+    handle is not clipped to the 12px track, and the slider element carries
+    `id=power-slider` as a stable hook.
+- Tests: room.test.ts grew 5 clock tests (fresh-deadline announce on release,
+  announced stop on disconnect, re-arm announce on return, no spent deadline on
+  frame:end broadcast, robot visit armed-but-never-fouled); power.test.ts grew the
+  slider-mapping tests (identity of `powerFromSliderValue`/`sliderValueFromPower`,
+  clamping, NaN). Shared 107/107, server 39/39, client build green.
+- Dev-DB repair: the ledger-invariance failures (unit ×2 + e2e ×1) were the same
+  pre-existing raw-write drift Day 24 repaired (proven by stashing this change and
+  rerunning on the clean tree). Repaired per the Day-24 precedent — corrective
+  ADJUSTMENT + LEDGER_REPAIR rows per wallet (one wallet −1000, one +1000 drift);
+  ledger suite 3/3, e2e ledger-invariant check green. Full e2e **231 passed, 0 failed**.
 
 ### Day 28 — Final review vs Definition of Done
 - Goal: confirm MVP is complete and consistent.

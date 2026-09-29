@@ -9,7 +9,9 @@ import {
   easePower,
   powerAdjust,
   powerFromDrag,
-  powerPercent
+  powerFromSliderValue,
+  powerPercent,
+  sliderValueFromPower
 } from './power.js'
 
 describe('powerFromDrag', () => {
@@ -100,6 +102,26 @@ describe('powerPercent', () => {
       // power sitting exactly on a .5 boundary spends all of it; the epsilon is there
       // so the test is not about whether 0.005 is representable.
       expect(Math.abs(powerPercent(power) / 100 - power)).toBeLessThanOrEqual(0.005 + 1e-12)
+    }
+  })
+})
+
+describe('the slider mapping', () => {
+  it('takes the handle position straight as the power', () => {
+    expect(powerFromSliderValue(0)).toBe(0)
+    expect(powerFromSliderValue(0.5)).toBe(0.5)
+    expect(powerFromSliderValue(1)).toBe(1)
+  })
+
+  it('clamps a handle dragged past either end', () => {
+    expect(powerFromSliderValue(-0.4)).toBe(0)
+    expect(powerFromSliderValue(1.4)).toBe(1)
+    expect(powerFromSliderValue(Number.NaN)).toBe(0)
+  })
+
+  it('is the exact inverse, so the handle never disagrees with the shot sent', () => {
+    for (const power of [0, 0.1, 0.35, 0.5, 0.77, 1]) {
+      expect(powerFromSliderValue(sliderValueFromPower(power))).toBeCloseTo(power, 12)
     }
   })
 })

@@ -1434,6 +1434,12 @@ function renderGame(): void {
       cueController?.resetPower()
     }
   })
+  // The slider is the other way into the same power value: dragging it writes the
+  // number the controller will send, and the cue stick follows on the next frame it
+  // renders, so the pull-back tracks the handle.
+  hud?.setPowerSink((power) => {
+    if (cueController) cueController.aim.power = power
+  })
   hud?.setPower(0)
 }
 
@@ -1451,8 +1457,16 @@ interface GameUpdatePayload {
  * deadline, so that a clock the server has stopped is taken down rather than left
  * counting on a view of a turn that is over. It is deliberately tolerant of a missing
  * field: a message with no timing attached means no clock, not a crash.
+ *
+ * Messages are also guarded against arriving out of order — a queued `frame:start`
+ * landing after a fresher `turn:clock` would otherwise rewind a clock that had already
+ * been set. The server's own send time is the arbiter: an older message says nothing
+ * about the clock that a newer one has not already said.
  */
+let lastTimingStamp = -1
 function applyTurnTiming(turn: TurnTiming | null | undefined): void {
+  if (turn && turn.serverNow < lastTimingStamp) return
+  if (turn) lastTimingStamp = turn.serverNow
   shotTimer.set(turn ?? null)
 }
 
@@ -1518,11 +1532,14 @@ function applyGameUpdate(data: GameUpdatePayload): void {
   // full-power shot. Keyed on the change rather than on every update, so a player who
   // has already set their power keeps it for the rest of the visit.
   if (myTurn && !wasMyTurn) cueController?.resetPower()
-  // The clock is read here, alongside the score and the turn, and is deliberately not
-  // held back for the replay either. During a replay the server sends no deadline, so
-  // the clock is taken down the moment the shot is committed and comes back with the
-  // next turn's, which is the same instant the table becomes playable again.
-  applyTurnTiming(data.turn)
+  // The clock is read here, alongside the score and the turn. A message carrying a
+  // shot is the moment the timer freezes: the balls are moving, so no turn is being
+  // timed, and the ring holds where it was rather than counting through an animation.
+  // Any other table message adopts the timing it carries — a fresh 30 when the table
+  // has settled on the same visit or a new one, nothing when the server has stopped
+  // the clock outright.
+  if (data.playback) shotTimer.freeze()
+  else applyTurnTiming(data.turn)
 
   // The score, the turn and the ball on are taken from the server's snapshot the
   // instant it arrives, and are deliberately not held back for the replay. They are
@@ -1654,11 +1671,20 @@ function handleSocketEvents(socket: Socket): void {
     frameIndex = data.frameIndex
     // The frame change usually lands straight after the shot that won it, while that
     // shot is still animating, so it queues behind the replay rather than cutting it
-    // off. Only the announcement is immediate.
-    handleGameUpdate({ frame: data.snapshot })
+    // off. Only the announcement is immediate. The turn timing rides along: it is
+    // adopted when the update applies, which is after the replay, when the new frame's
+    // table is actually shown.
+    handleGameUpdate({ frame: data.snapshot, turn: data.turn })
     toast(`Frame ${data.frameIndex} starting`)
   })
   socket.on('game:update', (data: GameUpdatePayload) => handleGameUpdate(data))
+  // The clock's own channel. The room also changes its clock between table broadcasts
+  // — a fresh turn the moment a replay is released, a stop when the striker goes away
+  // — and those moments carry no frame of their own, so they are announced here and
+  // adopted like any other timing.
+  socket.on('turn:clock', (data: { turn?: TurnTiming }) => {
+    applyTurnTiming(data.turn ?? null)
+  })
   socket.on('match:end', (data: { winnerSeat: number; reason?: string; framesWon?: [number, number] }) => {
     if (data.framesWon) framesWon = data.framesWon
     if (activeMatchIsPractice) framesWon = [0, 0]
@@ -1741,8 +1767,11 @@ function loop(): void {
       if (cue) cueController?.setCuePosition(cue.x, cue.y)
       // Aiming is only offered once the table has genuinely settled: no shot still
       // animating, and nothing waiting behind it. Without this the cue stick and the
-      // aim guide were drawn while the balls were still moving.
+      // aim guide were drawn while the balls were still moving. The power slider is
+      // enabled by exactly the same condition: it is this player's visit and the
+      // balls have stopped.
       const canAim = isVisitPlayable()
+      hud?.setPowerEnabled(canAim)
       const renderOptions = {
         aim: cueController?.aim,
         youSeat: mySeat,

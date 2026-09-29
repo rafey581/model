@@ -535,13 +535,24 @@ describe('turn clock', () => {
     room.tryStart()
     // A clock runs for the human.
     expect(room.turnTiming().turnDeadlineAt).not.toBeNull()
-    // One shot played and watched, and the visit passes to the robot. Its think delay is
-    // its own thing and is left exactly as it was; a turn clock on top of it would
-    // simply foul the robot for taking longer to think.
+    // One shot played and watched, and the visit passes to the robot. The clock is
+    // armed on its visit too, so the ring follows whoever is at the table — but the
+    // timeout must never charge the robot a foul, because its think delay is its own
+    // business and always lands well inside a turn.
     room.handleShot('user-a', SHOT)
     room.noteShotPlayed('user-a', lastToken(cbs), 'sock-a')
     expect(room.isBotTurn()).toBe(true)
-    expect(room.turnTiming().turnDeadlineAt).toBeNull()
+    expect(room.turnTiming().turnDeadlineAt).not.toBeNull()
+    const clocks = cbs.broadcasts.filter((b) => b.event === 'turn:clock')
+    const last = clocks[clocks.length - 1]?.payload?.turn
+    expect(last?.turnDeadlineAt).not.toBeNull()
+    // Far past where the robot's own clock would have expired, no timeout foul has
+    // been charged to seat 1: the robot played instead, and any timeout that ever
+    // lands belongs to the human.
+    vi.advanceTimersByTime(60_000)
+    const fouls = cbs.broadcasts.flatMap((b) => (b.payload?.events ?? []) as any[])
+      .filter((e) => e.type === 'FOUL' && e.data?.reason === 'turn timeout')
+    expect(fouls.some((e) => e.data?.bySeat === 1)).toBe(false)
   })
 
   it('leaves the striker clock alone when it is the other player who drops out', () => {
@@ -575,5 +586,62 @@ describe('turn clock', () => {
     const { room } = startedRoom()
     room.dispose()
     expect(room.turnTiming().turnDeadlineAt).toBeNull()
+  })
+
+  it('announces a fresh deadline when the replay is released, so the clock visibly restarts', () => {
+    // The regression behind a clock stuck at 0: the release is when the next visit's
+    // clock actually starts, and no table broadcast follows it, so the room has to
+    // say so on its own. Without this, clients kept drawing the stopped clock they
+    // were last sent.
+    const { room, cbs } = startedRoom()
+    room.handleShot('user-a', SHOT)
+    const token = lastToken(cbs)
+    const before = Date.now()
+    room.noteShotPlayed('user-a', token, 'sock-a')
+    const clocks = cbs.broadcasts.filter((b) => b.event === 'turn:clock')
+    expect(clocks.length).toBeGreaterThan(0)
+    const last = clocks[clocks.length - 1]!.payload.turn
+    expect(last.turnDeadlineAt).not.toBeNull()
+    expect(last.turnDeadlineAt - last.serverNow).toBe(30_000)
+    expect(last.turnDeadlineAt).toBeGreaterThanOrEqual(before + 30_000 - 50)
+  })
+
+  it('tells the clients when the striker clock stops on a disconnect', () => {
+    // Same regression, the other way: stopping the room's clock without announcing
+    // it leaves every ring counting down a turn nobody is timing.
+    const { room, cbs } = startedRoom()
+    room.unregisterSocket('user-a', 'sock-a')
+    expect(room.turnTiming().turnDeadlineAt).toBeNull()
+    const clocks = cbs.broadcasts.filter((b) => b.event === 'turn:clock')
+    const last = clocks[clocks.length - 1]?.payload?.turn
+    expect(last?.turnDeadlineAt).toBeNull()
+  })
+
+  it('announces the re-armed clock when a player returns', () => {
+    const { room, cbs } = startedRoom()
+    room.unregisterSocket('user-a', 'sock-a')
+    const before = Date.now()
+    room.registerSocket('user-a', 0, 'sock-a2')
+    const clocks = cbs.broadcasts.filter((b) => b.event === 'turn:clock')
+    const last = clocks[clocks.length - 1]?.payload?.turn
+    expect(last?.turnDeadlineAt).not.toBeNull()
+    expect(last.turnDeadlineAt - before).toBeGreaterThanOrEqual(30_000 - 50)
+  })
+
+  it('ships no spent deadline with the frame-end broadcast', async () => {
+    // The frame-ending shot consumed the striker's turn, so the deadline it carried
+    // is spent. Stamped as-is, clients would draw an empty clock across the whole
+    // frame ceremony.
+    const { room, cbs } = startedRoom()
+    expect(room.turnTiming().turnDeadlineAt).not.toBeNull()
+    await (room as unknown as { handleFrameEnd(w: number, f: unknown): Promise<void> }).handleFrameEnd(
+      0,
+      room.match.currentFrame
+    )
+    const frameEndUpdate = cbs.broadcasts.find(
+      (b) => b.event === 'game:update' && (b.payload?.events ?? []).some((e: any) => e.type === 'FRAME_END')
+    )
+    expect(frameEndUpdate).toBeDefined()
+    expect(frameEndUpdate!.payload.turn.turnDeadlineAt).toBeNull()
   })
 })

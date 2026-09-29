@@ -154,6 +154,11 @@ export class GameRoom {
     this.replayWatchers.delete(socketId)
     this.releaseHoldIfNoWatchers()
     this.armTurnTimer()
+    // Re-arming on a rejoin hands the striker a fresh turn, and the player who sat
+    // through the departure is still drawing the stopped clock. Announcing the new
+    // deadline is what sets their ring running again. Before the match has started
+    // there is no clock of its own to announce, and match:start carries it anyway.
+    if (this.started) this.broadcastTurnClock()
   }
 
   unregisterSocket(userId: string, socketId: string): void {
@@ -176,7 +181,13 @@ export class GameRoom {
     // clock is only stopped when the seat that left is the one at the table: if the
     // other player dropped out, the striker is still sitting there and must not be
     // handed the turn again from the top.
-    if (seat === this.match.currentFrame?.turnIndex) this.stopTurnTimer()
+    if (seat === this.match.currentFrame?.turnIndex) {
+      this.stopTurnTimer()
+      // The clients holding the ring cannot know the room stopped counting, so the
+      // stop is said out loud: without this every clock out there is left counting
+      // down a turn that is no longer being timed.
+      this.broadcastTurnClock()
+    }
   }
 
   /**
@@ -303,7 +314,10 @@ export class GameRoom {
     const frame = this.match.currentFrame
     if (!frame || frame.phase === 'FRAME_END') return
     const seat = frame.turnIndex
-    if (!this.isHumanTurn(seat) || this.isSeatDisconnected(seat)) return
+    // The clock is armed on the robot's visit too. The ring is a shared view of whose
+    // visit it is, so it must attach to whichever avatar is at the table; what a
+    // timeout must never do is foul the robot, and `onTurnTimeout` still refuses that.
+    if (this.isSeatDisconnected(seat)) return
     if (this.turnTimeoutSec <= 0) return
     this.turnDeadlineAt = Date.now() + this.turnTimeoutSec * 1000
     this.turnTimer = setTimeout(() => {
@@ -329,6 +343,19 @@ export class GameRoom {
       turnDurationMs: this.turnTimeoutSec > 0 ? this.turnTimeoutSec * 1000 : 0,
       serverNow: Date.now()
     }
+  }
+
+  /**
+   * Says out loud what the clock is doing right now.
+   *
+   * The deadline travels with the table broadcasts, but the clock also changes between
+   * them: it restarts the moment a replay is released, and it stops when the striker
+   * goes away. Those moments carry no table state of their own, so without this
+   * announcement every client would keep drawing the last clock it was told about —
+   * frozen at empty, or counting down a turn nobody is timing any more.
+   */
+  private broadcastTurnClock(): void {
+    this.broadcast('turn:clock', { turn: this.turnTiming() })
   }
 
   private onTurnTimeout(): void {
@@ -464,6 +491,10 @@ export class GameRoom {
   }
 
   private async handleFrameEnd(frameWinner: number, endedFrame: FrameState, playback?: ShotPlayback): Promise<void> {
+    // The frame-ending broadcast must not carry the striker's spent deadline: it was
+    // consumed by the shot that ended the frame, and a client that drew it would show
+    // an empty clock across the whole ceremony that follows.
+    this.turnDeadlineAt = null
     const scores = { player0: endedFrame.scores.player0, player1: endedFrame.scores.player1 }
     const frameEnd = this.event('FRAME_END', { winnerSeat: frameWinner, scores })
     this.noteDelivered([frameEnd])
@@ -608,6 +639,10 @@ export class GameRoom {
     this.heldToken = null
     this.replayWatchers = new Set()
     this.armTurnTimer()
+    // The release is the moment the next visit's clock actually starts, and no table
+    // broadcast follows it, so the fresh deadline is announced here. This is what
+    // makes the ring reappear at 30 instead of staying frozen wherever it stopped.
+    this.broadcastTurnClock()
     this.scheduleBotIfNeeded()
   }
 

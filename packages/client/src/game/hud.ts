@@ -1,6 +1,14 @@
 import { BALL_IDS, COLOR_NAMES, COLOR_ORDER, COLOR_VALUES, TOTAL_REDS } from '@snooker/shared'
 import { ballColorHex } from './palette.js'
-import { clampPowerLoose, easePower, powerPercent } from './power.js'
+import {
+  clampPowerLoose,
+  easePower,
+  powerAdjust,
+  powerFromSliderValue,
+  powerPercent,
+  sliderValueFromPower
+} from './power.js'
+import { POWER_FINE_STEP } from './power.js'
 
 /**
  * The one switch behind the centre of the top bar.
@@ -337,6 +345,13 @@ export interface Hud {
   /** Driven per frame by the cue controller, not by update(). */
   setPower: (power: number) => void
   /**
+   * Enable or disable the slider. Off while it is not this player's visit or while
+   * balls are moving, which is exactly the window `isVisitPlayable` describes.
+   */
+  setPowerEnabled: (enabled: boolean) => void
+  /** Connects the slider's output to whoever owns the real power value. */
+  setPowerSink: (sink: (power: number) => void) => void
+  /**
    * The avatar frame of whoever is at the table, or null when nobody is. Phase H2's
    * turn timer hangs off this rather than re-finding it in the document.
    */
@@ -445,14 +460,155 @@ export function createHud(): Hud {
   const overlay = el('div', 'hud-overlay')
   const rail = el('div', 'power-rail')
   rail.id = 'power-rail'
-  rail.setAttribute('aria-hidden', 'true')
+  rail.setAttribute('role', 'group')
+  rail.setAttribute('aria-label', 'Shot power')
+
+  /**
+   * The accessible slider, laid over the track.
+   *
+   * The visible rail is aria-hidden, so the semantics live on this element: it takes
+   * focus, speaks the range, and answers the keyboard. It precedes the track in the
+   * DOM so the stylesheet can draw the focus ring on the track behind it, and it
+   * ignores the pointer — the track below is the hit target — so a click and a key
+   * press are two ways into the same value rather than two controls.
+   */
+  const slider = el('div', 'power-slider')
+  slider.id = 'power-slider'
+  slider.tabIndex = 0
+  slider.setAttribute('role', 'slider')
+  slider.setAttribute('aria-label', 'Shot power')
+  slider.setAttribute('aria-valuemin', '0')
+  slider.setAttribute('aria-valuemax', '100')
+  slider.setAttribute('aria-valuenow', '0')
+  slider.setAttribute('aria-valuetext', '0%')
+  slider.setAttribute('aria-orientation', 'vertical')
+
   const railValue = el('div', 'power-rail-value')
   railValue.id = 'power-rail-value'
+  railValue.textContent = '0%'
   const railTrack = el('div', 'power-rail-track')
+  railTrack.setAttribute('aria-hidden', 'true')
   const railFill = el('div', 'power-rail-fill')
   railFill.id = 'power-rail-fill'
-  railTrack.appendChild(railFill)
-  rail.append(railValue, railTrack)
+  const railHandle = el('div', 'power-rail-handle')
+  railHandle.id = 'power-rail-handle'
+  railTrack.append(railFill, railHandle)
+  rail.append(slider, railValue, railTrack)
+  // Mounted here, once, into the overlay the game view attaches inside the table
+  // frame. This line is the difference between a slider that exists and one that is
+  // on the screen: the rail was built complete but never actually hung anywhere, so
+  // the table rendered with nothing over its right edge.
+  overlay.appendChild(rail)
+
+  let sliderEnabled = true
+  let railDragging = false
+  /** True while the slider itself is driving the value, so the cue controller's own eased reset does not fight it. */
+  let sliderDriving = false
+
+  function railValueFromPointer(event: PointerEvent): number {
+    const rect = railTrack.getBoundingClientRect()
+    if (rect.height <= 0) return 0
+    const travel = (rect.bottom - event.clientY) / rect.height
+    return Math.min(1, Math.max(0, travel))
+  }
+
+  /** The cue controller owns the value; this is the write-only wire to it, set by the caller. */
+  let aimPowerSetter: (power: number) => void = () => {}
+  /**
+   * Registers where the slider hands its value.
+   *
+   * The HUD cannot import the cue controller — the dependency points the other way,
+   * controller → HUD for display — so the caller connects the two here at mount.
+   */
+  function setPowerSink(sink: (power: number) => void): void {
+    aimPowerSetter = sink
+  }
+
+  function setAria(percent: number, text: string): void {
+    slider.setAttribute('aria-valuenow', String(percent))
+    slider.setAttribute('aria-valuetext', text)
+  }
+
+  function applySliderValue(value: number): void {
+    const power = powerFromSliderValue(value)
+    aimPowerSetter(power)
+    renderRail(power)
+    const text = `${powerPercent(power)}%`
+    railValue.textContent = text
+    setAria(powerPercent(power), text)
+  }
+
+  const onRailPointerDown = (event: PointerEvent): void => {
+    if (!sliderEnabled) return
+    event.preventDefault()
+    railDragging = true
+    sliderDriving = true
+    stopSliderReset()
+    railTrack.setPointerCapture(event.pointerId)
+    applySliderValue(railValueFromPointer(event))
+  }
+  const onRailPointerMove = (event: PointerEvent): void => {
+    if (!railDragging || !sliderEnabled) return
+    event.preventDefault()
+    applySliderValue(railValueFromPointer(event))
+  }
+  const onRailPointerUp = (event: PointerEvent): void => {
+    if (!railDragging) return
+    railDragging = false
+    sliderDriving = false
+    // The displayed value and the eased one are the same number from here on, so the
+    // next controller-driven update eases from where the handle actually is rather
+    // than from wherever the charge animation had got to.
+    railShown = lastRailPower
+    if (railTrack.hasPointerCapture(event.pointerId)) railTrack.releasePointerCapture(event.pointerId)
+  }
+  railTrack.addEventListener('pointerdown', onRailPointerDown)
+  railTrack.addEventListener('pointermove', onRailPointerMove)
+  railTrack.addEventListener('pointerup', onRailPointerUp)
+  railTrack.addEventListener('pointercancel', onRailPointerUp)
+
+  const onSliderKeyDown = (event: KeyboardEvent): void => {
+    if (!sliderEnabled) return
+    let delta = 0
+    if (event.key === 'ArrowUp') delta = POWER_FINE_STEP
+    else if (event.key === 'ArrowDown') delta = -POWER_FINE_STEP
+    else if (event.key === 'PageUp') delta = 0.2
+    else if (event.key === 'PageDown') delta = -0.2
+    else if (event.key === 'Home') {
+      event.preventDefault()
+      applySliderValue(0)
+      return
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      applySliderValue(1)
+      return
+    } else return
+    event.preventDefault()
+    // The arrows belong to the slider while it holds focus, and must not also turn
+    // the spin control, which listens for the same keys one level up.
+    event.stopPropagation()
+    applySliderValue(powerAdjust(lastRailPower, delta))
+  }
+  slider.addEventListener('keydown', onSliderKeyDown)
+
+  /** The last power this module rendered, so a new render can diff against it. */
+  let lastRailPower = 0
+
+  function renderRail(power: number): void {
+    const clamped = clampPowerLoose(power)
+    const value = sliderValueFromPower(clamped)
+    lastRailPower = clamped
+    if (railFill.style.transform !== `scaleY(${clamped})`) railFill.style.transform = `scaleY(${clamped})`
+    if (railHandle.style.bottom !== `${value * 100}%`) railHandle.style.bottom = `${value * 100}%`
+    setFlag(rail, 'is-charging', clamped > 0.001)
+  }
+
+  let sliderResetFrame = 0
+  function stopSliderReset(): void {
+    if (!sliderResetFrame) return
+    cancelAnimationFrame(sliderResetFrame)
+    sliderResetFrame = 0
+  }
 
   root.append(top, strip, live)
 
@@ -514,15 +670,31 @@ export function createHud(): Hud {
      * not turn the event-driven HUD into a per-frame one.
      */
     setPower: (power: number) => {
+      // While the slider itself is being dragged, it is the authority on what is
+      // shown: the controller's eased charge would otherwise drag the handle back
+      // down mid-gesture. Any other power change (charging, wheel, keys) is adopted.
+      if (sliderDriving) return
       railShown = easePower(railShown, power)
       if (Math.abs(power - railShown) < 0.002) railShown = power
       const percent = powerPercent(railShown)
-      if (railValue.textContent !== `${percent}%`) railValue.textContent = `${percent}%`
-      // A transform rather than a height: the fill is a compositor-only change, so a
-      // full-power charge does not relayout the table on every frame.
-      const scale = clampPowerLoose(railShown)
-      if (railFill.style.transform !== `scaleY(${scale})`) railFill.style.transform = `scaleY(${scale})`
-      setFlag(rail, 'is-charging', scale > 0.001)
+      const text = `${percent}%`
+      if (railValue.textContent !== text) railValue.textContent = text
+      renderRail(railShown)
+      setAria(percent, text)
+    },
+    setPowerEnabled: (enabled: boolean) => {
+      if (sliderEnabled === enabled) return
+      sliderEnabled = enabled
+      setFlag(rail, 'is-disabled', !enabled)
+      slider.setAttribute('aria-disabled', enabled ? 'false' : 'true')
+      if (!enabled) {
+        railDragging = false
+        sliderDriving = false
+        stopSliderReset()
+      }
+    },
+    setPowerSink: (sink) => {
+      setPowerSink(sink)
     },
     turnFrame: () => {
       if (youAvatar.frame.classList.contains(TURN_ACTIVE_CLASS)) return youAvatar.frame
