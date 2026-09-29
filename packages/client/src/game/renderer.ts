@@ -1,5 +1,6 @@
 import { TABLE_LENGTH, TABLE_WIDTH, BALL_RADIUS, pocketPositions } from '@snooker/shared'
 import { computeAimGuide, objectDirection, type AimGuide } from './aim.js'
+import { ballColorHex } from './palette.js'
 
 export interface DrawableBall {
   id: number
@@ -26,18 +27,6 @@ export interface AimState {
   spinY?: number
 }
 
-const BALL_COLORS: Record<number, string> = {
-  0: '#f7f7f2',
-  16: '#f4c430',
-  17: '#1b7f46',
-  18: '#8a4b23',
-  19: '#1e6fd9',
-  20: '#f0709c',
-  21: '#171717'
-}
-
-const RED = '#d62828'
-const BALL_VALUE_LABEL: Record<number, number> = { 16: 2, 17: 3, 18: 4, 19: 5, 20: 6, 21: 7 }
 
 interface TableTransform {
   offsetX: number
@@ -192,8 +181,6 @@ export function drawTable(
       drawAim(ctx, offsetX + cx * scale, offsetY + cy * scale, offsetX, offsetY, scale, options.aim, guide)
     }
   }
-
-  drawHud(ctx, frameWidth, snapshot, options)
 }
 
 function resolveHighlight(snapshot: FrameSnapshotData): number | null {
@@ -201,56 +188,6 @@ function resolveHighlight(snapshot: FrameSnapshotData): number | null {
   const match = /colour:(\d+)/.exec(snapshot.ballOn)
   if (match) return Number(match[1])
   return null
-}
-
-function drawHud(
-  ctx: CanvasRenderingContext2D,
-  frameWidth: number,
-  snapshot: FrameSnapshotData,
-  options: RenderOptions
-): void {
-  const you = options.youSeat === 1 ? snapshot.scores.player1 : snapshot.scores.player0
-  const opp = options.youSeat === 1 ? snapshot.scores.player0 : snapshot.scores.player1
-  ctx.fillStyle = 'rgba(0,0,0,0.55)'
-  ctx.fillRect(0, 0, frameWidth, 36)
-  ctx.fillStyle = '#f0b429'
-  ctx.font = 'bold 15px system-ui'
-  ctx.textAlign = 'left'
-  ctx.fillText(`YOU: ${you}`, 18, 24)
-  ctx.textAlign = 'right'
-  ctx.fillText(`OPPONENT: ${opp}`, frameWidth - 18, 24)
-  ctx.textAlign = 'center'
-  ctx.font = '13px system-ui'
-  ctx.fillStyle = 'rgba(230,237,243,0.9)'
-  ctx.fillText(
-    `${ballOnLabel(snapshot.ballOn)}  ·  break ${snapshot.breakScore}  ·  ${snapshot.remainingReds} reds`,
-    frameWidth / 2,
-    24
-  )
-  if (options.youSeat !== undefined) {
-    if (snapshot.cueInHand) {
-      ctx.font = 'bold 12px system-ui'
-      ctx.fillStyle = '#f0b429'
-      ctx.textAlign = 'right'
-      ctx.fillText('BALL IN HAND — place cue in the D', frameWidth - 18, 60)
-    } else {
-      const mine = snapshot.turnIndex === options.youSeat
-      ctx.font = 'bold 12px system-ui'
-      ctx.fillStyle = mine ? '#2ea043' : '#8b949e'
-      ctx.textAlign = 'right'
-      ctx.fillText(mine ? 'YOUR TURN' : 'WAITING', frameWidth - 18, 60)
-    }
-  }
-}
-
-function ballOnLabel(ballOn: string): string {
-  if (ballOn === 'RED') return 'Ball on: RED'
-  const match = /colour:(\d+)/.exec(ballOn)
-  if (match) {
-    const value = BALL_VALUE_LABEL[Number(match[1])]
-    return value ? `Ball on: ${value}-point colour` : 'Ball on: colour'
-  }
-  return 'Ball on: colour'
 }
 
 function drawPocket(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number, radius: number): void {
@@ -269,7 +206,7 @@ function drawBall(
   highlight: boolean
 ): void {
   const r = BALL_RADIUS * scale
-  const color = BALL_COLORS[id] ?? RED
+  const color = ballColorHex(id)
   ctx.beginPath()
   ctx.arc(x, y, r, 0, Math.PI * 2)
   ctx.fillStyle = color

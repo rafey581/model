@@ -3,6 +3,7 @@ import { TABLE_LENGTH, TABLE_WIDTH, BALL_RADIUS, BAULK_LINE_X, D_RADIUS, POCKET_
 import type { FrameSnapshotData, AimState, RenderOptions } from './renderer.js'
 import { computeAimGuide, objectDirection, type AimGuide, type AimGuideBall } from './aim.js'
 import { setTableTransform } from './renderer.js'
+import { ballColor } from './palette.js'
 
 const HALF_L = TABLE_LENGTH / 2
 const HALF_W = TABLE_WIDTH / 2
@@ -22,17 +23,6 @@ const STICK_POWER_DRAW = 190
 const tableX = (x: number): number => x - HALF_L
 const tableZ = (y: number): number => y - HALF_W
 
-const BALL_COLORS: Record<number, number> = {
-  0: 0xf5f3e4,
-  16: 0xf4c430,
-  17: 0x1b7f46,
-  18: 0x8a4b23,
-  19: 0x1e6fd9,
-  20: 0xf0709c,
-  21: 0x1a1a1e
-}
-
-const RED = 0xd62828
 const textureCache = new Map<string, THREE.CanvasTexture>()
 
 function cachedTexture(key: string, make: () => THREE.CanvasTexture): THREE.CanvasTexture {
@@ -619,7 +609,7 @@ export class Scene3D {
       seen.add(ball.id)
       let rig = this.balls.get(ball.id)
       if (!rig) {
-        rig = new BallRig(BALL_RADIUS, BALL_COLORS[ball.id] ?? RED, contactShadowTexture())
+        rig = new BallRig(BALL_RADIUS, ballColor(ball.id), contactShadowTexture())
         this.balls.set(ball.id, rig)
         this.scene.add(rig.group)
       }

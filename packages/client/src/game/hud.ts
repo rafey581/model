@@ -30,6 +30,7 @@ export interface HudSnapshot {
   breakScore: number
   remainingReds: number
   balls: Array<{ id: number; potted: boolean }>
+  cueInHand?: boolean
 }
 
 export interface HudSide {
@@ -62,6 +63,11 @@ export interface HudState {
   frameLabel: string
   breakLabel: string | null
   ballOnLabel: string
+  /**
+   * The cue ball is in hand and has to be placed in the D. This used to be drawn on
+   * the 2D canvas only, which meant the 3D table never said it.
+   */
+  cueInHand: boolean
   /** True when the reds are the ball on, which is what highlights the red dots. */
   redsOn: boolean
   reds: { total: number; remaining: number; onTable: boolean[] }
@@ -189,6 +195,7 @@ export function deriveHudState(input: HudInput): HudState {
       : `Frame ${input.frameIndex} · ${input.format}`,
     breakLabel: snapshot && snapshot.breakScore > 0 ? `Break ${snapshot.breakScore}` : null,
     ballOnLabel: describeBallOn(snapshot?.ballOn),
+    cueInHand: Boolean(snapshot?.cueInHand),
     redsOn: (snapshot?.ballOn ?? 'RED') === 'RED',
     reds: {
       total: TOTAL_REDS,
@@ -370,7 +377,11 @@ export function createHud(): Hud {
   frames.id = 'hud-frames'
   const frameLabel = el('div', 'hud-frame-label')
   frameLabel.id = 'hud-frame-label'
-  centre.append(prize, frames, frameLabel)
+  const inHand = el('div', 'hud-inhand')
+  inHand.textContent = 'Ball in hand — place the cue in the D'
+  inHand.id = 'hud-inhand'
+  inHand.hidden = true
+  centre.append(prize, frames, frameLabel, inHand)
 
   top.append(left, centre, right)
 
@@ -437,6 +448,7 @@ export function createHud(): Hud {
       setText(frames, state.frames ?? '')
       setHidden(frames, state.frames === null)
       setText(frameLabel, state.frameLabel)
+      setHidden(inHand, !state.cueInHand)
       setText(ballOnText, state.ballOnLabel)
       setText(brk, state.breakLabel ?? '')
       setHidden(brk, state.breakLabel === null)
