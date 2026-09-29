@@ -266,8 +266,7 @@ th {
   min-width: 0;
 }
 
-.control-actions {
-  display: flex;
+.control-actions {  display: flex;
   gap: 8px;
   align-items: center;
   margin-left: auto;
@@ -716,32 +715,71 @@ button.small {
   border: 0;
 }
 
-.power-group {
+/**
+ * The power rail: a vertical bar over the side of the table.
+ *
+ * Scaled with the table rather than the window, so it keeps its proportion next to the
+ * cloth on a phone and does not drift away from it on a desktop. The fill is scaled
+ * with a transform instead of being resized, so a full-power charge never relayouts
+ * the table, and the gradient is on the fill itself and grows with it: green at the
+ * bottom, amber through the middle, red at the top, so the colour a player sees is
+ * the colour of the power they are about to play.
+ */
+.hud-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.power-rail {
+  position: absolute;
+  top: 50%;
+  right: clamp(6px, 1.4vw, 18px);
+  transform: translateY(-50%);
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  min-width: 180px;
+  align-items: center;
+  gap: 6px;
+  width: 30px;
+  opacity: 0.55;
+  transition: opacity 220ms ease;
 }
 
-.power-label {
+.power-rail.is-charging {
+  opacity: 1;
+}
+
+.power-rail-value {
   font-size: 11px;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
 }
 
-.power-meter {
-  height: 12px;
-  background: var(--panel-2);
+.power-rail-track {
+  position: relative;
+  width: 12px;
+  height: clamp(90px, 22vh, 190px);
+  border-radius: 999px;
+  background: rgba(6, 10, 14, 0.55);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.6);
   overflow: hidden;
 }
 
-.power-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--accent), #d29922);
-  transition: width 0.05s linear;
+.power-rail-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: bottom center;
+  transform: scaleY(0);
+  /* Short and eased: continuous charging already arrives every frame, so this only
+     smooths the discrete steps from the wheel, the keys and a fresh press. */
+  transition: transform 90ms ease-out;
+  background: linear-gradient(to top, #2ea043 0%, #7ec35a 28%, #d29922 62%, #e0752f 80%, #da3633 100%);
+  border-radius: 999px;
 }
 
 .spin-label {

@@ -1342,6 +1342,9 @@ function renderGame(): void {
   const oppHolder = el('div')
   oppHolder.id = 'opp-holder'
   tableFrame.appendChild(oppHolder)
+  // The power rail overlays the table, so it mounts into the frame rather than into
+  // the page flow: it must not take vertical space from the table it sits over.
+  tableFrame.appendChild(hud.overlayRoot)
   stage.appendChild(tableFrame)
   page.appendChild(stage)
 
@@ -1363,17 +1366,8 @@ function renderGame(): void {
   }
   page.appendChild(bar)
 
-  const powerLabel = el('div', 'power-label', 'Power')
-  const powerFill = el('div', 'power-fill')
-  const powerBar = el('div', 'power-meter')
-  powerBar.appendChild(powerFill)
-  const powerGroup = el('div', 'power-group')
-  powerGroup.appendChild(powerLabel)
-  powerGroup.appendChild(powerBar)
   const spinLabel = el('div', 'spin-label', 'Spin: 0.0 / 0.0')
-  const gauges = el('div', 'control-gauges')
-  gauges.append(powerGroup, spinLabel)
-  bar.appendChild(gauges)
+  bar.appendChild(spinLabel)
 
   // The three session buttons, in one quiet cluster in the corner rather than the
   // full-width bar they used to be: they are needed occasionally, not per shot.
@@ -1418,14 +1412,18 @@ function renderGame(): void {
     // be accepted by the server and cut the animation dead.
     enabled: () => isVisitPlayable(),
     onChange: (aim) => {
-      powerFill.style.width = `${Math.round(aim.power * 100)}%`
+      hud?.setPower(aim.power)
       spinLabel.textContent = `Spin: ${aim.spinX.toFixed(1)} / ${aim.spinY.toFixed(1)}`
     },
     onShoot: (shot: Omit<ShotInput, 'timestamp'>) => {
       getSocket().emit('shot:play', { matchId: activeMatchId, input: { ...shot, timestamp: Date.now() } })
+      // The shot is on its way, so the bar empties for the next one. Eased inside the
+      // controller, and it keeps animating on its own frames rather than being driven
+      // by a state change that has already happened.
+      cueController?.resetPower()
     }
   })
-  powerFill.style.width = '40%'
+  hud?.setPower(0)
 }
 
 interface GameUpdatePayload {

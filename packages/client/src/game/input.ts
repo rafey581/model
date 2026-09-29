@@ -1,5 +1,6 @@
 import type { ShotInput } from '@snooker/shared'
 import { tableToCanvas } from './renderer.js'
+import { POWER_FINE_STEP, POWER_RESTING_DEFAULT, powerAdjust, powerFromDrag } from './power.js'
 
 export interface AimState {
   angle: number
@@ -20,14 +21,14 @@ export interface CueController {
   aim: AimState
   destroy: () => void
   setCuePosition: (x: number, y: number) => void
+  /** Eases the power back to rest, for between shots. */
+  resetPower: () => void
 }
 
-/** The floor a shot always has, matching the minimum the drag gesture can reach. */
-const POWER_MIN = 0.05
 /**
- * Power gained per second of holding. Starting from the current power (0.4 by
- * default) a full-power shot takes roughly 0.9s, which is long enough to see the
- * meter climb and short enough that a quick tap still plays the shot.
+ * Power gained per second of holding. Starting from the current power a full-power
+ * shot takes roughly 0.9s, which is long enough to see the meter climb and short
+ * enough that a quick tap still plays the shot.
  */
 const POWER_PER_SECOND = 0.65
 /**
@@ -39,18 +40,35 @@ const CHARGE_DEADZONE_PX = 6
 const SHOOT_RADIUS_PX = 12
 
 export function createCueController(options: CueControllerOptions): CueController {
-  const aim: AimState = { angle: 0, power: 0.4, spinX: 0, spinY: 0 }
+  const aim: AimState = { angle: 0, power: 0, spinX: 0, spinY: 0 }
   let cue = options.cuePosition
   let dragging = false
   /** Set once the pointer moves far enough to mean "drag to set power". */
   let settingPowerByDrag = false
   let holdOrigin = { x: 0, y: 0 }
   let chargeFrame = 0
+  /** The power the current gesture started from, so Escape and a deadzone exit can restore it. */
+  let powerAtPress = 0
+  /**
+   * The aim axis, frozen when the drag gesture starts.
+   *
+   * Freezing it is what makes the two-way drag steady. Aiming follows the pointer, so
+   * a live axis would rotate under the drag and the power would chase it; fixed at
+   * the start of the gesture, the distance the pointer has travelled along the cue is
+   * the power, and it only goes up or down as the player moves.
+   */
+  let dragAxis = { x: 1, y: 0, originPx: 0 }
+  let resetFrame = 0
 
-  function pointerAngle(event: { clientX: number; clientY: number }): number {
+  function pointerInCanvas(event: { clientX: number; clientY: number }): { px: number; py: number; rect: DOMRect } {
     const rect = options.canvas.getBoundingClientRect()
     const px = ((event.clientX - rect.left) / rect.width) * options.canvas.width
     const py = ((event.clientY - rect.top) / rect.height) * options.canvas.height
+    return { px, py, rect }
+  }
+
+  function pointerAngle(event: { clientX: number; clientY: number }): number {
+    const { px, py } = pointerInCanvas(event)
     const target = tableToCanvas(cue.x, cue.y)
     return Math.atan2(py - target.y, px - target.x)
   }
@@ -84,6 +102,12 @@ export function createCueController(options: CueControllerOptions): CueControlle
     chargeFrame = 0
   }
 
+  function stopReset(): void {
+    if (!resetFrame) return
+    cancelAnimationFrame(resetFrame)
+    resetFrame = 0
+  }
+
   function handleMove(event: { clientX: number; clientY: number }): void {
     aim.angle = pointerAngle(event)
     if (dragging) {
@@ -92,15 +116,29 @@ export function createCueController(options: CueControllerOptions): CueControlle
         Math.hypot(event.clientX - holdOrigin.x, event.clientY - holdOrigin.y) > CHARGE_DEADZONE_PX
       ) {
         // Deliberate movement: hand power over to the drag gesture from here so
-        // both ways of setting power stay available.
+        // both ways of setting power stay available. The axis is captured here, at
+        // the moment the gesture is recognised, and not before, so a player who only
+        // nudged the pointer never accidentally changed their power.
         settingPowerByDrag = true
         stopCharging()
+        const { px, py } = pointerInCanvas(event)
+        const target = tableToCanvas(cue.x, cue.y)
+        // The axis is the direction the cue points, and where the pointer sits along
+        // it is measured from the cue ball, so the gesture is "how far off the ball am
+        // I" rather than "where on the table is my cursor".
+        dragAxis = {
+          x: Math.cos(aim.angle),
+          y: Math.sin(aim.angle),
+          originPx: (px - target.x) * Math.cos(aim.angle) + (py - target.y) * Math.sin(aim.angle)
+        }
       }
       if (settingPowerByDrag) {
-        const rect = options.canvas.getBoundingClientRect()
-        const py = ((event.clientY - rect.top) / rect.height) * options.canvas.height
+        const { px, py } = pointerInCanvas(event)
         const target = tableToCanvas(cue.x, cue.y)
-        aim.power = Math.min(1, Math.max(POWER_MIN, ((target.y - py) / options.canvas.height) * 2))
+        const along = (px - target.x) * dragAxis.x + (py - target.y) * dragAxis.y
+        // Positive when the pointer has travelled back along the cue, which is the
+        // direction that adds power.
+        aim.power = powerFromDrag(dragAxis.originPx - along, powerAtPress)
       }
     }
     options.onChange({ ...aim })
@@ -112,6 +150,11 @@ export function createCueController(options: CueControllerOptions): CueControlle
     dragging = true
     settingPowerByDrag = false
     holdOrigin = { x: event.clientX, y: event.clientY }
+    stopReset()
+    // A press picks the power up from the default a tap has always used, so the
+    // quick-shot gesture plays the same shot it did before the bar started at rest.
+    powerAtPress = aim.power > 0 ? aim.power : POWER_RESTING_DEFAULT
+    aim.power = powerAtPress
     options.canvas.setPointerCapture(event.pointerId)
     handleMove(event)
     startCharging()
@@ -122,11 +165,10 @@ export function createCueController(options: CueControllerOptions): CueControlle
     dragging = false
     stopCharging()
     if (!options.enabled()) return
-    const rect = options.canvas.getBoundingClientRect()
-    const px = ((event.clientX - rect.left) / rect.width) * options.canvas.width
-    const py = ((event.clientY - rect.top) / rect.height) * options.canvas.height
+    const { px, py } = pointerInCanvas(event)
     const target = tableToCanvas(cue.x, cue.y)
     if (Math.hypot(px - target.x, py - target.y) > SHOOT_RADIUS_PX) {
+      // Released away from the ball, so the gesture was setting power and not firing.
       options.onChange({ ...aim })
       return
     }
@@ -136,6 +178,16 @@ export function createCueController(options: CueControllerOptions): CueControlle
     dragging = false
     stopCharging()
     event.preventDefault()
+  }
+  const onWheel = (event: WheelEvent) => {
+    if (!options.enabled()) return
+    // The page cannot scroll on the table, so a wheel gesture here has nothing else
+    // to do. Fine steps only: this trims a power that is already set, and a notch
+    // should not be able to send a shot from a full swing to a tap.
+    event.preventDefault()
+    const direction = event.deltaY < 0 ? 1 : -1
+    aim.power = powerAdjust(aim.power, direction * POWER_FINE_STEP)
+    options.onChange({ ...aim })
   }
   const onKeyDown = (event: KeyboardEvent) => {
     switch (event.key) {
@@ -151,6 +203,31 @@ export function createCueController(options: CueControllerOptions): CueControlle
       case 'ArrowRight':
         aim.spinX = Math.min(1, aim.spinX + 0.2)
         break
+      case '+':
+      case '=':
+        if (!options.enabled()) return
+        event.preventDefault()
+        stopReset()
+        aim.power = powerAdjust(aim.power, POWER_FINE_STEP)
+        break
+      case '-':
+      case '_':
+        if (!options.enabled()) return
+        event.preventDefault()
+        stopReset()
+        aim.power = powerAdjust(aim.power, -POWER_FINE_STEP)
+        break
+      case 'Escape':
+        // Abandons the charge in progress and puts the power back where it was
+        // before the press, without playing a shot.
+        if (!dragging) return
+        event.preventDefault()
+        dragging = false
+        settingPowerByDrag = false
+        stopCharging()
+        aim.power = powerAtPress
+        options.onChange({ ...aim })
+        return
       case ' ':
         event.preventDefault()
         if (options.enabled()) {
@@ -168,20 +245,38 @@ export function createCueController(options: CueControllerOptions): CueControlle
   options.canvas.addEventListener('pointerdown', onPointerDown)
   options.canvas.addEventListener('pointerup', onPointerUp)
   options.canvas.addEventListener('pointercancel', onPointerCancel)
+  options.canvas.addEventListener('wheel', onWheel, { passive: false })
   window.addEventListener('keydown', onKeyDown)
 
   return {
     aim,
     destroy: () => {
       stopCharging()
+      stopReset()
       options.canvas.removeEventListener('pointermove', onPointerMove)
       options.canvas.removeEventListener('pointerdown', onPointerDown)
       options.canvas.removeEventListener('pointerup', onPointerUp)
       options.canvas.removeEventListener('pointercancel', onPointerCancel)
+      options.canvas.removeEventListener('wheel', onWheel)
       window.removeEventListener('keydown', onKeyDown)
     },
     setCuePosition: (x: number, y: number) => {
       cue = { x, y }
+    },
+    resetPower: () => {
+      stopReset()
+      if (aim.power <= 0) return
+      // Eased rather than cleared: the bar sliding down to rest reads as the shot
+      // being spent, where a jump to zero reads as the control having broken.
+      let display = aim.power
+      const from = display
+      const step = (): void => {
+        display = from * 0.82
+        aim.power = display < 0.01 ? 0 : display
+        options.onChange({ ...aim })
+        resetFrame = aim.power > 0 ? requestAnimationFrame(step) : 0
+      }
+      resetFrame = requestAnimationFrame(step)
     }
   }
 }

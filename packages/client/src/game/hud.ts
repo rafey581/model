@@ -1,5 +1,6 @@
 import { BALL_IDS, COLOR_NAMES, COLOR_ORDER, COLOR_VALUES, TOTAL_REDS } from '@snooker/shared'
 import { ballColorHex } from './palette.js'
+import { clampPowerLoose, easePower, powerPercent } from './power.js'
 
 /**
  * The one switch behind the centre of the top bar.
@@ -330,7 +331,11 @@ function updateAvatar(slot: AvatarSlot, side: HudSide): void {
 
 export interface Hud {
   root: HTMLElement
+  /** Mounted inside the table frame: the power rail, which overlays the table. */
+  overlayRoot: HTMLElement
   update: (state: HudState) => void
+  /** Driven per frame by the cue controller, not by update(). */
+  setPower: (power: number) => void
   /**
    * The avatar frame of whoever is at the table, or null when nobody is. Phase H2's
    * turn timer hangs off this rather than re-finding it in the document.
@@ -397,7 +402,6 @@ export function createHud(): Hud {
 
   const strip = el('div', 'hud-balls')
   strip.id = 'hud-balls'
-
   const reds = el('div', 'hud-reds')
   const redDots = el('div', 'hud-red-dots')
   for (let i = 0; i < TOTAL_REDS; i++) {
@@ -425,7 +429,37 @@ export function createHud(): Hud {
   }
 
   strip.append(reds, ballOn, colours)
+
+  /**
+   * The power rail, laid over the side of the table.
+   *
+   * It is a separate root rather than another row of the bar, because it has to sit
+   * over the cloth: a control the player's eye is on while they aim should be beside
+   * the balls the power is being applied to, not somewhere above them. The caller
+   * mounts this inside the table frame.
+   *
+   * It carries no input of its own: the cue controller owns the value and the rail
+   * only shows it, which is why it is transparent to the pointer and can never
+   * swallow an aim.
+   */
+  const overlay = el('div', 'hud-overlay')
+  const rail = el('div', 'power-rail')
+  rail.id = 'power-rail'
+  rail.setAttribute('aria-hidden', 'true')
+  const railValue = el('div', 'power-rail-value')
+  railValue.id = 'power-rail-value'
+  const railTrack = el('div', 'power-rail-track')
+  const railFill = el('div', 'power-rail-fill')
+  railFill.id = 'power-rail-fill'
+  railTrack.appendChild(railFill)
+  rail.append(railValue, railTrack)
+
   root.append(top, strip, live)
+
+  // The eased percentage the bar shows, so a jittery raw value does not make the
+  // number flicker. Owned by the rail rather than by update(), which is called on
+  // state changes and would otherwise have to be called every frame to animate.
+  let railShown = 0
 
   const redDotNodes = [...redDots.children] as HTMLElement[]
   const colourNodes = new Map<number, HTMLElement>()
@@ -435,6 +469,7 @@ export function createHud(): Hud {
 
   return {
     root,
+    overlayRoot: overlay,
     update: (state: HudState) => {
       updateAvatar(youAvatar, state.you)
       updateAvatar(oppAvatar, state.opponent)
@@ -470,6 +505,24 @@ export function createHud(): Hud {
 
       const turnText = state.you.active ? 'Your turn' : state.opponent.active ? `${state.opponent.name} to play` : ''
       if (live.textContent !== turnText) live.textContent = turnText
+    },
+    /**
+     * Shows the power the cue controller is about to send.
+     *
+     * Separate from update() and driven by the caller on its own animation frame,
+     * because power changes every frame while a shot is being charged and this must
+     * not turn the event-driven HUD into a per-frame one.
+     */
+    setPower: (power: number) => {
+      railShown = easePower(railShown, power)
+      if (Math.abs(power - railShown) < 0.002) railShown = power
+      const percent = powerPercent(railShown)
+      if (railValue.textContent !== `${percent}%`) railValue.textContent = `${percent}%`
+      // A transform rather than a height: the fill is a compositor-only change, so a
+      // full-power charge does not relayout the table on every frame.
+      const scale = clampPowerLoose(railShown)
+      if (railFill.style.transform !== `scaleY(${scale})`) railFill.style.transform = `scaleY(${scale})`
+      setFlag(rail, 'is-charging', scale > 0.001)
     },
     turnFrame: () => {
       if (youAvatar.frame.classList.contains(TURN_ACTIVE_CLASS)) return youAvatar.frame
