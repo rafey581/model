@@ -723,10 +723,21 @@ button.small {
   display: none;
 }
 
-/** The balls strip: fifteen reds, the ball on, and the six colours in value order. */
+/**
+ * The balls strip: fifteen reds, the ball on, and the six colours in value order.
+ *
+ * The three groups are centred as one cluster, and that is load-bearing rather than
+ * decorative. The strip spans the full width of the HUD, and the top bar above it puts
+ * the opponent's avatar hard against the right edge. With the groups spread edge to
+ * edge, the six colours sat directly under that avatar and read as the other player's
+ * balls, which is precisely the 8-ball mistake the strip exists to avoid: in snooker
+ * every ball on the table belongs to both players. Centring leaves equal empty space
+ * on both sides, so the colours are as far from the right-hand avatar as from the left.
+ */
 .hud-balls {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -783,7 +794,14 @@ button.small {
   display: flex;
   gap: 8px;
   align-items: baseline;
-  flex: 1 1 auto;
+  /*
+   * Sized to its own text, not to the leftover space. This group used to take all the
+   * free width, which is what pushed the colours to the right-hand edge while the reds
+   * sat on the left: a full-width strip with the three groups spread across it. Taking
+   * only the room it needs is what lets the strip centre them. Still allowed to shrink,
+   * so a narrow window clips the label rather than pushing the colours off the panel.
+   */
+  flex: 0 1 auto;
   justify-content: center;
   color: var(--text);
   font-weight: 600;

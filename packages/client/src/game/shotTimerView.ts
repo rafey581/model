@@ -1,4 +1,4 @@
-import { TURN_URGENT_MS, clockOffsetMs, remainingMs, ringProgress, secondsLeft, timerTone } from './shotTimer.js'
+import { TURN_URGENT_MS, clockOffsetMs, displayedSeconds, remainingMs, ringProgress, timerTone } from './shotTimer.js'
 import type { TurnTiming } from './shotTimer.js'
 
 export interface ShotTimerOptions {
@@ -97,7 +97,7 @@ export function createShotTimer(options: ShotTimerOptions): ShotTimer {
       arc.style.setProperty('--progress', arcValue)
       lastArc = arcValue
     }
-    const text = String(secondsLeft(remaining))
+    const text = String(displayedSeconds(remaining, timing.turnDurationMs))
     if (text !== lastLabel) {
       label.textContent = text
       lastLabel = text

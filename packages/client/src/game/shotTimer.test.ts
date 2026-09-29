@@ -3,6 +3,7 @@ import {
   TURN_URGENT_MS,
   TURN_WARN_MS,
   clockOffsetMs,
+  displayedSeconds,
   remainingMs,
   ringProgress,
   secondsLeft,
@@ -121,5 +122,45 @@ describe('seconds shown', () => {
   it('shows zero once the time is gone, and never a negative clock', () => {
     expect(secondsLeft(0)).toBe(0)
     expect(secondsLeft(-1_000)).toBe(0)
+  })
+})
+
+describe('seconds printed on a thirty second turn', () => {
+  const TURN = 30_000
+
+  it('reads 30 at the start of a 30 second turn, and never 31', () => {
+    // The deadline is stamped by the server and read by the client a moment after, so
+    // the time on the clock measures slightly over the turn. Rounding that up printed a
+    // 31 on a 30 second clock for the first frame, which is the same class of nonsense
+    // as the 570 that started this: a clock reporting more time than a turn has.
+    expect(displayedSeconds(30_000, TURN)).toBe(30)
+    expect(displayedSeconds(30_005, TURN)).toBe(30)
+    expect(displayedSeconds(30_400, TURN)).toBe(30)
+  })
+
+  it('still counts every second down to zero, one at a time', () => {
+    const shown: number[] = []
+    for (let remaining = TURN; remaining >= 0; remaining -= 1_000) shown.push(displayedSeconds(remaining, TURN))
+    expect(shown).toHaveLength(31)
+    expect(shown[0]).toBe(30)
+    expect(shown[30]).toBe(0)
+    // Strictly decreasing: no repeats, no gaps, so each second is seen exactly once.
+    for (let i = 1; i < shown.length; i++) expect(shown[i]).toBe((shown[i - 1] as number) - 1)
+  })
+
+  it('does not exceed the length the server declared, whatever that length is', () => {
+    // The client draws the turn it is given rather than a turn of its own. This is why
+    // a 600 second turn is the server's mistake to fix and not something to paper over
+    // here: inventing a length client-side is how a client and a server come to
+    // disagree about when the foul is.
+    expect(displayedSeconds(600_000, 600_000)).toBe(600)
+    expect(displayedSeconds(600_005, 600_000)).toBe(600)
+  })
+
+  it('leaves a clock with no declared length alone', () => {
+    // A duration of zero means the turn clock is switched off, and there is nothing to
+    // cap against, so the seconds shown are whatever the deadline works out to be.
+    expect(displayedSeconds(0, 0)).toBe(0)
+    expect(displayedSeconds(-1_000, 0)).toBe(0)
   })
 })

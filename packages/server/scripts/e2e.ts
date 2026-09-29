@@ -6,6 +6,7 @@ import { getBotUserId, createOneVsOneMatch, MatchError, joinOneVsOneMatch } from
 import { createTournament, joinTournament } from '../src/tournaments/service.js'
 import { frameFromSnapshot, type FrameSnapshot } from '@snooker/shared'
 import { computeBotShot } from '../src/bot/bot.js'
+import { DEFAULT_TURN_TIMEOUT_SEC } from '../src/config.js'
 import { ledger, runInTransaction } from '../src/wallet/service.js'
 
 const BASE = 'http://localhost:4000'
@@ -832,6 +833,15 @@ async function main(): Promise<void> {
   )
 
   console.log('== 15. DB-backed settings: reflect immediately + maintenance gate ==')
+  /**
+   * Puts the settings the run edits back to the product defaults.
+   *
+   * This is a list, and a list of the keys the run changes is only as good as its
+   * contents: `turnTimeoutSec` was missing from it, so section 17's 600 outlived the
+   * run and every later match in this database inherited a ten-minute shot clock. The
+   * turn clock showed 570 seconds in play as a result. Any key this run writes has to
+   * be reset here or it becomes the default for the next run and the next player.
+   */
   const resetSettings = async () => {
     const rows: Array<[string, unknown]> = [
       ['commissionPct', 0.1],
@@ -839,6 +849,7 @@ async function main(): Promise<void> {
       ['maxStake', 1000],
       ['matchFormats', ['BO1', 'BO3', 'BO5']],
       ['reconnectGraceSec', 120],
+      ['turnTimeoutSec', DEFAULT_TURN_TIMEOUT_SEC],
       ['maintenanceMode', false]
     ]
     for (const [key, value] of rows) {
@@ -1342,6 +1353,17 @@ async function main(): Promise<void> {
   }
 
   await resetSettings()
+  // The run ends by putting the settings back, so it is checked that it actually did.
+  // A key the run edits but forgets to restore is invisible in a passing run and shows
+  // up later as somebody else's bug: this is the assertion that turns that into a
+  // failure here, where it belongs.
+  res = await api('/api/admin/settings', { token: adminToken })
+  const endSettings = res.json?.data as Record<string, any> | undefined
+  check(
+    'turn timings are back to the product defaults after the run',
+    endSettings?.turnTimeoutSec === DEFAULT_TURN_TIMEOUT_SEC && endSettings?.reconnectGraceSec === 120,
+    { turnTimeoutSec: endSettings?.turnTimeoutSec, reconnectGraceSec: endSettings?.reconnectGraceSec }
+  )
 }
 
 main()

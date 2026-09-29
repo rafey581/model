@@ -74,3 +74,23 @@ export function ringProgress(remaining: number, durationMs: number): number {
 export function secondsLeft(remaining: number): number {
   return Math.max(0, Math.ceil(remaining / 1000))
 }
+
+/**
+ * The seconds to actually print, which can never be more than the turn is worth.
+ *
+ * The deadline is stamped by the server and read by the client a moment later, so the
+ * time left measures a hair over the full turn: on a 30-second clock a client that read
+ * the message five milliseconds late has 30.005s on the clock and prints 31. The ring
+ * already clamps its own fraction for the same reason, so the number beside it and the
+ * arc around it could disagree at the very moment the turn begins.
+ *
+ * This caps the display at the length the server declared. It is deliberately not a
+ * second opinion about how long a turn should be: a duration the server sends is drawn
+ * as sent, because the client drawing its own number instead of the server's is how a
+ * client and a server end up disagreeing about when a foul is coming. The shot clock
+ * being 30 seconds is the server's business, not this function's.
+ */
+export function displayedSeconds(remaining: number, durationMs: number): number {
+  const capped = durationMs > 0 ? Math.min(remaining, durationMs) : remaining
+  return secondsLeft(capped)
+}

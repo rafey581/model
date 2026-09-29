@@ -1508,7 +1508,16 @@ function abandonPlayback(): void {
 function applyGameUpdate(data: GameUpdatePayload): void {
   const previous = frame
   frame = data.frame
+  const wasMyTurn = myTurn
   myTurn = mySeat !== undefined && data.frame.turnIndex === mySeat
+  // Every new visit starts with no power charged. Firing already empties the bar, so
+  // this only fires on the visits that never involved a shot from here: the turn coming
+  // back after the opponent's, a timeout foul, a reconnect. Without it, a half-charged
+  // cue survived the whole of somebody else's visit and handed it back still charged,
+  // which is not a state a player asked for and one click of the mouse away from a
+  // full-power shot. Keyed on the change rather than on every update, so a player who
+  // has already set their power keeps it for the rest of the visit.
+  if (myTurn && !wasMyTurn) cueController?.resetPower()
   // The clock is read here, alongside the score and the turn, and is deliberately not
   // held back for the replay either. During a replay the server sends no deadline, so
   // the clock is taken down the moment the shot is committed and comes back with the
@@ -1635,6 +1644,8 @@ function handleSocketEvents(socket: Socket): void {
     abandonPlayback()
     frame = data.snapshot
     myTurn = mySeat !== undefined && data.snapshot.turnIndex === mySeat
+    // Whatever was charged on the previous match's table is not this match's business.
+    if (myTurn) cueController?.resetPower()
     applyTurnTiming(data.turn)
     toast('Match started!')
     updateHud()
