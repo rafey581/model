@@ -8,6 +8,8 @@ import type { CueController } from './game/input.js'
 import { createHud, computePrizeCredits, describeBallOn, deriveHudState } from './game/hud.js'
 import type { Hud } from './game/hud.js'
 import { fitTableBox } from './game/layout.js'
+import { createShotTimer } from './game/shotTimerView.js'
+import type { TurnTiming } from './game/shotTimer.js'
 import type { ShotInput, ShotPlayback } from '@snooker/shared'
 import { STAKE_TIERS } from '@snooker/shared'
 import type { Socket } from 'socket.io-client'
@@ -89,6 +91,15 @@ let tableStageEl: HTMLElement | null = null
 let netOverlayEl: HTMLElement | null = null
 /** The one HUD overlay. Null whenever the game screen is not on the page. */
 let hud: Hud | null = null
+/**
+ * The shot clock, drawn into whichever turn frame the HUD is currently showing.
+ *
+ * One instance for the life of the page, because a clock is driven by deadlines from
+ * the server rather than by the game screen: it survives the screen being torn down and
+ * rebuilt around a game, and a deadline that arrived while no table was on the page is
+ * still the deadline when one comes back.
+ */
+const shotTimer = createShotTimer({ turnFrame: () => hud?.turnFrame() ?? null })
 /**
  * The frame the balls strip is allowed to describe.
  *
@@ -1430,6 +1441,19 @@ interface GameUpdatePayload {
   frame: FrameSnapshotData
   events?: Array<{ type: string; data: unknown }>
   playback?: ShotPlayback
+  turn?: TurnTiming
+}
+
+/**
+ * Adopts whatever the server last said about the turn clock.
+ *
+ * Called from every message that describes the table, including the ones that carry no
+ * deadline, so that a clock the server has stopped is taken down rather than left
+ * counting on a view of a turn that is over. It is deliberately tolerant of a missing
+ * field: a message with no timing attached means no clock, not a crash.
+ */
+function applyTurnTiming(turn: TurnTiming | null | undefined): void {
+  shotTimer.set(turn ?? null)
 }
 
 function handleGameUpdate(data: GameUpdatePayload): void {
@@ -1485,6 +1509,11 @@ function applyGameUpdate(data: GameUpdatePayload): void {
   const previous = frame
   frame = data.frame
   myTurn = mySeat !== undefined && data.frame.turnIndex === mySeat
+  // The clock is read here, alongside the score and the turn, and is deliberately not
+  // held back for the replay either. During a replay the server sends no deadline, so
+  // the clock is taken down the moment the shot is committed and comes back with the
+  // next turn's, which is the same instant the table becomes playable again.
+  applyTurnTiming(data.turn)
 
   // The score, the turn and the ball on are taken from the server's snapshot the
   // instant it arrives, and are deliberately not held back for the replay. They are
@@ -1583,27 +1612,34 @@ function handleSocketEvents(socket: Socket): void {
     updateNetOverlay()
   })
 
-  socket.on('match:joined', (data: { matchId: string; seat: number; snapshot: FrameSnapshotData | null }) => {
+  socket.on('match:joined', (data: { matchId: string; seat: number; snapshot: FrameSnapshotData | null; turn?: TurnTiming }) => {
     mySeat = data.seat
     // A join is the server's authoritative word on the table, so anything in flight
     // is abandoned rather than finished: after a reconnect there is no replay left
-    // to watch and the settled state is the truth.
+    // to watch and the settled state is the truth. The turn clock comes with it,
+    // because a client that has just come back has no deadline of its own to draw.
     abandonPlayback()
-    if (data.snapshot) applyGameUpdate({ frame: data.snapshot })
+    // The turn timing is passed into the update rather than set alongside it, because
+    // the update is what applies a clock and a message with no timing attached means
+    // no clock. Setting it first and then applying the snapshot would take the clock
+    // straight back down again.
+    if (data.snapshot) applyGameUpdate({ frame: data.snapshot, turn: data.turn })
+    else applyTurnTiming(data.turn)
     const opp = opponentName()
     toast(`Playing vs ${opp} (seat ${data.seat + 1})`)
     updateHud()
   })
-  socket.on('match:start', (data: { snapshot: FrameSnapshotData; frameIndex: number }) => {
+  socket.on('match:start', (data: { snapshot: FrameSnapshotData; frameIndex: number; turn?: TurnTiming }) => {
     frameIndex = data.frameIndex
     // A new match replaces the table outright, so any replay in flight is void.
     abandonPlayback()
     frame = data.snapshot
     myTurn = mySeat !== undefined && data.snapshot.turnIndex === mySeat
+    applyTurnTiming(data.turn)
     toast('Match started!')
     updateHud()
   })
-  socket.on('frame:start', (data: { frameIndex: number; snapshot: FrameSnapshotData }) => {
+  socket.on('frame:start', (data: { frameIndex: number; snapshot: FrameSnapshotData; turn?: TurnTiming }) => {
     frameIndex = data.frameIndex
     // The frame change usually lands straight after the shot that won it, while that
     // shot is still animating, so it queues behind the replay rather than cutting it
@@ -1616,6 +1652,10 @@ function handleSocketEvents(socket: Socket): void {
     if (data.framesWon) framesWon = data.framesWon
     if (activeMatchIsPractice) framesWon = [0, 0]
     myTurn = false
+    // The match is over, so the room has thrown its clock away and this message carries
+    // none. Without this the last deadline a client was given would keep draining behind
+    // the end-of-match screen, counting towards a foul that can no longer happen.
+    applyTurnTiming(null)
     playMatchEnd()
     updateHud()
     void finishMatch(data.winnerSeat, data.reason)

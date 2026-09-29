@@ -29,8 +29,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   minStake: config.MIN_STAKE,
   maxStake: config.MAX_STAKE,
   matchFormats: ['BO1', 'BO3', 'BO5'],
-  turnTimeoutSec: config.MATCH_TURN_TIMEOUT_SEC,
-  reconnectGraceSec: config.MATCH_RECONNECT_GRACE_SEC,
+  turnTimeoutSec: config.MATCH_TURN_TIMEOUT_SEC,  reconnectGraceSec: config.MATCH_RECONNECT_GRACE_SEC,
   maintenanceMode: false,
   realMoneyEnabled: config.REAL_MONEY_ENABLED
 }

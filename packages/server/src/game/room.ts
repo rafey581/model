@@ -107,6 +107,16 @@ export class GameRoom {
    */
   private playbackTimer: NodeJS.Timeout | null = null
   private readonly turnTimeoutSec: number
+  /**
+   * When the current visit's clock runs out, in server epoch milliseconds.
+   *
+   * The authoritative deadline, as opposed to the `setTimeout` that enforces it. A
+   * client cannot work the deadline out for itself: it does not know when the hold on
+   * the room was released, and it has no way to know how far its own clock is from the
+   * server's. It is null whenever no clock is running — before the match starts, while
+   * a shot is still being watched, and on a disconnected or non-human seat.
+   */
+  private turnDeadlineAt: number | null = null
   private callbacks: RoomCallbacks
   private disconnectedAt = new Map<number, number>()
   private deliveredSeqByUser = new Map<string, number>()
@@ -160,6 +170,27 @@ export class GameRoom {
     }
     this.replayWatchers.delete(socketId)
     this.releaseHoldIfNoWatchers()
+    // A clock must not keep running against a seat that has just gone quiet. The
+    // player is not there to see the countdown, and the foul it would eventually
+    // charge them is a foul for a turn they were never given the chance to play. The
+    // clock is only stopped when the seat that left is the one at the table: if the
+    // other player dropped out, the striker is still sitting there and must not be
+    // handed the turn again from the top.
+    if (seat === this.match.currentFrame?.turnIndex) this.stopTurnTimer()
+  }
+
+  /**
+   * Stops the turn clock without starting a new one.
+   *
+   * Separate from arming, because the two are not opposites. Re-arming a striker whose
+   * opponent has dropped out would give that striker their whole turn back.
+   */
+  private stopTurnTimer(): void {
+    if (this.turnTimer) {
+      clearTimeout(this.turnTimer)
+      this.turnTimer = null
+    }
+    this.turnDeadlineAt = null
   }
 
   /**
@@ -242,8 +273,8 @@ export class GameRoom {
     const ready = this.matchType === 'PRACTICE' || this.seatOfUser.size >= 2
     if (!ready) return false
     this.started = true
-    this.broadcast('match:start', { snapshot: this.snapshot(), frameIndex: this.match.frameIndex + 1 })
     this.armTurnTimer()
+    this.broadcast('match:start', { snapshot: this.snapshot(), frameIndex: this.match.frameIndex + 1 })
     this.scheduleBotIfNeeded()
     return true
   }
@@ -264,6 +295,9 @@ export class GameRoom {
       clearTimeout(this.turnTimer)
       this.turnTimer = null
     }
+    // The deadline is cleared with the timeout, so every early return below leaves the
+    // room with no clock running rather than a stale one from the previous visit.
+    this.turnDeadlineAt = null
     if (!this.started || this.stopped) return
     if (this.awaitingPlayback) return
     const frame = this.match.currentFrame
@@ -271,10 +305,30 @@ export class GameRoom {
     const seat = frame.turnIndex
     if (!this.isHumanTurn(seat) || this.isSeatDisconnected(seat)) return
     if (this.turnTimeoutSec <= 0) return
+    this.turnDeadlineAt = Date.now() + this.turnTimeoutSec * 1000
     this.turnTimer = setTimeout(() => {
       this.turnTimer = null
       this.onTurnTimeout()
     }, this.turnTimeoutSec * 1000)
+  }
+
+  /**
+   * The turn timing a client needs in order to show the shot clock.
+   *
+   * `serverNow` travels with the deadline so the client can work out how far its own
+   * clock is from the server's and correct for it. Without that, a client whose machine
+   * runs fast would show time that had already expired, or hide time the player still
+   * had, and the two would disagree about when a foul is coming.
+   *
+   * A zero duration means the turn clock is switched off; a null deadline means no
+   * clock is running at all. Neither is a licence for the client to invent a deadline.
+   */
+  turnTiming(): { turnDeadlineAt: number | null; turnDurationMs: number; serverNow: number } {
+    return {
+      turnDeadlineAt: this.turnDeadlineAt,
+      turnDurationMs: this.turnTimeoutSec > 0 ? this.turnTimeoutSec * 1000 : 0,
+      serverNow: Date.now()
+    }
   }
 
   private onTurnTimeout(): void {
@@ -384,11 +438,14 @@ export class GameRoom {
     if (frameEnded && frameWinner !== null) {
       void this.handleFrameEnd(frameWinner, frame, playback)
     } else {
-      this.broadcast('game:update', { frame: frameSnapshot(frame), events, playback })
-      // Hold the room until this shot has been watched. The hold is taken before the
-      // bot is considered, so a queued update can never overtake the animation.
+      // The hold is taken before the clock is armed, so a turn that begins while a
+      // shot is still being watched does not start counting down behind the
+      // animation. The clock is armed before the broadcast, because the broadcast is
+      // what tells the clients when the turn runs out, and a deadline sent a moment
+      // before it was set would leave every client counting from the wrong instant.
       this.holdForPlayback(playback)
       this.armTurnTimer()
+      this.broadcast('game:update', { frame: frameSnapshot(frame), events, playback })
       this.scheduleBotIfNeeded()
     }
   }
@@ -429,11 +486,13 @@ export class GameRoom {
     } else {
       const nextBreak = frameWinner === 0 ? 1 : 0
       const nextFrame = newFrameForMatch(this.match, nextBreak)
+      // Armed before the broadcast, for the same reason as in commit(): the broadcast
+      // carries the deadline the new frame's turn runs out at.
+      this.armTurnTimer()
       this.broadcast('frame:start', {
         frameIndex: this.match.frameIndex + 1,
         snapshot: frameSnapshot(nextFrame)
       })
-      this.armTurnTimer()
       this.scheduleBotIfNeeded()
     }
   }
@@ -568,7 +627,24 @@ export class GameRoom {
     return { matchId: this.matchId, seq, type, data }
   }
 
+  /**
+   * The events whose payload describes the state of the table, and therefore the
+   * moment any turn clock attached to it.
+   *
+   * Enumerated here rather than attached at each call site so that a new broadcast
+   * carrying frame state cannot be added without a client learning the deadline, and
+   * so the two cannot drift apart. The deadline is read as the broadcast is made, so
+   * every caller must have armed the clock first.
+   */
+  private static readonly TIMED_EVENTS = new Set(['game:update', 'frame:start', 'match:start'])
+
   broadcast(event: string, payload: unknown): void {
+    if (GameRoom.TIMED_EVENTS.has(event) && payload !== null && typeof payload === 'object') {
+      this.callbacks.board
+        .to(`match:${this.matchId}`)
+        .emit(event, { ...(payload as Record<string, unknown>), turn: this.turnTiming() })
+      return
+    }
     this.callbacks.board.to(`match:${this.matchId}`).emit(event, payload)
   }
 
@@ -577,6 +653,7 @@ export class GameRoom {
     this.botTimer = null
     if (this.turnTimer) clearTimeout(this.turnTimer)
     this.turnTimer = null
+    this.turnDeadlineAt = null
     this.stopped = true
   }
 }

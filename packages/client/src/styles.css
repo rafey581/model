@@ -12,6 +12,14 @@
   --felt: #0a6e3e;
   --wood: #3c2415;
   --turn: #2ea043;
+  /*
+   * The three states of the shot clock. The same three hues as the power rail's
+   * gradient, and named here, so the ring and the power bar read as one idea: a
+   * player learns green-means-fine once and it holds for both.
+   */
+  --timer-ok: #2ea043;
+  --timer-warn: #d29922;
+  --timer-urgent: #da3633;
   --hud-gap: 8px;
 }
 
@@ -496,7 +504,118 @@ button.small {
   border: 2px solid var(--border);
   background: var(--panel-2);
   flex: 0 0 auto;
-  overflow: hidden;
+  /*
+   * The frame does not clip, so the shot clock can sit on the rim and its seconds can
+   * hang just off it. The avatar is clipped by its own radius instead, which keeps the
+   * picture perfectly circular while leaving the frame's box open for the clock that
+   * shares it.
+   */
+  overflow: visible;
+}
+
+/* The ring itself carries the clock's colour, so the state of the turn is readable
+   from the colour of the avatar's edge alone. */
+.hud-frame.has-timer {
+  --timer: var(--timer-ok);
+  border-color: var(--timer);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--timer) 30%, transparent);
+  transition: border-color 240ms ease, box-shadow 240ms ease;
+}
+
+.hud-frame.has-timer.is-warn {
+  --timer: var(--timer-warn);
+}
+
+.hud-frame.has-timer.is-urgent {
+  --timer: var(--timer-urgent);
+}
+
+/*
+ * The depleting ring.
+ *
+ * Drawn as a conic gradient whose filled angle is one custom property, over a track
+ * that is always present so a spent clock still reads as a clock rather than as a
+ * blank avatar. The middle is punched out with a mask, which is what turns a filled
+ * disc into a ring, and the whole thing is rotated so the clock starts at twelve
+ * o'clock instead of three.
+ *
+ * A 30-second clock writes one custom property per frame. It repaints this one small
+ * ring and nothing else: no layout, no reflow of the HUD around it, and no element
+ * is created or destroyed while it runs.
+ */
+.shot-timer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: grid;
+  place-items: center;
+}
+
+.shot-timer-arc {
+  position: absolute;
+  inset: -1px;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--timer) calc(var(--progress, 0) * 360deg),
+    rgba(230, 237, 243, 0.12) 0
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+  transform: rotate(-90deg);
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--timer) 45%, transparent));
+}
+
+/*
+ * The seconds, hung off the bottom-right of the rim.
+ *
+ * Deliberately the loudest part of the clock once it is short: the ring shows the
+ * shape of the time left, but the number is what is actually read under pressure.
+ */
+.shot-timer-seconds {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  min-width: 17px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--timer) 88%, black);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 2px var(--panel), 0 1px 3px rgba(0, 0, 0, 0.7);
+  transition: background-color 240ms ease;
+}
+
+/*
+ * The last five seconds.
+ *
+ * A CSS animation rather than a per-frame one, so the pulse costs the compositor
+ * nothing and, more importantly, cannot drift against the ring: both are driven by
+ * the same deadline, and this one is driven by the same class.
+ */
+@keyframes shot-timer-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    filter: brightness(1);
+  }
+  50% {
+    transform: scale(1.09);
+    filter: brightness(1.5);
+  }
+}
+
+.hud-frame.has-timer.is-urgent .shot-timer-seconds {
+  animation: shot-timer-pulse 1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-frame.has-timer.is-urgent .shot-timer-seconds {
+    animation: none;
+  }
 }
 
 .hud-frame.is-turn {
@@ -508,6 +627,7 @@ button.small {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  border-radius: 50%;
   display: block;
 }
 
@@ -516,6 +636,8 @@ button.small {
   place-items: center;
   width: 100%;
   height: 100%;
+  border-radius: 50%;
+  overflow: hidden;
 }
 
 /* A letter, tinted from the name so two players are told apart at a glance. */

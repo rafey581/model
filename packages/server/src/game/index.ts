@@ -234,7 +234,11 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
         room.registerSocket(userId, entry.seat, socket.id)
         socket.join(`match:${matchId}`)
         const current = room.snapshot()
-        socket.emit('match:joined', { matchId, seat: entry.seat, snapshot: current })
+        // The turn timing goes out with the join, not just with the frame broadcasts.
+        // A client that was away missed those, and the deadline it was last told
+        // about has long since passed; without this it would come back to a clock
+        // that says expired, or to no clock at all while the room was still counting.
+        socket.emit('match:joined', { matchId, seat: entry.seat, snapshot: current, turn: room.turnTiming() })
         const missStart = room.deliveredSeqForUser(userId) + 1
         const untilSeq = room.currentSeq()
         if (missStart <= untilSeq) {
