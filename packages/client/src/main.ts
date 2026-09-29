@@ -5,6 +5,9 @@ import { Scene3D } from './game/scene3d.js'
 import type { FrameSnapshotData } from './game/renderer.js'
 import { createCueController } from './game/input.js'
 import type { CueController } from './game/input.js'
+import { createHud, computePrizeCredits, describeBallOn, deriveHudState } from './game/hud.js'
+import type { Hud } from './game/hud.js'
+import { fitTableBox } from './game/layout.js'
 import type { ShotInput, ShotPlayback } from '@snooker/shared'
 import { STAKE_TIERS } from '@snooker/shared'
 import type { Socket } from 'socket.io-client'
@@ -81,7 +84,25 @@ let maintenanceEl: HTMLElement | null = null
 let opponentGone = false
 let gameResizeObserver: ResizeObserver | null = null
 let rgCanvas: HTMLCanvasElement | null = null
+/** The box the table is fitted into; everything else on the page takes its space first. */
+let tableStageEl: HTMLElement | null = null
 let netOverlayEl: HTMLElement | null = null
+/** The one HUD overlay. Null whenever the game screen is not on the page. */
+let hud: Hud | null = null
+/**
+ * The frame the balls strip is allowed to describe.
+ *
+ * Scores and the turn are facts about the frame and are shown the instant the
+ * snapshot lands. What is still on the table is not: the shot that is about to be
+ * watched is the thing that changes it, so drawing it early would report the pot
+ * before the ball has reached the pocket. The strip therefore trails the replay by
+ * one shot and catches up when the replay ends.
+ */
+let hudBallsFrame: FrameSnapshotData | null = null
+/** Sticky dismissal of the controls hint, so it does not come back mid-frame. */
+let hintDismissed = false
+/** What the table is worth, read once from the match rather than recomputed. */
+let matchPrizeCredits = 0
 let dprCap = 2
 let frameEma = 0
 let lastFrameTime = 0
@@ -412,13 +433,6 @@ function opponentName(): string {
   return opp?.user.username ?? 'Opponent'
 }
 
-function ballOnName(ballOn: string): string {
-  if (ballOn === 'RED') return 'Ball on: RED'
-  if (ballOn === 'ANY_COLOUR') return 'Ball on: any colour'
-  const m = /colour:(\d+)/.exec(ballOn)
-  return m ? `Ball on: ${BALL_NAMES[Number(m[1])] ?? 'colour'}` : 'Ball on: colour'
-}
-
 function ballName(id: number): string {
   if (id >= 1 && id <= 15) return 'red'
   return BALL_NAMES[id] ?? `ball ${id}`
@@ -436,26 +450,32 @@ function updateConnChip(): void {
   chip.className = connected ? 'chip-ok' : 'chip-bad'
 }
 
+/**
+ * Feeds the HUD overlay from the authoritative frame state.
+ *
+ * Called on state changes only — a snapshot landing, a frame changing hands, the
+ * replay finishing — and never from the render loop. The component diffs every write
+ * before it makes it, so a call that changes nothing costs nothing.
+ */
 function updateHud(): void {
-  const youEl = document.getElementById('hud-you')
-  const oppEl = document.getElementById('hud-opp')
-  const turnEl = document.getElementById('hud-turn')
-  const metaEl = document.getElementById('hud-meta')
-  const ballEl = document.getElementById('hud-ball')
-  if (youEl) youEl.textContent = currentUser?.username ?? 'You'
-  if (oppEl) oppEl.textContent = opponentName()
-  if (turnEl) {
-    turnEl.textContent = myTurn ? 'YOUR TURN' : 'WAITING'
-    turnEl.className = myTurn ? 'turn-name active' : 'turn-name'
-  }
-  if (metaEl) {
-    metaEl.textContent = activeMatchIsPractice
-      ? `Frame ${frameIndex} · Practice`
-      : `Frame ${frameIndex} · ${matchFormat} · frames ${framesWon[0]}-${framesWon[1]}`
-  }
-  if (ballEl && frame) {
-    ballEl.textContent = `${ballOnName(frame.ballOn)} · ${frame.remainingReds} reds`
-  }
+  if (!hud) return
+  // A replay is on screen, so the table it shows has not finished yet. The strip
+  // stays on the frame the replay started from until it ends.
+  if (shotPlayer === null) hudBallsFrame = frame
+  hud.update(
+    deriveHudState({
+      snapshot: hudBallsFrame,
+      you: { name: currentUser?.username ?? 'You', isBot: false },
+      opponent: { name: opponentName(), isBot: activeMatchIsPractice },
+      mySeat,
+      showMatchResult: matchPrizeCredits > 0,
+      prizeCredits: matchPrizeCredits,
+      framesWon,
+      frameIndex,
+      format: matchFormat,
+      practice: activeMatchIsPractice
+    })
+  )
 }
 
 function updateOpponentGone(): void {
@@ -470,10 +490,19 @@ async function loadMatchMeta(matchId: string): Promise<void> {
   try {
     const data = await api<{
       format?: string
+      stakePerPlayer?: number | string
+      platformFeePct?: number | string
       players?: Array<{ id: string; userId: string; seat: number; user: { id: string; username: string } }>
     }>(`/matches/${matchId}`)
     matchFormat = data.format ?? matchFormat
     players = data.players ?? []
+    // The match row carries the stake and the fee the prize was settled from, so the
+    // top bar can show what the table is worth from the first frame. Prisma hands
+    // decimals back as strings, hence the Number on both. A zero stake is a practice
+    // match, which is what gates the prize on and off without a second flag.
+    const stake = Number(data.stakePerPlayer ?? 0)
+    const feePct = Number(data.platformFeePct ?? 0)
+    matchPrizeCredits = stake > 0 ? computePrizeCredits(stake, feePct) : 0
     updateHud()
   } catch {
     void 0
@@ -738,6 +767,11 @@ async function finishMatch(winnerSeat: number, reason?: string): Promise<void> {
 
 function render(): void {
   app.innerHTML = ''
+  // The game screen is the only full-height page; every other screen is a scrolling
+  // column, so the class is reset here rather than left behind by the last render.
+  app.className = 'app-root'
+  document.body.classList.remove('game-mode')
+  hud = null
   app.appendChild(header())
   if (!currentUser) {
     renderAuth()
@@ -1243,16 +1277,29 @@ function enterMatch(matchId: string, isPractice = false): void {
   void loadMatchMeta(matchId)
 }
 
+/**
+ * Fits the table to the space the layout has left over and sizes the canvas to match.
+ *
+ * Measured off the stage rather than the window, so the HUD and the controls can take
+ * their space first and the page still ends up exactly one screen tall. The fitting
+ * itself is in game/layout.ts, where it can be tested without a page.
+ */
 function applyCanvasSize(): void {
   const canvas = rgCanvas
-  if (!canvas) return
+  const stage = tableStageEl
+  if (!canvas || !stage) return
+  const { width, height } = fitTableBox(stage.clientWidth, stage.clientHeight)
+  if (width <= 0 || height <= 0) return
   const frame = canvas.parentElement
-  if (!frame) return
+  if (frame instanceof HTMLElement) {
+    frame.style.width = `${width}px`
+    frame.style.height = `${height}px`
+  }
   const dpr = Math.min(dprCap, window.devicePixelRatio || 1)
-  const w = Math.max(320, Math.floor(frame.clientWidth * dpr))
-  const h = Math.max(180, Math.floor(w * (640 / 1200)))
-  canvas.width = w
-  canvas.height = h
+  const w = Math.max(320, Math.floor(width * dpr))
+  const h = Math.max(180, Math.floor(height * dpr))
+  if (canvas.width !== w) canvas.width = w
+  if (canvas.height !== h) canvas.height = h
   scene3d?.resize(w, h)
 }
 
@@ -1268,65 +1315,53 @@ function updateNetOverlay(): void {
 
 function renderGame(): void {
   app.innerHTML = ''
+  app.className = 'app-root app-game'
+  document.body.classList.add('game-mode')
   app.appendChild(header())
-  const container = el('div')
+  const page = el('div', 'game-page')
 
-  const strip = el('div', 'match-strip')
-  const leftCol = el('div', 'col')
-  const youEl = el('div', 'name-you', currentUser?.username ?? 'You')
-  youEl.id = 'hud-you'
-  leftCol.appendChild(youEl)
-  const turnEl = el('div', 'turn-name', myTurn ? 'YOUR TURN' : 'WAITING')
-  turnEl.id = 'hud-turn'
-  turnEl.setAttribute('aria-live', 'polite')
-  turnEl.setAttribute('role', 'status')
-  leftCol.appendChild(turnEl)
-  strip.appendChild(leftCol)
+  // The HUD is mounted once and then only updated. Both renderers read from the same
+  // component, which is what stops the 3D and 2D halves of the screen disagreeing.
+  hud = createHud()
+  page.appendChild(hud.root)
 
-  const centerCol = el('div', 'col center')
-  const metaEl = el('div', 'meta-line')
-  metaEl.id = 'hud-meta'
-  centerCol.appendChild(metaEl)
-  const ballEl = el('div', 'meta-line')
-  ballEl.id = 'hud-ball'
-  centerCol.appendChild(ballEl)
-  strip.appendChild(centerCol)
-
-  const rightCol = el('div', 'col right')
-  const oppEl = el('div', 'name-opp', opponentName())
-  oppEl.id = 'hud-opp'
-  rightCol.appendChild(oppEl)
-  strip.appendChild(rightCol)
-  container.appendChild(strip)
-  updateHud()
-
-  const oppHolder = el('div')
-  oppHolder.id = 'opp-holder'
-  container.appendChild(oppHolder)
-
+  const stage = el('div', 'table-stage')
   const tableFrame = el('div', 'table-frame')
   const canvas = el('canvas') as HTMLCanvasElement
   canvas.id = 'game-canvas'
   canvas.setAttribute('role', 'img')
   canvas.setAttribute('aria-label', 'Snooker table — aim with pointer or touch, arrows for spin, Space to shoot')
   rgCanvas = canvas
+  tableStageEl = stage
   tableFrame.appendChild(canvas)
   const overlay = el('div', 'net-overlay')
   overlay.appendChild(el('p', undefined, 'Connection lost — reconnecting…'))
   tableFrame.appendChild(overlay)
   netOverlayEl = overlay
   updateNetOverlay()
-  container.appendChild(tableFrame)
-  applyCanvasSize()
-  gameResizeObserver?.disconnect()
-  gameResizeObserver = new ResizeObserver(() => applyCanvasSize())
-  gameResizeObserver.observe(tableFrame)
-  dprCap = 2
-  frameEma = 0
-  slowFrames = 0
+  const oppHolder = el('div')
+  oppHolder.id = 'opp-holder'
+  tableFrame.appendChild(oppHolder)
+  stage.appendChild(tableFrame)
+  page.appendChild(stage)
 
-  scene3d?.dispose()
-  scene3d = Scene3D.create(canvas, canvas.width, canvas.height)
+  const bar = el('div', 'controls-bar')
+  if (!hintDismissed) {
+    const hint = el('div', 'controls-hint')
+    hint.appendChild(
+      el('span', undefined, 'Aim: mouse or touch · Power: press & hold to charge (or drag back) · Spin: arrows · Shoot: release or Space')
+    )
+    const dismiss = el('button', 'hint-close', '×')
+    dismiss.title = 'Hide these controls for this session'
+    dismiss.setAttribute('aria-label', 'Hide the controls hint')
+    dismiss.onclick = () => {
+      hintDismissed = true
+      hint.remove()
+    }
+    hint.appendChild(dismiss)
+    bar.appendChild(hint)
+  }
+  page.appendChild(bar)
 
   const powerLabel = el('div', 'power-label', 'Power')
   const powerFill = el('div', 'power-fill')
@@ -1336,29 +1371,42 @@ function renderGame(): void {
   powerGroup.appendChild(powerLabel)
   powerGroup.appendChild(powerBar)
   const spinLabel = el('div', 'spin-label', 'Spin: 0.0 / 0.0')
+  const gauges = el('div', 'control-gauges')
+  gauges.append(powerGroup, spinLabel)
+  bar.appendChild(gauges)
 
-  const bar = el('div', 'controls-bar')
-  bar.appendChild(el('div', 'muted', 'Aim: mouse or touch · Power: press & hold to charge (or drag back) · Spin: arrows · Shoot: release or Space'))
-  bar.appendChild(powerGroup)
-  bar.appendChild(spinLabel)
-  const soundBtn = el('button', 'ghost', isSoundMuted() ? 'Sound: off' : 'Sound: on')
+  // The three session buttons, in one quiet cluster in the corner rather than the
+  // full-width bar they used to be: they are needed occasionally, not per shot.
+  const actions = el('div', 'control-actions')
+  const soundBtn = el('button', 'ghost small', isSoundMuted() ? 'Sound: off' : 'Sound: on')
   soundBtn.onclick = () => {
     const next = !isSoundMuted()
     setSoundMuted(next)
     soundBtn.textContent = next ? 'Sound: off' : 'Sound: on'
   }
-  bar.appendChild(soundBtn)
-  const concedeBtn = el('button', 'danger', activeMatchIsPractice ? 'Finish practice' : 'Concede')
+  const concedeBtn = el('button', 'ghost small', activeMatchIsPractice ? 'Finish' : 'Concede')
   concedeBtn.onclick = () => {
     if (activeMatchIsPractice) void finishPractice()
     else askConcede()
   }
-  bar.appendChild(concedeBtn)
-  const leaveBtn = el('button', 'ghost', 'Leave')
+  const leaveBtn = el('button', 'ghost small', 'Leave')
   leaveBtn.onclick = () => leaveToLobby()
-  bar.appendChild(leaveBtn)
-  container.appendChild(bar)
-  app.appendChild(container)
+  actions.append(soundBtn, concedeBtn, leaveBtn)
+  bar.appendChild(actions)
+
+  app.appendChild(page)
+  applyCanvasSize()
+  gameResizeObserver?.disconnect()
+  gameResizeObserver = new ResizeObserver(() => applyCanvasSize())
+  gameResizeObserver.observe(stage)
+  dprCap = 2
+  frameEma = 0
+  slowFrames = 0
+
+  scene3d?.dispose()
+  scene3d = Scene3D.create(canvas, canvas.width, canvas.height)
+
+  updateHud()
   updateOpponentGone()
 
   cueController?.destroy()
@@ -1676,6 +1724,10 @@ function loop(): void {
  * middle of the previous one's animation.
  */
 function finishShot(): void {
+  // The replay is over, so the balls on the table are now the balls the strip is
+  // allowed to describe. This is the one moment the strip catches up, and it is why
+  // it trails the score by one shot instead of jumping ahead of the animation.
+  updateHud()
   if (!shotInFlight) return
   shotInFlight = false
   // The token identifies the replay that was just watched, so an acknowledgement that

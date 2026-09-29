@@ -305,6 +305,8 @@ function updateAvatar(slot: AvatarSlot, side: HudSide): void {
     if (slot.lastMode !== mode) {
       if (mode === 'bot') slot.glyph.innerHTML = ROBOT_SVG
       else slot.glyph.textContent = ''
+      // Lets the stylesheet tint a letter without also tinting the robot.
+      slot.glyph.dataset.mode = mode
       slot.lastMode = mode
     }
     if (mode === 'letter') {
