@@ -692,6 +692,12 @@ button.small {
   display: none;
 }
 
+/* The quiet line under a lobby or tournament card. */
+.meta-line {
+  font-size: 13px;
+  color: var(--muted);
+}
+
 @media (max-height: 620px) {
   .hud-frame-label {
     display: none;
