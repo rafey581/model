@@ -10,23 +10,57 @@ export const D_RADIUS = 292
 export const POCKET_RADIUS_CORNER = BALL_RADIUS + 22
 export const POCKET_RADIUS_MIDDLE = BALL_RADIUS + 26
 
-export const CUSHION_RESTITUTION_LONG = 0.8
-export const CUSHION_RESTITUTION_SHORT = 0.75
-export const CUSHION_TANGENTIAL_DAMP = 0.92
-
-export const BALL_RESTITUTION = 0.95
+export const CUSHION_RESTITUTION_LONG = 0.85
+export const CUSHION_RESTITUTION_SHORT = 0.85
+export const CUSHION_TANGENTIAL_DAMP = 0.85
 
 /**
- * Cloth deceleration, in mm/s^2, applied to every rolling ball.
+ * Ball-to-ball coefficient of restitution.
  *
- * A ball rolling on snooker cloth loses roughly 0.2-0.4 m/s^2, so 0.4 m/s^2 sits at
- * the brisk end of real cloth. The figure that matters most is the settle time: at
- * this value a routine shot comes to rest in 4-5 seconds and a full-power break in
- * 5-7, which is what a real table does. The previous 0.09 m/s^2 let a ball coast for
- * 13-19 seconds, roughly three times too long, so shots hung around long after the
- * players had read them.
+ * Phenolic snooker balls collide nearly elastically — measured values sit around
+ * 0.92-0.96 — so 0.96 is the authentic figure: an object ball leaves a full hit
+ * carrying almost the whole of the cue ball's pace, which is what stops the pack
+ * feeling heavy and object balls dying on the spot they were struck.
  */
-export const ROLL_FRICTION = 400
+export const BALL_RESTITUTION = 0.96
+
+/**
+ * Sliding friction, in mm/s^2, applied to a ball that is still skidding.
+ *
+ * Right after the strike a snooker ball is sliding, not rolling, and sliding cloth
+ * drags roughly five to eight times harder than rolling resistance does. 1800
+ * mm/s^2 (1.8 m/s^2) sits in that band. The slide phase only lasts while the ball
+ * is quick — it hands over to rolling resistance below `SLIDE_SPEED_THRESHOLD` —
+ * so its job is the short, brisk scrub that takes the edge off a hard shot
+ * immediately after impact, exactly the way cloth does.
+ */
+export const SLIDE_FRICTION = 1800
+/**
+ * The speed, in mm/s, below which a ball is treated as rolling rather than sliding.
+ *
+ * Roughly the pace at which a snooker ball's surface speed matches its centre —
+ * natural roll — reached in a fraction of a second on anything but a soft stun
+ * shot. Below it the ball rolls and only rolling resistance applies.
+ */
+export const SLIDE_SPEED_THRESHOLD = 800
+/**
+ * Rolling resistance coefficient: the constant-deceleration model of C_rr.
+ *
+ * On snooker cloth C_rr sits around 0.01-0.015; the game uses g*C_rr with g in
+ * mm/s^2, so 0.018 * 9810 = 176.6 mm/s^2 — at the glidey end of real cloth, so
+ * balls run on to the pocket rather than dying short of it. The old single-phase
+ * model (400 mm/s^2 at every speed) over-braked exactly this: the last stretch of
+ * every pot arrived with an abrupt stop.
+ */
+export const CLOTH_CRR = 0.018
+export const GRAVITY_MM_S2 = 9810
+/**
+ * Rolling deceleration in mm/s^2, derived from the coefficient above.
+ *
+ * Kept as a named constant rather than computed at the call site so the value the
+ * simulation uses is the one the tests read.
+ */
+export const ROLL_FRICTION = CLOTH_CRR * GRAVITY_MM_S2
 // Fractional spin bleed-off per second: spin retains (1 - SPIN_FRICTION)^TICK_RATE
 // each second, i.e. about 37% per second at 1.
 export const SPIN_FRICTION = 1

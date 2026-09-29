@@ -15,7 +15,12 @@ import {
   POCKET_RADIUS_CORNER,
   POCKET_RADIUS_MIDDLE,
   CUSHION_TANGENTIAL_DAMP,
+  CUSHION_RESTITUTION_LONG,
+  CUSHION_RESTITUTION_SHORT,
+  CLOTH_CRR,
   ROLL_FRICTION,
+  SLIDE_FRICTION,
+  SLIDE_SPEED_THRESHOLD,
   BALL_RESTITUTION,
   TICK_DT,
   MAX_CUE_SPEED,
@@ -65,8 +70,156 @@ function launchSpeed(power: number): number {
   )
   const cue = out.balls.find((b) => b.isCue)!
   const travelled = cue.pos.x - startX
-  return (travelled + 0.5 * ROLL_FRICTION * TICK_DT * TICK_DT) / TICK_DT
+  // Every launch this helper measures is above the slide threshold, so the
+  // deceleration the ball felt across its first tick is the sliding one.
+  const deceleration = power * MAX_CUE_SPEED > SLIDE_SPEED_THRESHOLD ? SLIDE_FRICTION : ROLL_FRICTION
+  return (travelled + 0.5 * deceleration * TICK_DT * TICK_DT) / TICK_DT
 }
+
+describe('WPBSA collision and cloth model', () => {
+  it('uses near-elastic ball contact at e = 0.96', () => {
+    // Phenolic snooker balls measure 0.92-0.96; the sim is set to the authentic
+    // top of that band so object balls leave a full hit carrying almost all of
+    // the cue ball's pace.
+    expect(BALL_RESTITUTION).toBe(0.96)
+  })
+
+  it('rebounds off both rail lengths at 0.85 with 0.85 tangential retention', () => {
+    expect(CUSHION_RESTITUTION_LONG).toBe(0.85)
+    expect(CUSHION_RESTITUTION_SHORT).toBe(0.85)
+    expect(CUSHION_TANGENTIAL_DAMP).toBe(0.85)
+  })
+
+  it('rolls at C_rr = 0.018 and slides harder than it rolls', () => {
+    expect(CLOTH_CRR).toBe(0.018)
+    expect(ROLL_FRICTION).toBeCloseTo(CLOTH_CRR * 9810, 6)
+    // Sliding cloth drags several times harder than rolling resistance, which is
+    // the whole point of the split: hard shots lose their edge quickly, then glide.
+    expect(SLIDE_FRICTION).toBeGreaterThan(ROLL_FRICTION * 5)
+  })
+
+  it('splits the cloth into a slide phase above the threshold and a roll phase below it', () => {
+    // Measured per tick on an open table: the speed shed in one tick while sliding
+    // must be the sliding deceleration, and the speed shed while rolling must be
+    // the rolling one — not a blend, and not one constant everywhere.
+    const speedAfterTick = (power: number): number => {
+      const out = simulateStroke(
+        loneCueBall(700, TABLE_WIDTH / 2),
+        { aimAngle: 0, power, spin: { x: 0, y: 0 } },
+        { maxTicks: 1 }
+      )
+      return out.balls.find((b) => b.isCue)!.vel.x
+    }
+    const slidFrom = 0.3 * MAX_CUE_SPEED
+    const rolledFrom = 0.05 * MAX_CUE_SPEED
+    expect(slidFrom).toBeGreaterThan(SLIDE_SPEED_THRESHOLD)
+    expect(rolledFrom).toBeLessThan(SLIDE_SPEED_THRESHOLD)
+    expect(slidFrom - speedAfterTick(0.3)).toBeCloseTo(SLIDE_FRICTION * TICK_DT, 6)
+    expect(rolledFrom - speedAfterTick(0.05)).toBeCloseTo(ROLL_FRICTION * TICK_DT, 6)
+  })
+
+  it('hands the object ball (1+e)/2 of the closing pace on a full hit', () => {
+    // Equal masses, stationary object: the analytic transfer is (1+e)/2, so at
+    // e = 0.96 the object ball leaves a full hit at 98% of the contact pace. Object
+    // balls dying on the spot they were struck is what made the pack feel heavy;
+    // the run distance is the direct read-out of the pace they actually left with.
+    // Everything here is below the slide threshold, so the closed form for a
+    // constant deceleration is exact: run = v² / (2a).
+    const atContact = 600
+    const gap = 300
+    const objectStart = 700 + gap + BALL_DIAMETER
+    const launch = Math.sqrt(atContact * atContact + 2 * ROLL_FRICTION * gap)
+    const result = simulateStroke(twoBallRack(BALL_IDS.RED_MIN, objectStart), {
+      aimAngle: 0,
+      power: launch / MAX_CUE_SPEED,
+      spin: { x: 0, y: 0 }
+    })
+    expect(result.events.some((e) => e.type === 'BALL_HIT')).toBe(true)
+    expect(result.events.filter((e) => e.type === 'CUSHION')).toHaveLength(0)
+    const object = result.balls.find((b) => b.id === BALL_IDS.RED_MIN)!
+    const run = object.pos.x - objectStart
+    const leaveSpeed = (atContact * (1 + BALL_RESTITUTION)) / 2
+    const expectedRun = (leaveSpeed * leaveSpeed) / (2 * ROLL_FRICTION)
+    // The slack covers the discrete step the contact is detected on (up to a
+    // quarter-radius of cue travel, which shortens the object's run a little).
+    expect(run).toBeGreaterThan(expectedRun * 0.97)
+    expect(run).toBeLessThan(expectedRun * 1.03)
+  })
+
+  it('keeps linear momentum through a ball-ball collision', () => {
+    // Momentum along the line of centres is conserved exactly by the impulse
+    // resolver; what restitution changes is only how the pace is shared.
+    const atContact = 700
+    const gap = 200
+    const launch = Math.sqrt(atContact * atContact + 2 * ROLL_FRICTION * gap)
+    const result = simulateStroke(twoBallRack(BALL_IDS.RED_MIN, 700 + gap + BALL_DIAMETER), {
+      aimAngle: 0,
+      power: launch / MAX_CUE_SPEED,
+      spin: { x: 0, y: 0 }
+    })
+    const hit = result.events.find((e) => e.type === 'BALL_HIT')!.tick
+    // Replay to the tick after contact and sum both balls' x-momentum there.
+    const after = simulateStroke(twoBallRack(BALL_IDS.RED_MIN, 700 + gap + BALL_DIAMETER), {
+      aimAngle: 0,
+      power: launch / MAX_CUE_SPEED,
+      spin: { x: 0, y: 0 }
+    }, { maxTicks: hit + 2 })
+    const cue = after.balls.find((b) => b.isCue)!
+    const object = after.balls.find((b) => b.id === BALL_IDS.RED_MIN)!
+    // Before the collision all the momentum was the cue ball's; the two-body sum
+    // afterwards must match it to within the friction one extra tick of rolling
+    // applies to each ball (simulated independently, so the sum is off only by
+    // the difference of what friction took from each — bounded by the full
+    // per-tick shed of both).
+    const before = (launch - ROLL_FRICTION * TICK_DT * (hit + 2))
+    const total = cue.vel.x + object.vel.x
+    expect(before - total).toBeLessThan(SLIDE_FRICTION * TICK_DT * 2)
+  })
+
+  it('glides the last stretch into the pocket instead of braking abruptly', () => {
+    // The complaint the split fixes: a single high constant made the final crawl
+    // shed speed in big linear bites and stop with a thud. Under the roll model
+    // the closing steps shrink smoothly, so the last sampled steps are a small
+    // fraction of the first and each is smaller than the one before it.
+    const result = simulateStroke(layoutTableBalls(), { aimAngle: 0, power: 0.4, spin: { x: 0, y: 0 } }, {
+      maxTicks: 120 * 60,
+      playback: { rate: 30 }
+    })
+    const trail = result.keyframes!.filter((k) => k.balls.some(([id]) => id === BALL_IDS.CUE))
+    const steps: number[] = []
+    let previous: { x: number; y: number } | null = null
+    for (const keyframe of trail) {
+      const sample = keyframe.balls.find(([id]) => id === BALL_IDS.CUE)
+      if (!sample) continue
+      if (previous) steps.push(Math.hypot(sample[1] - previous.x, sample[2] - previous.y))
+      previous = { x: sample[1], y: sample[2] }
+    }
+    const moving = steps.filter((s) => s > 0)
+    expect(moving.length).toBeGreaterThan(4)
+    const last = moving[moving.length - 1]!
+    const first = moving[0]!
+    expect(last).toBeLessThan(first * 0.05)
+  })
+
+  it('keeps spin alive through contact for stun and follow', () => {
+    // The spin budget must survive the run to the object ball: a stun shot at
+    // contact range still stops dead, and a follow still carries through, both
+    // measured at the contact tick like the draw test above.
+    const cueVelAtContact = (spinY: number): number => {
+      for (let maxTicks = 1; maxTicks <= 200; maxTicks++) {
+        const result = simulateStroke(twoBallRack(), { aimAngle: 0, power: 0.6, spin: { x: 0, y: spinY } }, { maxTicks })
+        if (result.firstContactId !== null) return result.balls.find((b) => b.isCue)!.vel.x
+      }
+      throw new Error('never reached contact')
+    }
+    const stun = cueVelAtContact(0)
+    const follow = cueVelAtContact(1)
+    const draw = cueVelAtContact(-1)
+    expect(stun).toBeGreaterThan(0)
+    expect(follow).toBeGreaterThan(stun)
+    expect(draw).toBeLessThan(0)
+  })
+})
 
 describe('physics', () => {
   it('places 22 balls on the table with no overlaps', () => {
@@ -293,10 +446,9 @@ describe('ball contact', () => {
     // A gentle pace keeps each step of travel small, so the contact is detected
     // close to the true point of contact, and gentle enough that neither ball
     // reaches a cushion: a rebound would destroy the straight-line measurement.
-    // It also has to be quick enough that the object ball is still rolling when
-    // it stops. The cloth now takes 0.4 m/s^2 off a ball every second, so a
-    // slower contact pace than this leaves a 60 degree cut barely moving before
-    // friction halts it, and there is no line left to measure a throw against.
+    // It also sits below the slide threshold, so the whole run is pure rolling
+    // resistance and the launch needed to arrive at `atContact` is the exact
+    // closed form under the constant-deceleration model.
     const atContact = 400
     const gap = along - BALL_DIAMETER * Math.cos(theta)
     const launch = Math.sqrt(atContact * atContact + 2 * ROLL_FRICTION * gap)
@@ -826,7 +978,10 @@ describe('playback', () => {
     // which is only true if the substeps divide the tick.
     const expected = (power: number) => {
       const v0 = power * MAX_CUE_SPEED
-      return v0 * TICK_DT - 0.5 * ROLL_FRICTION * TICK_DT * TICK_DT
+      // The two-phase cloth: the deceleration of the tick is the phase the launch
+      // speed sits in, which for these two powers is slide for 0.3 and roll for 0.03.
+      const deceleration = v0 > SLIDE_SPEED_THRESHOLD ? SLIDE_FRICTION : ROLL_FRICTION
+      return v0 * TICK_DT - 0.5 * deceleration * TICK_DT * TICK_DT
     }
     expect(after(0.3)).toBeCloseTo(expected(0.3), 1)
     expect(after(0.03)).toBeCloseTo(expected(0.03), 1)

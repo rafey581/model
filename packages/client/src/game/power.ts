@@ -35,6 +35,14 @@ export const POWER_DRAG_FULL_PX = 300
 
 /** One wheel notch, and one press of the fine-adjust keys. */
 export const POWER_FINE_STEP = 0.04
+/**
+ * One tap of the arrow keys.
+ *
+ * Finer than the wheel and the +/- keys, because the arrows are the trimming
+ * control: a player nudging power up two or three percent to drop the cue ball
+ * dead wants taps, not jumps.
+ */
+export const POWER_ARROW_STEP = 0.02
 
 export function clampPower(value: number): number {
   if (Number.isNaN(value)) return POWER_MIN

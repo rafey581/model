@@ -10,12 +10,13 @@ const HALF_W = TABLE_WIDTH / 2
 const CUSHION_H = 12
 /**
  * The cue tip's position in the stick's own space. The stick's origin sits at the
- * centre of the shaft, so the tip is well short of half the length: the tip ferrule
- * ends at 626mm forward, not at 750mm. Backing the stick off by half the length
- * instead of by this number left the tip floating a ball's width or more away from
- * the ball it was addressing.
+ * centre of the shaft, so the tip is well short of half the length: with the
+ * ferrule (to 627) and the chalk tip (to 641) crowning the shaft, the striking
+ * end is at 641mm forward. Backing the stick off by half the length instead of by
+ * this number left the tip floating a ball's width or more away from the ball it
+ * was addressing.
  */
-const STICK_TIP_Y = 626
+const STICK_TIP_Y = 641
 /** How far the tip pulls back from the ball at rest, before any power draw-back. */
 const STICK_REST_GAP = 8
 /** How far the tip draws back at full power, as the player loads the shot. */
@@ -160,6 +161,64 @@ function woodTexture(): THREE.CanvasTexture {
   })
 }
 
+/**
+ * A straight-grained cue timber: ash for the shaft, dark maple for the butt.
+ *
+ * Cue grain runs lengthwise along the taper, so the canvas is ruled with long
+ * vertical figure lines and only slight tone drift between them — a cue's beauty
+ * is in its even, narrow stripes rather than the wide irregular plank figure the
+ * table wood uses.
+ */
+function cueWoodTexture(key: string, base: { r: number; g: number; b: number }, figure: number): THREE.CanvasTexture {
+  return cachedTexture(key, () => {
+    const size = 256
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = `rgb(${base.r}, ${base.g}, ${base.b})`
+    ctx.fillRect(0, 0, size, size)
+    for (let x = 0; x < size; x++) {
+      const wobble = Math.sin(x * 0.35) * 6 + Math.sin(x * 0.11) * 10
+      const tone = base.r + Math.sin(x * 0.8 + wobble) * figure
+      ctx.fillStyle = `rgba(${Math.round(Math.max(0, tone))}, ${Math.round(base.g * (tone / base.r))}, ${Math.round(base.b * (tone / base.r))}, 0.5)`
+      ctx.fillRect(x, 0, 1, size)
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.05)'
+    for (let i = 0; i < 12; i++) {
+      const y = Math.random() * size
+      ctx.fillRect(0, y, size, 1)
+    }
+    const texture = new THREE.CanvasTexture(canvas)
+    texture.colorSpace = THREE.SRGBColorSpace
+    return texture
+  })
+}
+
+/**
+ * The inner shading of a pocket: darkness at the bottom fading up the walls.
+ *
+ * Painted onto a cylinder lining the pocket's drop, it is what turns a hole into
+ * a depth: a flat black disc reads as a decal, a shaded throat reads as somewhere
+ * for the ball to go.
+ */
+function pocketDepthTexture(): THREE.CanvasTexture {
+  return cachedTexture('pocket-depth', () => {
+    const size = 128
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')!
+    const grad = ctx.createRadialGradient(size / 2, size / 2, 4, size / 2, size / 2, size / 2)
+    grad.addColorStop(0, 'rgba(0,0,0,1)')
+    grad.addColorStop(0.55, 'rgba(0,0,0,0.85)')
+    grad.addColorStop(1, 'rgba(30,18,10,0.25)')
+    ctx.fillStyle = grad
+    ctx.fillRect(0, 0, size, size)
+    return new THREE.CanvasTexture(canvas)
+  })
+}
+
 function envTexture(): THREE.CanvasTexture {
   return cachedTexture('env', () => {
     const w = 1024
@@ -201,12 +260,16 @@ class BallRig {
   sinkTarget = new THREE.Vector3()
 
   constructor(radius: number, color: number, shadowTex: THREE.CanvasTexture) {
+    // Phenolic resin: a hard, near-mirror lacquer over a dull core. The clearcoat
+    // carries the lamp reflections (fully on, tight), the base layer keeps a low
+    // roughness with no metallic response, and the environment map supplies the
+    // studio highlights that sell the polish.
     this.material = new THREE.MeshPhysicalMaterial({
       color,
-      roughness: 0.14,
-      metalness: 0.06,
-      clearcoat: 0.7,
-      clearcoatRoughness: 0.2,
+      roughness: 0.12,
+      metalness: 0.0,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.1,
       emissive: 0x000000
     })
     this.sphere = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 28), this.material)
@@ -307,23 +370,34 @@ export class Scene3D {
   }
 
   private buildLighting(): void {
-    const hemi = new THREE.HemisphereLight(0xdfe8ff, 0x3a2f24, 1.15)
+    // Overhead rig: three spotlights hung like the lamps over a real table — one
+    // over each half of the cloth and one over the centre — so every cushion and
+    // the middle of the bed get their own pooling of light and their own soft
+    // shadow directly beneath. Directional lights cast one flat set of shadows
+    // from one direction, which is the look this replaces.
+    const spots: Array<{ x: number; z: number; intensity: number }> = [
+      { x: 0, z: 0, intensity: 2600000 },
+      { x: -HALF_L * 0.62, z: 0, intensity: 1900000 },
+      { x: HALF_L * 0.62, z: 0, intensity: 1900000 }
+    ]
+    for (const spec of spots) {
+      const spot = new THREE.SpotLight(0xffecc9, spec.intensity, 0, Math.PI / 4.6, 0.55, 2)
+      spot.position.set(spec.x, 1650, spec.z)
+      spot.target.position.set(spec.x, 0, spec.z)
+      spot.castShadow = true
+      spot.shadow.mapSize.set(1024, 1024)
+      spot.shadow.camera.near = 400
+      spot.shadow.camera.far = 4000
+      spot.shadow.bias = -0.0018
+      spot.shadow.radius = 3
+      this.scene.add(spot)
+      this.scene.add(spot.target)
+    }
+
+    const hemi = new THREE.HemisphereLight(0xdfe8ff, 0x3a2f24, 0.5)
     this.scene.add(hemi)
 
-    const key = new THREE.DirectionalLight(0xfff2df, 2.4)
-    key.position.set(-1400, 2800, 2100)
-    key.castShadow = true
-    key.shadow.mapSize.set(2048, 2048)
-    key.shadow.camera.left = -2200
-    key.shadow.camera.right = 2200
-    key.shadow.camera.top = 1500
-    key.shadow.camera.bottom = -1500
-    key.shadow.camera.near = 200
-    key.shadow.camera.far = 6500
-    key.shadow.bias = -0.002
-    this.scene.add(key)
-
-    const fill = new THREE.DirectionalLight(0x9fc0e8, 0.45)
+    const fill = new THREE.DirectionalLight(0x9fc0e8, 0.3)
     fill.position.set(2200, 1200, -1100)
     this.scene.add(fill)
   }
@@ -421,16 +495,37 @@ export class Scene3D {
     addBox(44, shortLen, HALF_L + 22, 0)
     addNoseShort(shortLen, HALF_L)
 
-    const pocketMat = new THREE.MeshStandardMaterial({ color: 0x04060a, roughness: 0.4, side: THREE.DoubleSide })
-    const rimMat = new THREE.MeshStandardMaterial({ color: 0xd8b15c, roughness: 0.3, metalness: 0.8 })
-    const pocketGeo = new Map<number, { disc: THREE.BufferGeometry; hole: THREE.BufferGeometry; rim: THREE.BufferGeometry }>()
+    // Leather drop pockets: a shaded throat cylinder recessed below the bed, a
+    // dark inner drop, and a leather-look rim ring. The depth texture on the
+    // throat's inside face is what makes the hole read as a cavity rather than a
+    // flat decal — darkness pooling at the bottom, leather tone up the walls.
+    const throatMat = new THREE.MeshStandardMaterial({
+      map: pocketDepthTexture(),
+      color: 0x2a1a10,
+      roughness: 0.9,
+      metalness: 0,
+      side: THREE.BackSide
+    })
+    const dropMat = new THREE.MeshBasicMaterial({ color: 0x000000 })
+    const mouthShadowMat = new THREE.MeshBasicMaterial({
+      map: contactShadowTexture(),
+      transparent: true,
+      depthWrite: false
+    })
+    const leatherMat = new THREE.MeshStandardMaterial({ color: 0x5a3a22, roughness: 0.75, metalness: 0.05 })
+    const brassLipMat = new THREE.MeshStandardMaterial({ color: 0xd8b15c, roughness: 0.3, metalness: 0.8 })
+    const pocketGeo = new Map<
+      number,
+      { throat: THREE.BufferGeometry; drop: THREE.BufferGeometry; lip: THREE.BufferGeometry; shadow: THREE.BufferGeometry }
+    >()
     const geoFor = (radius: number) => {
       const cached = pocketGeo.get(radius)
       if (cached) return cached
       const made = {
-        disc: new THREE.CircleGeometry(radius, 28),
-        hole: new THREE.CylinderGeometry(radius * 0.7, radius * 0.92, 80, 24, 1, true),
-        rim: new THREE.TorusGeometry(radius + 4, 3.2, 12, 32)
+        throat: new THREE.CylinderGeometry(radius * 0.98, radius * 0.8, 90, 28, 1, true),
+        drop: new THREE.CircleGeometry(radius * 0.8, 24),
+        lip: new THREE.TorusGeometry(radius + 4, 4.5, 14, 36),
+        shadow: new THREE.CircleGeometry(radius * 1.35, 28)
       }
       pocketGeo.set(radius, made)
       return made
@@ -439,19 +534,32 @@ export class Scene3D {
       const x = tableX(p.x)
       const z = tableZ(p.y)
       const geo = geoFor(p.radius)
-      const disc = new THREE.Mesh(geo.disc, pocketMat)
-      disc.rotation.x = -Math.PI / 2
-      disc.position.set(x, CUSHION_H + 1.2, z)
-      disc.renderOrder = 5
-      this.scene.add(disc)
-      const hole = new THREE.Mesh(geo.hole, pocketMat)
-      hole.position.set(x, CUSHION_H + 1.2 - 40, z)
-      hole.renderOrder = 5
-      this.scene.add(hole)
-      const rim = new THREE.Mesh(geo.rim, rimMat)
-      rim.rotation.x = -Math.PI / 2
-      rim.position.set(x, CUSHION_H + 2.2, z)
-      this.scene.add(rim)
+      // Inner shadow ring on the bed around the mouth, softening the cloth edge.
+      const shadow = new THREE.Mesh(geo.shadow, mouthShadowMat)
+      shadow.rotation.x = -Math.PI / 2
+      shadow.position.set(x, CUSHION_H + 1.1, z)
+      shadow.renderOrder = 4
+      this.scene.add(shadow)
+      // The throat: open-ended cylinder seen from inside, recessed below the bed.
+      const throat = new THREE.Mesh(geo.throat, throatMat)
+      throat.position.set(x, CUSHION_H + 1.2 - 45, z)
+      throat.renderOrder = 5
+      this.scene.add(throat)
+      // The bottom of the drop.
+      const drop = new THREE.Mesh(geo.drop, dropMat)
+      drop.rotation.x = -Math.PI / 2
+      drop.position.set(x, CUSHION_H + 1.2 - 90, z)
+      this.scene.add(drop)
+      // Leather cushion rim, brass-lipped.
+      const lip = new THREE.Mesh(geo.lip, leatherMat)
+      lip.rotation.x = -Math.PI / 2
+      lip.position.set(x, CUSHION_H + 2.4, z)
+      this.scene.add(lip)
+      const brass = new THREE.Mesh(geo.lip, brassLipMat)
+      brass.rotation.x = -Math.PI / 2
+      brass.scale.set(0.82, 0.82, 1.35)
+      brass.position.set(x, CUSHION_H + 3.0, z)
+      this.scene.add(brass)
     }
 
     const floor = new THREE.Mesh(
@@ -574,22 +682,40 @@ export class Scene3D {
     this.spinLine.frustumCulled = false
     this.scene.add(this.spinLine)
 
+    // A proper cue: ash shaft with lengthwise grain, maple butt section, a brass
+    // ferrule and a chalked blue tip. Geometry shares the stick's own axis (+y is
+    // toward the tip), so every part is positioned along it.
     this.stick = new THREE.Group()
-    const shaft = new THREE.Mesh(
-      new THREE.CylinderGeometry(5.5, 9, 1200, 16),
-      new THREE.MeshStandardMaterial({ color: 0xb07a3e, roughness: 0.5 })
-    )
-    const butt = new THREE.Mesh(
-      new THREE.CylinderGeometry(9, 12.5, 300, 16),
-      new THREE.MeshStandardMaterial({ color: 0x2a1a10, roughness: 0.35 })
-    )
+    const shaftMat = new THREE.MeshStandardMaterial({
+      map: cueWoodTexture('cue-ash', { r: 214, g: 178, b: 122 }, 26),
+      roughness: 0.42,
+      metalness: 0.0
+    })
+    const buttMat = new THREE.MeshStandardMaterial({
+      map: cueWoodTexture('cue-maple', { r: 74, g: 44, b: 26 }, 16),
+      roughness: 0.38,
+      metalness: 0.0
+    })
+    const ferruleMat = new THREE.MeshStandardMaterial({ color: 0xd8b15c, roughness: 0.25, metalness: 0.9 })
+    const chalkMat = new THREE.MeshStandardMaterial({ color: 0x3a6ea5, roughness: 0.95, metalness: 0.0 })
+    // Shaft: taper from the 9mm tip end to the 12.5mm joint, 1200mm long.
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 12.5, 1200, 20), shaftMat)
+    shaft.position.y = 0
+    shaft.castShadow = true
+    // Butt extension past the joint, 300mm, flaring slightly.
+    const butt = new THREE.Mesh(new THREE.CylinderGeometry(12.5, 14, 300, 20), buttMat)
     butt.position.y = -750
-    const tip = new THREE.Mesh(
-      new THREE.CylinderGeometry(5.5, 6, 26, 12),
-      new THREE.MeshStandardMaterial({ color: 0x9fd8f2, roughness: 1 })
-    )
-    tip.position.y = 613
-    this.stick.add(shaft, butt, tip)
+    butt.castShadow = true
+    // Brass ferrule at the tip end of the shaft.
+    const ferrule = new THREE.Mesh(new THREE.CylinderGeometry(5.4, 5.6, 30, 16), ferruleMat)
+    ferrule.position.y = 612
+    // Chalk-blue tip crowning the ferrule.
+    const tip = new THREE.Mesh(new THREE.CylinderGeometry(5.2, 5.4, 14, 16), chalkMat)
+    tip.position.y = 634
+    // A thin decorative ring where the two timbers meet.
+    const joint = new THREE.Mesh(new THREE.CylinderGeometry(12.7, 12.7, 10, 20), ferruleMat)
+    joint.position.y = -598
+    this.stick.add(shaft, butt, ferrule, tip, joint)
     this.stick.visible = false
     this.scene.add(this.stick)
   }

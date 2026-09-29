@@ -1,6 +1,6 @@
 import type { ShotInput } from '@snooker/shared'
 import { tableToCanvas } from './renderer.js'
-import { POWER_FINE_STEP, POWER_RESTING_DEFAULT, powerAdjust, powerFromDrag } from './power.js'
+import { POWER_ARROW_STEP, POWER_FINE_STEP, POWER_RESTING_DEFAULT, powerAdjust, powerFromDrag } from './power.js'
 
 export interface AimState {
   angle: number
@@ -23,6 +23,15 @@ export interface CueController {
   setCuePosition: (x: number, y: number) => void
   /** Eases the power back to rest, for between shots. */
   resetPower: () => void
+  /**
+   * Stops the controller from writing power at all, for as long as the slider owns
+   * the value. While locked, the eased reset animation is cancelled where it stands
+   * rather than left decaying underneath the drag, and presses, wheel and +/- keys
+   * are refused, so no other gesture can stomp the number the slider just wrote.
+   */
+  lockPower: () => void
+  /** Hands power writes back to the canvas gestures. */
+  unlockPower: () => void
 }
 
 /**
@@ -59,6 +68,16 @@ export function createCueController(options: CueControllerOptions): CueControlle
    */
   let dragAxis = { x: 1, y: 0, originPx: 0 }
   let resetFrame = 0
+  /**
+   * True while the power slider owns the value.
+   *
+   * The controller is the usual writer — charging, dragging, wheel, keys, the eased
+   * reset after a shot — and every one of those would otherwise be free to move the
+   * number while the player's finger is still on the slider handle. The lock is what
+   * makes the slider's writes stick for the whole gesture instead of being fought
+   * by whichever animation happened to be running.
+   */
+  let powerLocked = false
 
   function pointerInCanvas(event: { clientX: number; clientY: number }): { px: number; py: number; rect: DOMRect } {
     const rect = options.canvas.getBoundingClientRect()
@@ -85,7 +104,7 @@ export function createCueController(options: CueControllerOptions): CueControlle
       // A tab switch or a long stall must not dump a huge jump into the charge.
       const dt = Math.min(0.1, (now - previous) / 1000)
       previous = now
-      if (!dragging || settingPowerByDrag) {
+      if (!dragging || settingPowerByDrag || powerLocked) {
         chargeFrame = 0
         return
       }
@@ -146,7 +165,11 @@ export function createCueController(options: CueControllerOptions): CueControlle
 
   const onPointerMove = (event: PointerEvent) => handleMove(event)
   const onPointerDown = (event: PointerEvent) => {
-    if (!options.enabled()) return
+    // A second gesture starting on the canvas while the slider is mid-drag would
+    // stomp `aim.power` with its press default — and possibly fire a shot on release —
+    // over the top of the value the player is setting on the rail. The canvas simply
+    // refuses to join a power drag it does not own.
+    if (!options.enabled() || powerLocked) return
     dragging = true
     settingPowerByDrag = false
     holdOrigin = { x: event.clientX, y: event.clientY }
@@ -180,7 +203,7 @@ export function createCueController(options: CueControllerOptions): CueControlle
     event.preventDefault()
   }
   const onWheel = (event: WheelEvent) => {
-    if (!options.enabled()) return
+    if (!options.enabled() || powerLocked) return
     // The page cannot scroll on the table, so a wheel gesture here has nothing else
     // to do. Fine steps only: this trims a power that is already set, and a notch
     // should not be able to send a shot from a full swing to a tap.
@@ -192,10 +215,16 @@ export function createCueController(options: CueControllerOptions): CueControlle
   const onKeyDown = (event: KeyboardEvent) => {
     switch (event.key) {
       case 'ArrowUp':
-        aim.spinY = Math.min(1, aim.spinY + 0.2)
-        break
       case 'ArrowDown':
-        aim.spinY = Math.max(-1, aim.spinY - 0.2)
+        // Power trimming, not spin: the up/down arrows are the keyboard's power
+        // control, stepped and clamped, and they must not touch the aim angle.
+        // Vertical spin lives on W/S now, which keeps every spin axis on the keys
+        // a hand already rests near while the arrows do the thing they visibly
+        // control on screen.
+        if (!options.enabled() || powerLocked) return
+        event.preventDefault()
+        stopReset()
+        aim.power = powerAdjust(aim.power, event.key === 'ArrowUp' ? POWER_ARROW_STEP : -POWER_ARROW_STEP)
         break
       case 'ArrowLeft':
         aim.spinX = Math.max(-1, aim.spinX - 0.2)
@@ -203,16 +232,24 @@ export function createCueController(options: CueControllerOptions): CueControlle
       case 'ArrowRight':
         aim.spinX = Math.min(1, aim.spinX + 0.2)
         break
+      case 'w':
+      case 'W':
+        aim.spinY = Math.min(1, aim.spinY + 0.2)
+        break
+      case 's':
+      case 'S':
+        aim.spinY = Math.max(-1, aim.spinY - 0.2)
+        break
       case '+':
       case '=':
-        if (!options.enabled()) return
+        if (!options.enabled() || powerLocked) return
         event.preventDefault()
         stopReset()
         aim.power = powerAdjust(aim.power, POWER_FINE_STEP)
         break
       case '-':
       case '_':
-        if (!options.enabled()) return
+        if (!options.enabled() || powerLocked) return
         event.preventDefault()
         stopReset()
         aim.power = powerAdjust(aim.power, -POWER_FINE_STEP)
@@ -230,7 +267,9 @@ export function createCueController(options: CueControllerOptions): CueControlle
         return
       case ' ':
         event.preventDefault()
-        if (options.enabled()) {
+        // Refused while the slider owns power, same as a canvas press: the two input
+        // paths do not run over each other mid-gesture.
+        if (options.enabled() && !powerLocked) {
           options.onShoot({ aimAngle: aim.angle, power: aim.power, spin: { x: aim.spinX, y: aim.spinY } })
         }
         return
@@ -264,6 +303,9 @@ export function createCueController(options: CueControllerOptions): CueControlle
       cue = { x, y }
     },
     resetPower: () => {
+      // The slider owns the value while locked; an eased decay running underneath a
+      // drag is exactly the "handle drops back down on its own" bug.
+      if (powerLocked) return
       stopReset()
       if (aim.power <= 0) return
       // Eased rather than cleared: the bar sliding down to rest reads as the shot
@@ -277,6 +319,16 @@ export function createCueController(options: CueControllerOptions): CueControlle
         resetFrame = aim.power > 0 ? requestAnimationFrame(step) : 0
       }
       resetFrame = requestAnimationFrame(step)
+    },
+    lockPower: () => {
+      powerLocked = true
+      // A reset animation already in flight would keep multiplying `aim.power` down
+      // on its own frames — the lock cancels it where it stands rather than letting
+      // it run to zero under the drag.
+      stopReset()
+    },
+    unlockPower: () => {
+      powerLocked = false
     }
   }
 }

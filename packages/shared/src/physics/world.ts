@@ -7,6 +7,8 @@ import {
   CUSHION_RESTITUTION_SHORT,
   CUSHION_TANGENTIAL_DAMP,
   ROLL_FRICTION,
+  SLIDE_FRICTION,
+  SLIDE_SPEED_THRESHOLD,
   SPIN_FRICTION,
   MIN_SPEED,
   MAX_SIM_TICKS,
@@ -248,8 +250,18 @@ function integrate(ball: BallState, dt: number): void {
   const vy = ball.vel.y
   const speed = Math.sqrt(vx * vx + vy * vy)
   if (speed > 0) {
-    const reduction = ROLL_FRICTION * dt
-    const nextSpeed = speed - reduction
+    // Two-phase cloth model. Real snooker cloth resists a ball two ways: a hard
+    // drag while the ball is skidding just after the strike, and a light rolling
+    // resistance once it has settled into natural roll. One constant across both
+    // regimes over-brakes one of them whichever value it takes — at the rolling
+    // figure hard shots start heavy, at the sliding figure every pot dies short
+    // of the pocket with an abrupt stop.
+    //
+    // The deceleration is applied along the direction of travel (a fixed slice
+    // of speed per second, whichever way the ball is heading), so the stop is a
+    // smooth exponential run-out rather than a linear drop to a cliff edge.
+    const deceleration = speed > SLIDE_SPEED_THRESHOLD ? SLIDE_FRICTION : ROLL_FRICTION
+    const nextSpeed = speed - deceleration * dt
     if (nextSpeed <= MIN_SPEED) {
       ball.vel.x = 0
       ball.vel.y = 0
@@ -340,6 +352,11 @@ function resolveCollisionPair(a: BallState, b: BallState): boolean {
   const ny = dy / d
   const relSpeedAlongNormal = (b.vel.x - a.vel.x) * nx + (b.vel.y - a.vel.y) * ny
   if (relSpeedAlongNormal > 0) return false
+  // Impulse for two equal masses with restitution e: j = -(1+e)·(v_rel·n) / 2, the
+  // analytic equal-mass result. Going through e means the normal relative velocity
+  // after the impulse is exactly -e times what it was before, so at e = 0.96 the
+  // object ball leaves a full hit carrying almost the whole of the closing pace —
+  // why the pack no longer feels heavy and object balls do not die on the spot.
   const impulse = (-(1 + BALL_RESTITUTION) * relSpeedAlongNormal) / 2
   const ix = nx * impulse
   const iy = ny * impulse

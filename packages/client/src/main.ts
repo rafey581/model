@@ -11,7 +11,7 @@ import { fitTableBox } from './game/layout.js'
 import { createShotTimer } from './game/shotTimerView.js'
 import type { TurnTiming } from './game/shotTimer.js'
 import type { ShotInput, ShotPlayback } from '@snooker/shared'
-import { STAKE_TIERS } from '@snooker/shared'
+import { STAKE_TIERS, COLOR_VALUES } from '@snooker/shared'
 import type { Socket } from 'socket.io-client'
 import { playCushion, playFoul, playFrameEnd, playMatchEnd, playPot, setSoundMuted, isSoundMuted, unlockAudio } from './game/audio.js'
 import { ShotPlayer } from './game/playback.js'
@@ -1363,7 +1363,7 @@ function renderGame(): void {
   if (!hintDismissed) {
     const hint = el('div', 'controls-hint')
     hint.appendChild(
-      el('span', undefined, 'Aim: mouse or touch · Power: press & hold to charge (or drag back) · Spin: arrows · Shoot: release or Space')
+      el('span', undefined, 'Aim: mouse or touch · Power: drag the slider, hold to charge, or ↑/↓ to trim · Spin: ←/→ side, W/S top-bottom · Shoot: release or Space')
     )
     const dismiss = el('button', 'hint-close', '×')
     dismiss.title = 'Hide these controls for this session'
@@ -1439,6 +1439,14 @@ function renderGame(): void {
   // renders, so the pull-back tracks the handle.
   hud?.setPowerSink((power) => {
     if (cueController) cueController.aim.power = power
+  })
+  // While the slider is mid-drag it owns the power: the controller is locked out of
+  // writing it, so neither the charge gesture, the wheel, the fine keys nor the eased
+  // after-shot reset can drag the handle back down underneath the player's finger.
+  hud?.setPowerDragListener((dragging) => {
+    if (!cueController) return
+    if (dragging) cueController.lockPower()
+    else cueController.unlockPower()
   })
   hud?.setPower(0)
 }
@@ -1532,6 +1540,11 @@ function applyGameUpdate(data: GameUpdatePayload): void {
   // full-power shot. Keyed on the change rather than on every update, so a player who
   // has already set their power keeps it for the rest of the visit.
   if (myTurn && !wasMyTurn) cueController?.resetPower()
+  // Ball in hand is a rule moment, not a chat line: when the cue comes to hand on
+  // this client's visit it is announced centre-screen, once per change of state.
+  if (data.frame.cueInHand && previous?.cueInHand !== true && myTurn) {
+    hud?.flashEvent('BALL IN HAND', 'info')
+  }
   // The clock is read here, alongside the score and the turn. A message carrying a
   // shot is the moment the timer freezes: the balls are moving, so no turn is being
   // timed, and the ring holds where it was rather than counting through an animation.
@@ -1581,6 +1594,9 @@ function applyGameUpdate(data: GameUpdatePayload): void {
       const show = (): void => {
         playFoul()
         toast(d.reason ? `Foul: ${d.reason} (-${d.penalty})` : `Foul! -${d.penalty}`, 'error')
+        // The penalty is announced big and once: the value the server charged,
+        // 4 to 7, is the headline.
+        hud?.flashEvent(`FOUL -${d.penalty}`, 'bad')
       }
       if (verdictDeferred) deferredVerdict.push(show)
       else show()
@@ -1623,6 +1639,11 @@ function announcePot(ids: number[]): void {
   playCushion()
   playPot(ids.length)
   toast(`Potted: ${ids.map(ballName).join(', ')}`)
+  // The centre-screen banner carries the score the pot is worth, so the moment
+  // lands as a number as well as a sound: reds one each, colours their own value.
+  const points = ids.reduce((sum, id) => sum + (id >= 1 && id <= 15 ? 1 : (COLOR_VALUES[id] ?? 0)), 0)
+  const label = ids.map(ballName).join(', ').toUpperCase()
+  hud?.flashEvent(`POTTED ${label} +${points}`, 'good')
 }
 
 function handleSocketEvents(socket: Socket): void {

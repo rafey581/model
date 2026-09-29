@@ -73,6 +73,14 @@ export interface HudState {
   breakLabel: string | null
   ballOnLabel: string
   /**
+   * The points the ball on is worth, when one ball is named: 1 for the reds, the
+   * colour's own value otherwise. Null when any colour is on (the value varies)
+   * or nothing is named yet, and in both of those cases the badge is hidden.
+   */
+  ballOnValue: number | null
+  /** Hex for the badge's dot, when a single ball is named. */
+  ballOnDot: string | null
+  /**
    * The cue ball is in hand and has to be placed in the D. This used to be drawn on
    * the 2D canvas only, which meant the 3D table never said it.
    */
@@ -204,6 +212,13 @@ export function deriveHudState(input: HudInput): HudState {
       : `Frame ${input.frameIndex} · ${input.format}`,
     breakLabel: snapshot && snapshot.breakScore > 0 ? `Break ${snapshot.breakScore}` : null,
     ballOnLabel: describeBallOn(snapshot?.ballOn),
+    ballOnValue: onColour !== null ? (COLOR_VALUES[onColour] ?? null) : (snapshot?.ballOn ?? 'RED') === 'RED' ? 1 : null,
+    ballOnDot:
+      onColour !== null
+        ? ballColorHex(onColour)
+        : (snapshot?.ballOn ?? 'RED') === 'RED'
+          ? ballColorHex(BALL_IDS.RED_MIN)
+          : null,
     cueInHand: Boolean(snapshot?.cueInHand),
     redsOn: (snapshot?.ballOn ?? 'RED') === 'RED',
     reds: {
@@ -342,6 +357,8 @@ export interface Hud {
   /** Mounted inside the table frame: the power rail, which overlays the table. */
   overlayRoot: HTMLElement
   update: (state: HudState) => void
+  /** Raises a short-lived centre-screen banner for a key match event. */
+  flashEvent: (text: string, tone: 'good' | 'bad' | 'info') => void
   /** Driven per frame by the cue controller, not by update(). */
   setPower: (power: number) => void
   /**
@@ -351,6 +368,8 @@ export interface Hud {
   setPowerEnabled: (enabled: boolean) => void
   /** Connects the slider's output to whoever owns the real power value. */
   setPowerSink: (sink: (power: number) => void) => void
+  /** Told when a slider drag starts and stops, so the controller can be locked out of power writes for the gesture. */
+  setPowerDragListener: (listener: ((dragging: boolean) => void) | null) => void
   /**
    * The avatar frame of whoever is at the table, or null when nobody is. Phase H2's
    * turn timer hangs off this rather than re-finding it in the document.
@@ -430,9 +449,19 @@ export function createHud(): Hud {
   const ballOn = el('div', 'hud-ball-on')
   ballOn.id = 'hud-ball-on'
   const ballOnText = el('span', 'hud-ball-on-text')
+  // The badge: what the ball on is worth. A red reads +1, a colour its own
+  // value, so the shot's stake is on the strip and not only in the rules.
+  const ballOnValue = el('span', 'hud-ball-on-value')
+  ballOnValue.id = 'hud-ball-on-value'
+  ballOnValue.hidden = true
   const brk = el('span', 'hud-break')
   brk.id = 'hud-break'
-  ballOn.append(ballOnText, brk)
+  ballOn.append(ballOnText, ballOnValue, brk)
+
+  // Center-screen event banners: fouls, pots, ball in hand. Built once, reused;
+  // each flash appends a short-lived child that animates itself in and out.
+  const eventLayer = el('div', 'event-banner-layer')
+  eventLayer.id = 'event-banner-layer'
 
   const colours = el('div', 'hud-colours')
   for (const id of COLOR_ORDER) {
@@ -504,6 +533,8 @@ export function createHud(): Hud {
   let railDragging = false
   /** True while the slider itself is driving the value, so the cue controller's own eased reset does not fight it. */
   let sliderDriving = false
+  /** Told when a slider gesture begins and ends, so the caller can lock the cue controller out of power writes. */
+  let powerDragListener: ((dragging: boolean) => void) | null = null
 
   function railValueFromPointer(event: PointerEvent): number {
     const rect = railTrack.getBoundingClientRect()
@@ -543,29 +574,45 @@ export function createHud(): Hud {
     event.preventDefault()
     railDragging = true
     sliderDriving = true
+    // The lock is taken before the first write, so the value this press sets cannot
+    // be fought by the controller's charge or its eased reset for the whole gesture.
+    powerDragListener?.(true)
     stopSliderReset()
+    // Capture is locked at pointerdown on the track itself, so every later move and
+    // the release arrive here even when the cursor swings off the rail across the
+    // table — the handle follows the pointer one-to-one with no jumping. The drag
+    // also locks the cue controller's power writes for the gesture (via the caller),
+    // so nothing can decay the value underneath the finger.
     railTrack.setPointerCapture(event.pointerId)
     applySliderValue(railValueFromPointer(event))
   }
-  const onRailPointerMove = (event: PointerEvent): void => {
-    if (!railDragging || !sliderEnabled) return
-    event.preventDefault()
-    applySliderValue(railValueFromPointer(event))
-  }
-  const onRailPointerUp = (event: PointerEvent): void => {
+  const endRailDrag = (event: PointerEvent): void => {
     if (!railDragging) return
     railDragging = false
     sliderDriving = false
+    powerDragListener?.(false)
     // The displayed value and the eased one are the same number from here on, so the
     // next controller-driven update eases from where the handle actually is rather
     // than from wherever the charge animation had got to.
     railShown = lastRailPower
     if (railTrack.hasPointerCapture(event.pointerId)) railTrack.releasePointerCapture(event.pointerId)
   }
+  const onRailPointerUp = endRailDrag
+  const onRailPointerMove = (event: PointerEvent): void => {
+    if (!railDragging || !sliderEnabled) return
+    event.preventDefault()
+    applySliderValue(railValueFromPointer(event))
+  }
   railTrack.addEventListener('pointerdown', onRailPointerDown)
   railTrack.addEventListener('pointermove', onRailPointerMove)
   railTrack.addEventListener('pointerup', onRailPointerUp)
   railTrack.addEventListener('pointercancel', onRailPointerUp)
+  // Safety net for a lost or failed capture: with capture working, the track handler
+  // has already ended the drag and this returns early; without it, a release outside
+  // the track would never be seen here and the drag — and with it the power lock —
+  // would stick on until the next turn.
+  window.addEventListener('pointerup', endRailDrag)
+  window.addEventListener('pointercancel', endRailDrag)
 
   const onSliderKeyDown = (event: KeyboardEvent): void => {
     if (!sliderEnabled) return
@@ -610,7 +657,7 @@ export function createHud(): Hud {
     sliderResetFrame = 0
   }
 
-  root.append(top, strip, live)
+  root.append(top, strip, live, eventLayer)
 
   // The eased percentage the bar shows, so a jittery raw value does not make the
   // number flicker. Owned by the rail rather than by update(), which is called on
@@ -645,6 +692,13 @@ export function createHud(): Hud {
       setText(ballOnText, state.ballOnLabel)
       setText(brk, state.breakLabel ?? '')
       setHidden(brk, state.breakLabel === null)
+      if (state.ballOnValue !== null && state.ballOnDot !== null) {
+        setText(ballOnValue, `+${state.ballOnValue}`)
+        ballOnValue.style.setProperty('--badge-dot', state.ballOnDot)
+        setHidden(ballOnValue, false)
+      } else {
+        setHidden(ballOnValue, true)
+      }
 
       setText(redCount, `${state.reds.remaining}`)
       redCount.title = `${state.reds.remaining} of ${state.reds.total} reds left`
@@ -688,13 +742,47 @@ export function createHud(): Hud {
       setFlag(rail, 'is-disabled', !enabled)
       slider.setAttribute('aria-disabled', enabled ? 'false' : 'true')
       if (!enabled) {
+        // A turn ending or a shot firing mid-drag has to end the gesture outright —
+        // including handing power writes back to the controller — or the lock would
+        // outlive the drag and leave the cue stuck on a number nobody is setting.
         railDragging = false
         sliderDriving = false
+        powerDragListener?.(false)
         stopSliderReset()
       }
     },
     setPowerSink: (sink) => {
       setPowerSink(sink)
+    },
+    setPowerDragListener: (listener) => {
+      powerDragListener = listener
+    },
+    /**
+     * Raises a centre-screen banner for a key event and retires it itself.
+     *
+     * Fires are idempotent from the caller's point of view: each call makes a new
+     * banner, the layer caps itself at three so a burst of events cannot stack a
+     * wall of text, and every banner removes its own node when the exit animation
+     * has finished.
+     */
+    flashEvent: (text: string, tone: 'good' | 'bad' | 'info') => {
+      while (eventLayer.children.length >= 3) eventLayer.firstElementChild?.remove()
+      const banner = el('div', `event-banner tone-${tone}`)
+      banner.setAttribute('role', 'status')
+      const label = el('span', 'event-banner-text')
+      label.textContent = text
+      banner.appendChild(label)
+      eventLayer.appendChild(banner)
+      // Two frames in before the enter class, so the initial styles are committed
+      // and the transition actually runs rather than snapping to the end state.
+      requestAnimationFrame(() => {
+        banner.classList.add('is-in')
+        window.setTimeout(() => {
+          banner.classList.remove('is-in')
+          banner.classList.add('is-out')
+          window.setTimeout(() => banner.remove(), 450)
+        }, 1500)
+      })
     },
     turnFrame: () => {
       if (youAvatar.frame.classList.contains(TURN_ACTIVE_CLASS)) return youAvatar.frame

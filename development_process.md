@@ -959,6 +959,18 @@ Each phase: **Goal** · **Tasks** · **Done when** · **Notes**.
     so a dropped connection still covers it). Track `overflow:hidden` removed so the
     handle is not clipped to the 12px track, and the slider element carries
     `id=power-slider` as a stable hook.
+  - Follow-up fix 2 (erratic drag-drop): while the slider is mid-drag it now **owns
+    the power value outright**. The HUD reports the gesture to the caller
+    (`setPowerDragListener`), and main.ts locks the cue controller
+    (`lockPower`/`unlockPower` in `input.ts`): the eased after-shot reset is refused
+    and cancelled where it stands (it was multiplying `aim.power` toward 0 on its own
+    frames — the visible "handle drops back down" bug), the charge loop stops, and
+    canvas press/wheel/+/-/Space all refuse to write or fire while locked. Pointer
+    capture is taken on the track at pointerdown (moves keep arriving with the cursor
+    well off the rail), with a window-level pointerup/pointercancel safety net so a
+    lost capture can never leave the lock stuck. `setPowerEnabled(false)` mid-gesture
+    (shot fired, turn ended) ends the drag and unlocks, so the lock cannot outlive
+    the visit. Verified: typecheck clean, client tests 83/83, build green.
 - Tests: room.test.ts grew 5 clock tests (fresh-deadline announce on release,
   announced stop on disconnect, re-arm announce on return, no spent deadline on
   frame:end broadcast, robot visit armed-but-never-fouled); power.test.ts grew the
@@ -969,6 +981,79 @@ Each phase: **Goal** · **Tasks** · **Done when** · **Notes**.
   rerunning on the clean tree). Repaired per the Day-24 precedent — corrective
   ADJUSTMENT + LEDGER_REPAIR rows per wallet (one wallet −1000, one +1000 drift);
   ledger suite 3/3, e2e ledger-invariant check green. Full e2e **231 passed, 0 failed**.
+
+### Physics overhaul — WPBSA collision & two-phase cloth (shared, verified)
+- Goal: authentic ball movement — near-elastic ball contact, a two-phase cloth
+  model, livelier rails, and spin that survives to contact. UI/CSS untouched.
+- Ball-to-ball (`constants.ts` + `world.ts`): `BALL_RESTITUTION` 0.95 → **0.96**;
+  the equal-mass impulse `-(1+e)·(v_rel·n)/2` through e gives the object ball
+  (1+e)/2 = **98%** of the closing pace on a full hit (analytically pinned by a new
+  closed-form run-distance test), so object balls no longer die on the spot.
+- Two-phase cloth: new `SLIDE_FRICTION` (1800 mm/s²) above new
+  `SLIDE_SPEED_THRESHOLD` (800 mm/s) and `ROLL_FRICTION` derived as
+  `CLOTH_CRR·g` = **0.018 × 9810 ≈ 177 mm/s²** (was a flat 400 at every speed).
+  Deceleration is applied along the direction of travel, so the final crawl
+  shrinks smoothly into the stop instead of braking in abrupt linear bites
+  (pinned by a keyframe-trail test: last step < 5% of the first).
+- Cushions: `CUSHION_RESTITUTION_LONG/SHORT` 0.8/0.75 → **0.85** both,
+  `CUSHION_TANGENTIAL_DAMP` 0.92 → **0.85** — livelier rebounds with realistic
+  angle/velocity retention, still strictly energy-losing at every angle (the
+  existing per-angle cushion tests all hold unchanged).
+- Cue ball: power→speed stays the exact linear map (`applyShot` clamps only the
+  0..1 domain; no velocity ceiling introduced), and follow/draw kicks scale from
+  contact-pace, so stun/follow/draw all behave at contact (new spin-survival
+  test alongside the existing draw/follow ones).
+- Tests: 8 new WPBSA-model tests (constants, per-tick slide/roll shed, momentum,
+  energy transfer, glide-to-stop, spin survival); `launchSpeed` and the
+  tick-distance helper updated for the phase each measured speed sits in.
+  **Shared 115/115, server 39/39 (bot gate still clears reds and finishes frames),
+  client 83/83, typecheck clean, e2e 231/0.**
+
+### Arrow-key power control (client, verified)
+- `↑`/`↓` now trim shot power by `POWER_ARROW_STEP` (2%) per tap whenever aiming is
+  active (`enabled()` = your visit and the table settled), clamped 0–100% via the
+  existing `powerAdjust`, refused while the slider lock is held, and never touching
+  `aim.angle` — only `aim.power`.
+- Vertical (top/bottom) spin moved from the arrows to `W`/`S`; `←`/`→` still set
+  side spin. The slider keeps its own finer steps (4%) when focused. The controls
+  hint text was updated to the new bindings.
+- Live two-way sync: the controller fires `onChange`, which feeds `hud.setPower` →
+  `renderRail` (handle position + fill) — and the keyboard path respects the
+  slider-owns-power lock from the drag fix, so key and slider never fight.
+- Verified: client typecheck + build green, client tests 83/83.
+
+### AAA visual pass — 3D scene, glass HUD, event banners (client, verified)
+- Balls (`scene3d.ts` BallRig): `MeshPhysicalMaterial` now phenolic-spec —
+  clearcoat 1.0, clearcoatRoughness 0.1, roughness 0.12, metalness 0 — with the
+  existing PMREM env map supplying the studio highlights.
+- Lighting: the single directional key + fill rig is replaced by **three overhead
+  spotlights** (centre + each half of the table, hung at 1650mm like real table
+  lamps), each casting its own soft PCF shadow straight down onto the felt;
+  hemisphere dropped to fill-only (0.5) and the cool fill to 0.3.
+- Cue stick rebuilt as a proper cue: ash-shaft canvas grain (lengthwise figure,
+  new `cueWoodTexture`), dark maple butt, brass ferrule + joint ring
+  (metalness 0.9), chalk-blue tip; `STICK_TIP_Y` re-measured to 641mm so the tip
+  still addresses the ball exactly.
+- Pockets: flat discs replaced by **leather drop pockets** — recessed open-ended
+  throat cylinder with a radial depth texture (BackSide), black drop floor, soft
+  mouth-shadow ring on the bed, leather-look rim torus with a brass lip.
+- HUD glassmorphism: `.hud-top` is now a translucent dark gradient with
+  `backdrop-filter: blur(12px) saturate(1.25)`, fine light borders + inner top
+  highlight and a soft drop shadow. New **ball-on value badge** (`+1`/`+2..+7`
+  with the ball's own colour as a dot) derived in `deriveHudState`
+  (`ballOnValue`/`ballOnDot`), hidden when any colour is on.
+- Centre-screen event banners: new `#event-banner-layer` (z 6, pointer-none) with
+  `hud.flashEvent(text, tone)` — scale+fade enter/exit transitions, blur-in
+  keyframe (the motion-blur pass), tone variants good/bad/info, self-retiring,
+  capped at 3 stacked, `prefers-reduced-motion` honoured. Wired: pots
+  (`POTTED <BALLS> +N`, points summed), fouls (`FOUL -4..-7`), ball in hand
+  (`BALL IN HAND`, once per state change on your visit). Existing toasts/sounds
+  untouched.
+- Slider drag polish re-verified in place: capture locked at pointerdown on the
+  track, window-level release safety net, controller power-lock during the
+  gesture (no auto-decay). No new arrow bindings added.
+- Verified: client typecheck clean, client tests **83/83**, vite build green
+  (0 errors). No server/shared changes.
 
 ### Day 28 — Final review vs Definition of Done
 - Goal: confirm MVP is complete and consistent.
