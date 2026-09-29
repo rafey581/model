@@ -218,6 +218,107 @@ describe('fouls', () => {
   })
 })
 
+/**
+ * The size of a foul, which is the one part of the rules that moves real credits.
+ *
+ * A foul is worth the value of the highest ball involved -- the ball on, the ball
+ * struck first, or any ball potted -- and never less than four. The struck-first ball
+ * is the case that gets left out: a player who reaches the blue when a red is on has
+ * fouled by hitting a five-point ball, and charging them the flat four minimum
+ * understates what they did. It is a real-money difference, so it is pinned per ball
+ * rather than tested once.
+ */
+describe('foul value is the highest ball involved, minimum 4', () => {
+  /** A red on, nothing potted, and a given first contact. What the opponent is given. */
+  function foulWorth(firstContactId: number | null): number {
+    const f = createFrame(0)
+    stroke(f, 0, [], false, firstContactId)
+    return f.scores.player1
+  }
+
+  it('charges 5 for reaching the blue when a red is on', () => {
+    expect(foulWorth(BALL_IDS.BLUE)).toBe(5)
+  })
+
+  it('charges 7 for reaching the black when a red is on', () => {
+    expect(foulWorth(BALL_IDS.BLACK)).toBe(7)
+  })
+
+  it('charges 6 for reaching the pink when a red is on', () => {
+    expect(foulWorth(BALL_IDS.PINK)).toBe(6)
+  })
+
+  it('still charges only 4 for reaching the brown, whose value is the minimum', () => {
+    expect(foulWorth(BALL_IDS.BROWN)).toBe(4)
+  })
+
+  it('charges the flat 4 for a stroke that touched nothing', () => {
+    // No contact at all: there is no ball involved to be worth anything, so this is
+    // the minimum rather than the red's 1.
+    expect(foulWorth(null)).toBe(4)
+  })
+
+  it('is not a foul at all to reach the ball on and pot nothing', () => {
+    // Reaching a red when a red is on is a legal stroke that simply did not score, so
+    // there is no penalty to size and the visit passes with the scores untouched. This
+    // is the case that keeps the flat 4 above from being read as a red-sized foul.
+    const f = createFrame(0)
+    const out = stroke(f, 0, [], false, BALL_IDS.RED_MIN)
+    expect(out.reason).toBe('no-ball-potted')
+    expect(f.scores.player0).toBe(0)
+    expect(f.scores.player1).toBe(0)
+    expect(f.turnIndex).toBe(1)
+  })
+
+  it('charges the ball on when it outranks the ball struck', () => {
+    // The black is on for the clearance, so reaching a red is worth the black's 7
+    // rather than the red's 1.
+    const f = createFrame(0)
+    f.remainingReds = 0
+    f.ballOn = { colour: BALL_IDS.BLACK }
+    stroke(f, 0, [], false, BALL_IDS.RED_MIN)
+    expect(f.scores.player1).toBe(7)
+  })
+
+  it('charges a yellow on for four when a red is reached first, not one', () => {
+    const f = createFrame(0)
+    f.ballOn = { colour: BALL_IDS.YELLOW }
+    stroke(f, 0, [], false, BALL_IDS.RED_MIN)
+    expect(f.scores.player1).toBe(4)
+  })
+
+  it('charges 7 for potting the black while a red was on', () => {
+    // The illegal pot is worth the ball potted, and the ball on is only 1.
+    const f = createFrame(0)
+    const out = stroke(f, 0, [BALL_IDS.BLACK], false, BALL_IDS.RED_MIN)
+    expect(out.reason).toBe('wrong ball potted')
+    expect(f.scores.player1).toBe(7)
+    expect(f.scores.player0).toBe(0)
+  })
+
+  it('charges 7 for reaching and potting the black when a red is on', () => {
+    // Both halves of the same mistake -- the wrong ball was struck and the wrong ball
+    // went down -- and the black is what decides it either way.
+    const f = createFrame(0)
+    stroke(f, 0, [BALL_IDS.BLACK], false, BALL_IDS.BLACK)
+    expect(f.scores.player1).toBe(7)
+  })
+
+  it('never charges less than 4, even when every ball involved is worth 1', () => {
+    const f = createFrame(0)
+    stroke(f, 0, [], false, null)
+    expect(f.scores.player1).toBe(4)
+  })
+
+  it('awards the foul to the opponent rather than deducting from the striker', () => {
+    const f = createFrame(0)
+    f.scores.player0 = 30
+    stroke(f, 0, [], false, BALL_IDS.BLACK)
+    expect(f.scores.player0).toBe(30)
+    expect(f.scores.player1).toBe(7)
+  })
+})
+
 describe('timeout foul (no stroke)', () => {
   it('a time-out on red costs 4 and switches the visit', () => {
     const f = createFrame(0)

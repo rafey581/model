@@ -54,7 +54,7 @@ export function resolveStroke(frame: FrameState, shooterIndex: number, pottedIds
   }
 
   if (foul) {
-    foulValue = computeFoulValue(ballOn, requiredColorId, pottedIds)
+    foulValue = computeFoulValue(ballOn, requiredColorId, firstContactId, pottedIds)
     respotIds = pottedIds.filter((id) => id !== BALL_IDS.CUE)
   }
 
@@ -213,9 +213,27 @@ function isLegalContact(ballId: number, ballOn: BallOn, requiredColorId: number)
   return ballId === requiredColorId
 }
 
-function computeFoulValue(ballOn: BallOn, requiredColorId: number, pottedIds: number[]): number {
+/**
+ * What a foul is worth: the value of the highest ball involved, and never under 4.
+ *
+ * "Involved" is all three of the balls that can make a stroke a foul, because any one
+ * of them can be the most valuable thing the striker touched:
+ *
+ *  - the ball on, which sets the floor for a foul that was simply a miss;
+ *  - the ball struck first, which is what a player reaches when they have picked the
+ *    wrong one -- striking the blue when a red is on is a five-point mistake, and
+ *    leaving it out of the sum charged the flat four minimum instead;
+ *  - every ball potted, which is what an illegal pot is worth on its own.
+ *
+ * A red is worth 1, so it only ever matters by being lower than something else.
+ */
+function computeFoulValue(ballOn: BallOn, requiredColorId: number, firstContactId: number | null, pottedIds: number[]): number {
   const onValue = ballOn === 'RED' ? RED_VALUE : COLOR_VALUES[requiredColorId] ?? RED_VALUE
   let worst = onValue
+  if (firstContactId !== null) {
+    const struck = COLOR_VALUES[firstContactId] ?? RED_VALUE
+    if (struck > worst) worst = struck
+  }
   for (const id of pottedIds) {
     const value = COLOR_VALUES[id] ?? 0
     if (value > worst) worst = value

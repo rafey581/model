@@ -164,6 +164,50 @@ describe('balls strip: what is on', () => {
   })
 })
 
+describe('balls are global table state, not player property', () => {
+  /*
+   * The mistake this guards against is the one 8-ball invites: a scorecard that shows
+   * "your balls" and "their balls". Snooker has no such split, so the two player
+   * objects must never grow a ball field, and the strip must be derived from the one
+   * shared snapshot rather than from either side.
+   */
+  it('gives a player side nothing but a name, a score and whose turn it is', () => {
+    const state = deriveHudState(input())
+    for (const side of [state.you, state.opponent]) {
+      expect(Object.keys(side).sort()).toEqual(['active', 'avatarUrl', 'isBot', 'name', 'points'])
+    }
+  })
+
+  it('reads the same single set of balls whichever player is at the table', () => {
+    const mine = deriveHudState(input({ mySeat: 0, snapshot: fullTable({ turnIndex: 0 }) }))
+    const theirs = deriveHudState(input({ mySeat: 0, snapshot: fullTable({ turnIndex: 1 }) }))
+    // Only whose turn it is may differ. The reds, the colours and the ball on are the
+    // table's, so two clients watching the same frame must agree on all of them.
+    expect(theirs.reds).toEqual(mine.reds)
+    expect(theirs.colours).toEqual(mine.colours)
+    expect(theirs.ballOnLabel).toBe(mine.ballOnLabel)
+  })
+
+  it('does not move a ball indicator to the player who potted it', () => {
+    // A red potted while sitting at the table is a red off the table. It leaves the
+    // shared count and it does not become anything belonging to the striker.
+    const snapshot: HudSnapshot = { ...pot(fullTable(), BALL_IDS.RED_MIN), remainingReds: TOTAL_REDS - 1 }
+    const state = deriveHudState(input({ mySeat: 0, snapshot }))
+    expect(state.reds.remaining).toBe(TOTAL_REDS - 1)
+    expect(state.reds.onTable[0]).toBe(false)
+    expect(Object.keys(state.you)).not.toContain('reds')
+  })
+
+  it('reads the count from the server rather than counting the dots', () => {
+    // The number and the dots are two different things in a snapshot, and the number
+    // is the server's. A client that counted its own dots would be doing arithmetic
+    // the game is supposed to be doing, and would be wrong the moment a snapshot
+    // arrived mid-replay.
+    const partial: HudSnapshot = { ...fullTable(), remainingReds: 9 }
+    expect(deriveHudState(input({ snapshot: partial })).reds.remaining).toBe(9)
+  })
+})
+
 describe('top bar: the turn', () => {
   it('marks the player whose seat the server says is at the table', () => {
     const mine = deriveHudState(input({ mySeat: 0, snapshot: fullTable({ turnIndex: 0 }) }))
