@@ -1,6 +1,24 @@
 import type { ShotInput } from '@snooker/shared'
+import { BALL_RADIUS } from '@snooker/shared'
 import { tableToCanvas } from './renderer.js'
+import { aimAngleTo, ballRadiusPx, cueAxisPixels } from './cameraPick.js'
 import { POWER_ARROW_STEP, POWER_FINE_STEP, POWER_RESTING_DEFAULT, powerAdjust, powerFromDrag } from './power.js'
+
+/**
+ * How a view answers pointer questions.
+ *
+ * The 3D scene casts the pointer through the camera it is actually drawing with; the
+ * fallback renderer draws one fixed, near-overhead view and answers with its own projection
+ * instead. Everything below asks through this and does not care which it is talking to.
+ */
+export interface TableView {
+  /** The point on the cloth under a canvas pixel, or null above the horizon. */
+  screenToTable: (px: number, py: number) => { x: number; y: number } | null
+  /** Where a point on the cloth is drawn, in canvas pixels. */
+  tableToScreen: (x: number, y: number) => { x: number; y: number } | null
+  /** How wide a ball is drawn at a point on the cloth, in canvas pixels. */
+  ballRadiusPx: (x: number, y: number, radiusMm: number) => number
+}
 
 export interface AimState {
   angle: number
@@ -15,6 +33,16 @@ export interface CueControllerOptions {
   enabled: () => boolean
   onChange: (aim: AimState) => void
   onShoot: (shot: Omit<ShotInput, 'timestamp'>) => void
+  /**
+   * The view to ask, if there is one right now.
+   *
+   * Asked for fresh each time rather than handed over once, because a view can stop
+   * existing while the game is running: if the 3D scene hits a graphics error the caller
+   * drops it and falls back to the flat renderer, which has its own answers. A controller
+   * holding a view it no longer has would go on casting rays through a camera that is not
+   * drawing anything.
+   */
+  view?: () => TableView | undefined
 }
 
 export interface CueController {
@@ -47,6 +75,13 @@ const POWER_PER_SECOND = 0.65
 const CHARGE_DEADZONE_PX = 6
 /** Releasing further than this from the cue ball is a cancellation, not a shot. */
 const SHOOT_RADIUS_PX = 12
+/**
+ * How far behind the cue ball the cue axis is sampled to find its direction on screen.
+ *
+ * A couple of ball diameters is enough to be well clear of the projection's own precision
+ * without reaching so far that the point behind the ball would fall outside the frame.
+ */
+const AXIS_PROBE_MM = BALL_RADIUS * 4
 
 export function createCueController(options: CueControllerOptions): CueController {
   const aim: AimState = { angle: 0, power: 0, spinX: 0, spinY: 0 }
@@ -86,9 +121,65 @@ export function createCueController(options: CueControllerOptions): CueControlle
     return { px, py, rect }
   }
 
+  /**
+   * Where a point on the cloth is drawn.
+   *
+   * Two questions get asked this way and they are not the same: the screen direction the
+   * cue points in (which has to survive the camera's foreshortening), and the cue ball's own
+   * position (which decides whether a release was a shot or a cancellation).
+   */
+  function tableToScreen(x: number, y: number): { x: number; y: number } | null {
+    const view = options.view?.()
+    if (view) return view.tableToScreen(x, y)
+    return tableToCanvas(x, y)
+  }
+
+  /** The cue ball's drawn position. */
+  function cueOnScreen(): { x: number; y: number } {
+    // A point the lens cannot see is behind the camera, which cannot happen to the cue ball
+    // while it is on the table and being aimed at — but the fallback keeps the old flat
+    // projection rather than losing the cue ball off the edge of the frame if it ever did.
+    return tableToScreen(cue.x, cue.y) ?? tableToCanvas(cue.x, cue.y)
+  }
+
+  /**
+   * The direction the cue points, in pixels.
+   *
+   * With a 3D view this is read off the projection, because the screen angle and the aim
+   * angle only agree from directly overhead. Without one, the flat projection is the view,
+   * so the aim angle is its own screen direction.
+   */
+  function axisPixels(angle: number): { x: number; y: number } {
+    const flat = { x: Math.cos(angle), y: Math.sin(angle) }
+    if (!options.view?.()) return flat
+    return cueAxisPixels(cue, angle, AXIS_PROBE_MM, tableToScreen) ?? flat
+  }
+
+  /**
+   * How near the cue ball a release has to be to count as firing.
+   *
+   * The ball's own drawn size, so the target stays the same physical gesture in every view:
+   * a ball close to the lens in the aim view covers far more pixels than one at the far
+   * cushion, and a fixed pixel radius would be a tap tolerance on one and a slap on the
+   * other. The floor keeps a distant ball comfortably tappable on a touch screen.
+   */
+  function shootRadiusPx(): number {
+    const view = options.view?.()
+    if (!view) return SHOOT_RADIUS_PX
+    return Math.max(SHOOT_RADIUS_PX, view.ballRadiusPx(cue.x, cue.y, BALL_RADIUS))
+  }
+
   function pointerAngle(event: { clientX: number; clientY: number }): number {
     const { px, py } = pointerInCanvas(event)
-    const target = tableToCanvas(cue.x, cue.y)
+    const view = options.view?.()
+    if (view) {
+      const picked = view.screenToTable(px, py)
+      // Above the horizon there is no answer, and the honest thing to do with no answer is
+      // nothing: the aim stays where the player last put it rather than snapping.
+      const angle = picked ? aimAngleTo(cue, picked) : null
+      return angle ?? aim.angle
+    }
+    const target = cueOnScreen()
     return Math.atan2(py - target.y, px - target.x)
   }
 
@@ -141,19 +232,20 @@ export function createCueController(options: CueControllerOptions): CueControlle
         settingPowerByDrag = true
         stopCharging()
         const { px, py } = pointerInCanvas(event)
-        const target = tableToCanvas(cue.x, cue.y)
-        // The axis is the direction the cue points, and where the pointer sits along
-        // it is measured from the cue ball, so the gesture is "how far off the ball am
-        // I" rather than "where on the table is my cursor".
+        const target = cueOnScreen()
+        const axis = axisPixels(aim.angle)
+        // The axis is the direction the cue points as it is drawn, and where the pointer
+        // sits along it is measured from the cue ball, so the gesture is "how far off the
+        // ball am I" rather than "where on the table is my cursor".
         dragAxis = {
-          x: Math.cos(aim.angle),
-          y: Math.sin(aim.angle),
-          originPx: (px - target.x) * Math.cos(aim.angle) + (py - target.y) * Math.sin(aim.angle)
+          x: axis.x,
+          y: axis.y,
+          originPx: (px - target.x) * axis.x + (py - target.y) * axis.y
         }
       }
       if (settingPowerByDrag) {
         const { px, py } = pointerInCanvas(event)
-        const target = tableToCanvas(cue.x, cue.y)
+        const target = cueOnScreen()
         const along = (px - target.x) * dragAxis.x + (py - target.y) * dragAxis.y
         // Positive when the pointer has travelled back along the cue, which is the
         // direction that adds power.
@@ -189,8 +281,8 @@ export function createCueController(options: CueControllerOptions): CueControlle
     stopCharging()
     if (!options.enabled()) return
     const { px, py } = pointerInCanvas(event)
-    const target = tableToCanvas(cue.x, cue.y)
-    if (Math.hypot(px - target.x, py - target.y) > SHOOT_RADIUS_PX) {
+    const target = cueOnScreen()
+    if (Math.hypot(px - target.x, py - target.y) > shootRadiusPx()) {
       // Released away from the ball, so the gesture was setting power and not firing.
       options.onChange({ ...aim })
       return

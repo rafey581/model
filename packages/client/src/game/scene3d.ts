@@ -10,6 +10,7 @@ import {
   stepCameraRig
 } from './camera.js'
 import {
+  ballRadiusPx,
   ndcToPixel,
   pickCameraAt,
   pickCameraFromWorldMatrix,
@@ -1085,6 +1086,12 @@ export class Scene3D {
     const ndc = projectToNdc({ x, y }, 0, this.pickCamera())
     if (!ndc) return null
     return ndcToPixel(ndc.x, ndc.y, this.cvw, this.cvh)
+  }
+
+  /** How wide a ball is drawn at a point on the cloth, in canvas pixels. */
+  ballRadiusPx(x: number, y: number, radiusMm: number): number {
+    if (this.cvw <= 0 || this.cvh <= 0) return 0
+    return ballRadiusPx({ x, y }, radiusMm, this.cvw, this.cvh, this.pickCamera())
   }
 
   /** The heading the camera is easing towards, which is the last aim it was given. */

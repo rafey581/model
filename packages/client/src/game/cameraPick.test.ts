@@ -3,6 +3,8 @@ import { BALL_RADIUS, TABLE_LENGTH, TABLE_WIDTH } from '@snooker/shared'
 import { AIM_BACK_MM, AIM_HEIGHT_MM, AIM_LOOK_AHEAD_MM, TOP_DOWN_FOV_DEG, topDownHeight } from './camera.js'
 import {
   PICK_PLANE_HEIGHT_MM,
+  ballRadiusPx,
+  cueAxisPixels,
   aimAngleTo,
   ndcToPixel,
   pickCameraAt,
@@ -10,7 +12,8 @@ import {
   pixelToNdc,
   projectToNdc,
   screenRay,
-  screenToTable
+  screenToTable,
+  type PickCamera
 } from './cameraPick.js'
 
 const DEG = Math.PI / 180
@@ -293,6 +296,15 @@ function expectComponent(actual: { x: number; y: number; h: number }, x: number,
   expect(actual.h).toBeCloseTo(h, 9)
 }
 
+/**
+ * Compares two directions the way an angle does — 270 degrees and -90 degrees are the same
+ * direction, and a plain closeness check says they are a half turn apart.
+ */
+function expectAngle(actual: number, expected: number): void {
+  const difference = Math.atan2(Math.sin(actual - expected), Math.cos(actual - expected))
+  expect(difference).toBeCloseTo(0, 6)
+}
+
 function identityMatrix(): number[] {
   const m = new Array<number>(16).fill(0)
   m[0] = 1
@@ -301,6 +313,96 @@ function identityMatrix(): number[] {
   m[15] = 1
   return m
 }
+
+describe('how wide a ball is drawn', () => {
+  it('matches the flat mapping overhead, where the projection is near-affine', () => {
+    // Overhead the answer should be the plain scale of the projection: the lens is
+    // `height` above the cloth, so half the cloth's width falls inside
+    // `height * tan(fov / 2) * aspect`, and a millimetre is worth `width / 2` over that.
+    const camera = topDownCamera()
+    const tanV = Math.tan((camera.fovDeg * Math.PI) / 360)
+    const millimetresAcross = camera.height * tanV * camera.aspect
+    const pixelsPerMm = 1920 / 2 / millimetresAcross
+    expect(ballRadiusPx(cue, BALL_RADIUS, 1920, 1080, camera)).toBeCloseTo(BALL_RADIUS * pixelsPerMm, 6)
+  })
+
+  it('is bigger from behind the cue ball than from overhead', () => {
+    // The ball is nearer the lens than the middle of the table, so it covers more of the
+    // frame — which is the whole reason a fixed tap tolerance would have been the wrong
+    // size in one of the two views.
+    const overhead = ballRadiusPx(cue, BALL_RADIUS, 1920, 1080, topDownCamera())
+    const behind = ballRadiusPx(cue, BALL_RADIUS, 1920, 1080, aimCameraFor(0))
+    expect(behind).toBeGreaterThan(overhead)
+  })
+
+  it('measures across the view, not along it', () => {
+    // Looking straight down the length of the table, a ball is as wide across the screen as
+    // it ever is. Measuring along the view would report almost nothing for it.
+    const down = ballRadiusPx(cue, BALL_RADIUS, 1920, 1080, aimCameraFor(0))
+    const across = ballRadiusPx(cue, BALL_RADIUS, 1920, 1080, aimCameraFor(90 * DEG))
+    expect(down).toBeCloseTo(across, 6)
+  })
+
+  it('shrinks with distance, so a far ball is a smaller target', () => {
+    // The same ball, seen from two lenses at the same height: one close and one far back.
+    const look = { x: cue.x, y: cue.y, height: 0 }
+    const near = pickCameraAt({ x: cue.x - 400, y: cue.y, height: 350 }, look, 50, 1920 / 1080)
+    const far = pickCameraAt({ x: cue.x - 2500, y: cue.y, height: 350 }, look, 50, 1920 / 1080)
+    const nearPx = ballRadiusPx(cue, BALL_RADIUS, 1920, 1080, near)
+    const farPx = ballRadiusPx(cue, BALL_RADIUS, 1920, 1080, far)
+    expect(farPx).toBeLessThan(nearPx)
+    expect(farPx).toBeGreaterThan(0)
+  })
+})
+
+describe('the screen direction the cue points', () => {
+  // The buffer matches the camera's own aspect, as the scene always keeps it. Skewing the
+  // two apart — a 2:1 camera drawn into a 16:9 canvas — squashes one axis relative to the
+  // other and quietly turns every screen angle, which would make these tests measure the
+  // fixture instead of the geometry.
+  const project =
+    (camera: PickCamera) =>
+    (x: number, y: number): { x: number; y: number } | null => {
+      const height = 1080
+      const width = height * camera.aspect
+      const ndc = projectToNdc({ x, y }, PICK_PLANE_HEIGHT_MM, camera)
+      return ndc ? ndcToPixel(ndc.x, ndc.y, width, height) : null
+    }
+
+  it('is a unit vector', () => {
+    for (const degrees of [0, 90, 145, -60]) {
+      const axis = cueAxisPixels(cue, degrees * DEG, BALL_RADIUS * 4, project(aimCameraFor(degrees * DEG)))!
+      expect(Math.hypot(axis.x, axis.y)).toBeCloseTo(1, 9)
+    }
+  })
+
+  it('comes down the frame whatever the aim, because the camera is behind the ball', () => {
+    // The strongest thing that can be said about it, and the thing the drag gesture relies
+    // on: the cue butt is always between the lens and the ball, so it is always drawn below
+    // it, and always straight below — never off to one side. Pulling back down the screen is
+    // adding power, in every aim direction and in both views.
+    for (const degrees of [0, 30, 90, 145, -60, 180, 250]) {
+      const axis = cueAxisPixels(cue, degrees * DEG, BALL_RADIUS * 4, project(aimCameraFor(degrees * DEG)))!
+      expect(axis.x).toBeCloseTo(0, 6)
+      expect(axis.y).toBeCloseTo(1, 6)
+    }
+  })
+
+  it('runs along the table overhead, the way it always did', () => {
+    // Top-down is the one view where the screen angle and the aim angle are the same angle,
+    // which is why the old code was only ever right here — and the two views must not differ
+    // in handedness, or switching between them would turn the table round under the player.
+    // The butt is behind the ball along the aim, hence the half turn.
+    for (const degrees of [0, 90, 145, -60]) {
+      const axis = cueAxisPixels(cue, degrees * DEG, BALL_RADIUS * 4, project(topDownCamera()))!
+      expectAngle(Math.atan2(axis.y, axis.x), degrees * DEG + Math.PI)
+    }
+  })
+
+  it('refuses to guess when a point is behind the lens', () => {
+    expect(cueAxisPixels(cue, 0, BALL_RADIUS * 4, () => null)).toBeNull()
+  })
+})
 
 describe('the aim angle a pick implies', () => {
   it('points at the ball it was asked about', () => {

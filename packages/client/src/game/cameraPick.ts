@@ -129,16 +129,17 @@ export function pickCameraAt(
   // the quarter turn comes out zero length and every ray would come back as the same
   // direction. Overhead there is no correct sideways — the camera has no roll and no
   // heading to speak of — so it is given the table's own length as the right, which puts
-  // the baulk end at the bottom of the screen and keeps the overhead view the right way
-  // up, the same way the old fixed camera had it.
+  // the two long cushions across the frame and leaves the overhead view with the same
+  // handedness as the flat renderer: increasing `y` runs down the screen in both, so
+  // switching between the two views does not turn the table round.
   const flat = Math.hypot(-forward.y, forward.x)
   const right: Vec3 =
     flat > CAMERA_BASIS_TOLERANCE
       ? { x: -forward.y / flat, y: forward.x / flat, h: 0 }
       : { x: 1, y: 0, h: 0 }
   // The up vector is the other pair crossed the way a camera needs it: with the right
-  // vector along the table's length and the lens pointing down, this puts the screen's up
-  // towards the far cushion.
+  // vector along the table's length and the lens pointing down, this is the sense that
+  // matches the flat renderer's.
   const up = normalise({
     x: forward.y * right.h - forward.h * right.y,
     y: forward.h * right.x - forward.x * right.h,
@@ -217,6 +218,41 @@ export function ndcToPixel(ndcX: number, ndcY: number, width: number, height: nu
 }
 
 /**
+ * How wide a ball is drawn, in canvas pixels, at a point on the cloth.
+ *
+ * The radius is measured across the direction of view rather than along it, because that
+ * is the direction the ball is not foreshortened in — the one its true width shows up in.
+ * Measuring along the view would shrink the answer to nothing as the camera came round to
+ * face the ball, which is exactly where a tap tolerance most needs to be generous.
+ *
+ * Top-down is the degenerate case again: with no horizontal direction of view there is no
+ * "across", and the table's own length is as good a choice as any.
+ */
+export function ballRadiusPx(
+  centre: TablePoint,
+  radiusMm: number,
+  width: number,
+  height: number,
+  camera: PickCamera
+): number {
+  const flat = Math.hypot(camera.forward.x, camera.forward.y)
+  const across =
+    flat > CAMERA_BASIS_TOLERANCE
+      ? { x: -camera.forward.y / flat, y: camera.forward.x / flat }
+      : { x: 1, y: 0 }
+  const middle = projectToNdc(centre, PICK_PLANE_HEIGHT_MM, camera)
+  const edge = projectToNdc(
+    { x: centre.x + across.x * radiusMm, y: centre.y + across.y * radiusMm },
+    PICK_PLANE_HEIGHT_MM,
+    camera
+  )
+  if (!middle || !edge) return 0
+  const inner = ndcToPixel(middle.x, middle.y, width, height)
+  const outer = ndcToPixel(edge.x, edge.y, width, height)
+  return Math.hypot(outer.x - inner.x, outer.y - inner.y)
+}
+
+/**
  * The aim angle from a cue ball to a point on the cloth, or null when the point is the
  * cue ball.
  *
@@ -230,4 +266,36 @@ export function aimAngleTo(cue: TablePoint, target: TablePoint): number | null {
   const dy = target.y - cue.y
   if (Math.hypot(dx, dy) < BALL_RADIUS * 0.1) return null
   return Math.atan2(dy, dx)
+}
+
+/**
+ * The screen direction the cue points, as drawn.
+ *
+ * The drag gesture asks how far the pointer has travelled along the cue, and that has to be
+ * measured in the pixels the player can see. Under a camera looking down the line of the
+ * shot, the table-space angle and the screen angle are nothing like each other: aiming away
+ * from the camera moves the aim point barely at all on screen, while aiming back towards it
+ * throws it across the frame. Measuring along the line from the cue ball to a point behind it
+ * takes the projection's own answer, so the gesture feels the same in every view instead of
+ * only overhead.
+ *
+ * `tableToScreen` returns null for a point behind the lens, and so does this — a caller
+ * should leave whatever it was doing alone rather than substitute a guess.
+ */
+export function cueAxisPixels(
+  cue: TablePoint,
+  angle: number,
+  backMm: number,
+  tableToScreen: (x: number, y: number) => { x: number; y: number } | null
+): { x: number; y: number } | null {
+  const butt = tableToScreen(cue.x - Math.cos(angle) * backMm, cue.y - Math.sin(angle) * backMm)
+  const ball = tableToScreen(cue.x, cue.y)
+  if (!butt || !ball) return null
+  const dx = butt.x - ball.x
+  const dy = butt.y - ball.y
+  const length = Math.hypot(dx, dy)
+  // Too short to be a direction: the two points have landed on the same pixel, which is
+  // what happens when the sample is far enough back that the projection squashes it.
+  if (length < CAMERA_BASIS_TOLERANCE) return null
+  return { x: dx / length, y: dy / length }
 }

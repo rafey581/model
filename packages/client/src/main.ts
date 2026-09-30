@@ -1490,6 +1490,19 @@ function renderGame(): void {
   cueController = createCueController({
     canvas,
     cuePosition: { x: 300, y: 800 },
+    // The 3D scene answers pointer questions by casting through the camera it is drawing
+    // with, so the aim means the same thing from behind the cue ball as from overhead. Asked
+    // for per gesture rather than captured once, because the camera is still easing towards
+    // its next position while the player is aiming — and because a graphics error can take
+    // the 3D scene away mid-game, leaving the flat renderer to answer instead.
+    view: () =>
+      scene3d
+        ? {
+            screenToTable: (px, py) => scene3d?.screenToTable(px, py) ?? null,
+            tableToScreen: (x, y) => scene3d?.tableToScreen(x, y) ?? null,
+            ballRadiusPx: (x, y, radius) => scene3d?.ballRadiusPx(x, y, radius) ?? 0
+          }
+        : undefined,
     // The visit is only playable when the table has settled, which is the same
     // condition that draws the cue. Firing while a shot is still animating used to
     // be accepted by the server and cut the animation dead.
