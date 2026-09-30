@@ -38,6 +38,8 @@ const STICK_REST_GAP = 8
 const STICK_POWER_DRAW = 190
 const tableX = (x: number): number => x - HALF_L
 const tableZ = (y: number): number => y - HALF_W
+/** Stands in for an undrawn table, so the camera's per-frame walk allocates nothing. */
+const NO_BALLS: readonly FrameSnapshotData['balls'][number][] = []
 /**
  * How far below its resting height a ball starts its rise back onto the cloth.
  *
@@ -1121,7 +1123,10 @@ export class Scene3D {
     let sumX = 0
     let sumY = 0
     let count = 0
-    for (const ball of this.lastSnapshot?.balls ?? []) {
+    // Runs before the table has ever been drawn as well as after, so the empty case wants a
+    // real empty array rather than a fresh one every frame.
+    const balls = this.lastSnapshot?.balls ?? NO_BALLS
+    for (const ball of balls) {
       if (ball.potted) continue
       sumX += ball.x
       sumY += ball.y
@@ -1134,7 +1139,7 @@ export class Scene3D {
     if (count > 0) {
       const midX = sumX / count
       const midY = sumY / count
-      for (const ball of this.lastSnapshot?.balls ?? []) {
+      for (const ball of balls) {
         if (ball.potted) continue
         spread = Math.max(spread, Math.hypot(ball.x - midX, ball.y - midY))
       }
