@@ -7,6 +7,7 @@ import { createCueController } from './game/input.js'
 import type { CueController } from './game/input.js'
 import { createHud, computePrizeCredits, describeBallOn, deriveHudState } from './game/hud.js'
 import type { Hud } from './game/hud.js'
+import { frameForHud } from './game/hudFrame.js'
 import { fitTableBox } from './game/layout.js'
 import { createShotTimer } from './game/shotTimerView.js'
 import type { TurnTiming } from './game/shotTimer.js'
@@ -101,15 +102,14 @@ let hud: Hud | null = null
  */
 const shotTimer = createShotTimer({ turnFrame: () => hud?.turnFrame() ?? null })
 /**
- * The frame the balls strip is allowed to describe.
+ * The frame the HUD is currently describing.
  *
- * Scores and the turn are facts about the frame and are shown the instant the
- * snapshot lands. What is still on the table is not: the shot that is about to be
- * watched is the thing that changes it, so drawing it early would report the pot
- * before the ball has reached the pocket. The strip therefore trails the replay by
- * one shot and catches up when the replay ends.
+ * Scores, turn and ball on are held at the frame a replay started from until that replay
+ * ends, because the server's snapshot carries the shot's result before the animation that
+ * shows it has run. `frameForHud` owns that rule; this is simply where the answer is kept
+ * between calls.
  */
-let hudBallsFrame: FrameSnapshotData | null = null
+let hudFrame: FrameSnapshotData | null = null
 /** Sticky dismissal of the controls hint, so it does not come back mid-frame. */
 let hintDismissed = false
 /** What the table is worth, read once from the match rather than recomputed. */
@@ -470,12 +470,12 @@ function updateConnChip(): void {
  */
 function updateHud(): void {
   if (!hud) return
-  // A replay is on screen, so the table it shows has not finished yet. The strip
-  // stays on the frame the replay started from until it ends.
-  if (shotPlayer === null) hudBallsFrame = frame
+  // While a replay is on screen the HUD keeps describing the frame that replay started
+  // from, so nothing it shows gives the shot away before it has been watched.
+  hudFrame = frameForHud({ replayRunning: shotPlayer !== null, shown: hudFrame, authoritative: frame })
   hud.update(
     deriveHudState({
-      snapshot: hudBallsFrame,
+      snapshot: hudFrame,
       you: { name: currentUser?.username ?? 'You', isBot: false },
       opponent: { name: opponentName(), isBot: activeMatchIsPractice },
       mySeat,
@@ -1554,13 +1554,11 @@ function applyGameUpdate(data: GameUpdatePayload): void {
   if (data.playback) shotTimer.freeze()
   else applyTurnTiming(data.turn)
 
-  // The score, the turn and the ball on are taken from the server's snapshot the
-  // instant it arrives, and are deliberately not held back for the replay. They are
-  // facts about the frame rather than commentary on the shot, and holding them would
-  // mean the scoreboard and the table disagreed with each other for the length of
-  // the animation. What does wait is the shot's verdict: the foul buzzer, the pot
-  // sounds and the messages, because those describe what the balls just did and are
-  // only meaningful once the striker has watched them do it.
+  // What the shot turned out to be is reported when the balls have stopped moving, not
+  // when the snapshot saying so arrives. That covers the verdict's sound and its message,
+  // and the score with it: a snapshot carries the outcome the instant it lands, so a
+  // scoreboard that read it there would name the pot, the foul or the won frame while
+  // the ball responsible was still on its way to the pocket.
   //
   // A streamed shot replays from where the table was before the update landed,
   // so the animation starts from the true pre-shot positions.
@@ -1602,8 +1600,13 @@ function applyGameUpdate(data: GameUpdatePayload): void {
       else show()
     } else if (ev.type === 'FRAME_END') {
       const d = ev.data as { winnerSeat: number }
-      framesWon = d.winnerSeat === 0 ? [framesWon[0] + 1, framesWon[1]] : [framesWon[0], framesWon[1] + 1]
       const show = (): void => {
+        // The frames score moves with the verdict, not with the snapshot. It is the
+        // loudest spoiler in the game — a frame won is a frame won, and there is no
+        // reading of an updated frame tally that is not the answer — so it waits with
+        // the bell and the announcement. The HUD picks it up on the refresh that ends
+        // the replay.
+        framesWon = d.winnerSeat === 0 ? [framesWon[0] + 1, framesWon[1]] : [framesWon[0], framesWon[1] + 1]
         playFrameEnd()
         toast(`Frame ${frameIndex} won by ${seatName(d.winnerSeat)}`)
       }
