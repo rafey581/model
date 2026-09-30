@@ -1,9 +1,23 @@
 import * as THREE from 'three'
-import { TABLE_LENGTH, TABLE_WIDTH, BALL_RADIUS, BAULK_LINE_X, D_RADIUS, POCKET_RADIUS_CORNER, POCKET_RADIUS_MIDDLE, pocketPositions } from '@snooker/shared'
+import { BALL_IDS, TABLE_LENGTH, TABLE_WIDTH, BALL_RADIUS, BAULK_LINE_X, D_RADIUS, POCKET_RADIUS_CORNER, POCKET_RADIUS_MIDDLE, pocketPositions } from '@snooker/shared'
 import type { FrameSnapshotData, AimState, RenderOptions } from './renderer.js'
 import { computeAimGuide, objectDirection, type AimGuide, type AimGuideBall } from './aim.js'
 import { setTableTransform } from './renderer.js'
 import { ballColor } from './palette.js'
+import {
+  type CameraRigState,
+  initialRigState,
+  stepCameraRig
+} from './camera.js'
+import {
+  ndcToPixel,
+  pickCameraAt,
+  pickCameraFromWorldMatrix,
+  pixelToNdc,
+  projectToNdc,
+  screenToTable,
+  type PickCamera
+} from './cameraPick.js'
 
 const HALF_L = TABLE_LENGTH / 2
 const HALF_W = TABLE_WIDTH / 2
@@ -372,6 +386,22 @@ export class Scene3D {
   private stick!: THREE.Group
   private lastTime = 0
   private immediate = false
+  /**
+   * The camera's own memory: where it is, and the heading it has turned to so far.
+   *
+   * Held here rather than recomputed from the pose, because the heading is the one thing
+   * with two ways round it: easing it from the pose would swing the table the long way
+   * when the aim crosses 180 degrees.
+   */
+  private rig: CameraRigState
+  /** Which view the player has asked for. The rig follows it unless a shot overrides it. */
+  private cameraMode: 'AIM' | 'TOP_DOWN' = 'AIM'
+  /** True while a shot is being watched, which is when the camera follows the balls. */
+  private tracking = false
+  /** The snapshot last handed to `update`, which is what the camera reads its cue ball from. */
+  private lastSnapshot: FrameSnapshotData | null = null
+  /** The last aim the player gave, which is the heading the camera turns to. */
+  private lastAimAngle = 0
 
   static create(canvas: HTMLCanvasElement, width: number, height: number): Scene3D | null {
     try {
@@ -395,6 +425,7 @@ export class Scene3D {
     this.scene.background = new THREE.Color('#0f1317')
 
     this.camera = new THREE.PerspectiveCamera(50, width / height, 1, 20000)
+    this.rig = initialRigState(width / height)
     this.camera.position.set(0, 1400, 1750)
     this.camera.lookAt(0, 0, 0)
 
@@ -760,6 +791,10 @@ export class Scene3D {
 
   update(snapshot: FrameSnapshotData | null, options: RenderOptions = {}): void {
     this.immediate = options.immediate === true
+    // Kept for the camera, which moves on its own clock in `render` rather than in here:
+    // the balls it follows and the heading it turns to are both read from here.
+    this.lastSnapshot = snapshot
+    if (options.aim) this.lastAimAngle = options.aim.angle
     if (!snapshot) {
       for (const rig of this.balls.values()) rig.setVisible(false)
       this.hideAim()
@@ -982,12 +1017,139 @@ export class Scene3D {
     if (this.stick) this.stick.visible = false
   }
 
+  /**
+   * Asks for one of the two views the player controls: the camera behind the cue ball, or
+   * the overhead one. Nothing is cut — the rig eases between them — so this can be called
+   * as often as the button is pressed.
+   */
+  setCameraMode(mode: 'AIM' | 'TOP_DOWN'): void {
+    this.cameraMode = mode
+  }
+
+  /**
+   * Tells the camera whether a shot is on screen.
+   *
+   * While one is, the camera stops being a view the player chose and becomes a view of the
+   * balls: it follows where they are going. When it ends, the rig eases back to whichever
+   * view the player had asked for, which is why this is a flag rather than a mode — the
+   * choice underneath is remembered across every shot.
+   */
+  setTracking(tracking: boolean): void {
+    this.tracking = tracking
+  }
+
+  /** The view the camera is being asked for, for the toggle to reflect. */
+  currentCameraMode(): 'AIM' | 'TOP_DOWN' {
+    return this.cameraMode
+  }
+
+  /**
+   * Where the camera is looking at the moment, in the form the picking maths needs.
+   *
+   * Read off the live camera rather than worked out again from the pose, so the two can
+   * never disagree: whatever the lens is actually pointing at is what a pointer is cast
+   * through. The renderer's world axes are turned into table millimetres on the way out,
+   * which is the one conversion the pure module knows nothing about.
+   */
+  private pickCamera(): PickCamera {
+    return pickCameraFromWorldMatrix(
+      this.camera.position,
+      this.camera.matrixWorld.elements,
+      this.camera.fov,
+      this.camera.aspect
+    )
+  }
+
+  /**
+   * The point on the cloth under a canvas pixel, cast through the live camera.
+   *
+   * This is what makes the pointer mean the same thing from behind the cue ball and from
+   * overhead: the ray starts at the lens, goes through the pixel, and meets the cloth where
+   * the table is. Null when the pixel is above the horizon, so a caller can leave the aim
+   * alone rather than guessing.
+   */
+  screenToTable(px: number, py: number): { x: number; y: number } | null {
+    if (this.cvw <= 0 || this.cvh <= 0) return null
+    const ndc = pixelToNdc(px, py, this.cvw, this.cvh)
+    return screenToTable(ndc.x, ndc.y, this.pickCamera())
+  }
+
+  /**
+   * Where a point on the cloth is drawn, in canvas pixels.
+   *
+   * The other half of the same question, and what the press-and-release test uses to ask
+   * "was that on the cue ball". Null when the point is behind the lens.
+   */
+  tableToScreen(x: number, y: number): { x: number; y: number } | null {
+    if (this.cvw <= 0 || this.cvh <= 0) return null
+    const ndc = projectToNdc({ x, y }, 0, this.pickCamera())
+    if (!ndc) return null
+    return ndcToPixel(ndc.x, ndc.y, this.cvw, this.cvh)
+  }
+
+  /** The heading the camera is easing towards, which is the last aim it was given. */
+  cameraYaw(): number {
+    return this.rig.yaw
+  }
+
   resize(width: number, height: number): void {
     this.cvw = width
     this.cvh = height
     this.renderer.setSize(width, height, false)
     this.camera.aspect = width / height
     this.camera.updateProjectionMatrix()
+  }
+
+  /**
+   * Moves the camera one frame towards whatever it has been asked to be doing.
+   *
+   * Called before the scene is drawn and after the balls have been moved, so the frame that
+   * gets drawn is the one the rig has just eased to. Everything it needs is already here:
+   * the cue ball and the balls worth following come out of the snapshot it is drawing, and
+   * the heading is the last aim the player gave, which during a shot is the line the shot
+   * was played along.
+   */
+  private stepCamera(dt: number): void {
+    let cue: { x: number; y: number } | null = null
+    let sumX = 0
+    let sumY = 0
+    let count = 0
+    for (const ball of this.lastSnapshot?.balls ?? []) {
+      if (ball.potted) continue
+      sumX += ball.x
+      sumY += ball.y
+      count++
+      if (ball.id === BALL_IDS.CUE) cue = { x: ball.x, y: ball.y }
+    }
+    // The spread is the radius of the smallest circle round the centre that holds them all,
+    // which is what tells the tracking camera how far back it has to stand.
+    let spread = 0
+    if (count > 0) {
+      const midX = sumX / count
+      const midY = sumY / count
+      for (const ball of this.lastSnapshot?.balls ?? []) {
+        if (ball.potted) continue
+        spread = Math.max(spread, Math.hypot(ball.x - midX, ball.y - midY))
+      }
+    }
+    this.rig = stepCameraRig(
+      this.rig,
+      {
+        mode: this.tracking ? 'TRACK' : this.cameraMode,
+        aspect: this.cvw / Math.max(1, this.cvh),
+        cue,
+        aimAngle: this.lastAimAngle,
+        focus: count > 0 ? { x: sumX / count, y: sumY / count, spread } : null
+      },
+      dt
+    )
+    const pose = this.rig.pose
+    this.camera.position.set(tableX(pose.x), pose.height, tableZ(pose.y))
+    this.camera.lookAt(tableX(pose.lookX), pose.lookHeight, tableZ(pose.lookY))
+    if (this.camera.fov !== pose.fov) {
+      this.camera.fov = pose.fov
+      this.camera.updateProjectionMatrix()
+    }
   }
 
   render(): void {
@@ -1044,6 +1206,9 @@ export class Scene3D {
         }
       }
     }
+    // The camera eases after the balls have been moved, so the frame that goes to the
+    // screen is the one the rig has just settled towards rather than the one before.
+    this.stepCamera(dt)
     this.camera.updateMatrixWorld(true)
     const center = new THREE.Vector3(0, 0, 0).project(this.camera)
     const ax = new THREE.Vector3(600, 0, 0).project(this.camera)
