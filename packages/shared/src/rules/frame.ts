@@ -1,10 +1,10 @@
-import { BALL_IDS, BAULK_LINE_X, COLOR_ORDER, COLOR_VALUES, D_RADIUS, TABLE_WIDTH, TOTAL_REDS } from '../constants.js'
-import { layoutTableBalls } from '../physics/layout.js'
+import { BALL_DIAMETER, BALL_IDS, BALL_RADIUS, BAULK_LINE_X, COLOR_ORDER, COLOR_VALUES, D_RADIUS, TABLE_LENGTH, TABLE_WIDTH, TOTAL_REDS } from '../constants.js'
+import { layoutTableBalls, pocketPositions } from '../physics/layout.js'
 import { simulateStroke } from '../physics/world.js'
 import type { SimOptions } from '../physics/world.js'
 import type { SimKeyframe, SimResult, SimShot } from '../events.js'
 import { buildInitialBalls, type FrameState, type MatchState } from '../state.js'
-import { vec } from '../vec.js'
+import { vec, type Vec2 } from '../vec.js'
 import { applyResolution, resolveStroke, respotBall, lowestRemainingColour, isColourId, isRedId } from './snooker.js'
 import type { StrokeResolution } from './snooker.js'
 
@@ -20,7 +20,8 @@ export function createFrame(breakIndex = 0): FrameState {
     pottedOrder: [],
     remainingReds: TOTAL_REDS,
     colorsRemaining,
-    cueInHand: true
+    cueInHand: true,
+    cueInHandInD: true
   }
 }
 
@@ -55,6 +56,11 @@ export function applyStroke(
   applyResolution(frame, resolution, frame.remainingReds)
   if (sim.cuePotted) respotBall(frame, BALL_IDS.CUE)
   frame.cueInHand = sim.cuePotted
+  // The D restriction belongs to the break-off alone. A stroke has now been played, so
+  // any ball-in-hand this frame produces from here is a mid-frame one and may be placed
+  // anywhere on the table. Cleared after the placement above has run, so the break-off
+  // itself is still judged against the D.
+  frame.cueInHandInD = false
   const end = maybeEndFrame(frame)
   alignPlaybackWithFrame(sim, frame)
   return { resolution, sim, frameEnded: end.frameEnded, frameWinner: end.frameWinner, pottedRedsCount }
@@ -99,16 +105,80 @@ function alignPlaybackWithFrame(sim: SimResult, frame: FrameState): void {
   }
 }
 
+/**
+ * Where the striker's cue ball may be put down, or null if they may not put it there.
+ *
+ * Two rules, and they are not the same rule:
+ *
+ *  - The D is a break-off restriction only. At the start of a frame the cue ball has to
+ *    go inside the D; every other in-hand during the frame — a cue potted mid-frame, an
+ *    in-off, any other foul — may go anywhere on the table, which is what real snooker
+ *    does. `frame.cueInHandInD` is what tells the two apart.
+ *  - Wherever it goes, the cue ball has to actually be placeable: on the cloth, clear of
+ *    the pockets, and not sitting inside another ball.
+ *
+ * The second rule used to be free. When every legal placement was inside the D, the
+ * D test bounded the position for us. Relaxing the D meant the bounds had to become
+ * explicit, because otherwise a client could place the cue ball a mile off the table or
+ * inside a red, and the simulation would have to cope with it.
+ */
+function resolveCuePlacement(frame: FrameState, cuePos: { x: number; y: number }): Vec2 | null {
+  if (!Number.isFinite(cuePos.x) || !Number.isFinite(cuePos.y)) return null
+  if (frame.cueInHandInD && !isInsideD(cuePos)) return null
+  if (!isOnTable(cuePos)) return null
+  if (isInsideAPocket(cuePos)) return null
+  if (isCrowded(frame, cuePos)) return null
+  return vec(cuePos.x, cuePos.y)
+}
+
+function isInsideD(pos: { x: number; y: number }): boolean {
+  const dx = pos.x - BAULK_LINE_X
+  const dy = pos.y - TABLE_WIDTH / 2
+  return pos.x <= BAULK_LINE_X && dx * dx + dy * dy <= D_RADIUS * D_RADIUS
+}
+
+/** The cue ball has to be wholly on the cloth, not centred on the cushion line. */
+function isOnTable(pos: { x: number; y: number }): boolean {
+  return (
+    pos.x >= BALL_RADIUS &&
+    pos.x <= TABLE_LENGTH - BALL_RADIUS &&
+    pos.y >= BALL_RADIUS &&
+    pos.y <= TABLE_WIDTH - BALL_RADIUS
+  )
+}
+
+/**
+ * A cue ball placed inside a pocket radius would be potted before it could be struck,
+ * so it is not a legal spot to put one down.
+ */
+function isInsideAPocket(pos: { x: number; y: number }): boolean {
+  for (const pocket of pocketPositions()) {
+    const dx = pos.x - pocket.x
+    const dy = pos.y - pocket.y
+    if (dx * dx + dy * dy < pocket.radius * pocket.radius) return true
+  }
+  return false
+}
+
+/** No overlapping a ball that is still on the table: centres at least a diameter apart. */
+function isCrowded(frame: FrameState, pos: { x: number; y: number }): boolean {
+  for (const ball of frame.balls) {
+    if (ball.isCue || ball.potted) continue
+    const dx = ball.pos.x - pos.x
+    const dy = ball.pos.y - pos.y
+    if (dx * dx + dy * dy < BALL_DIAMETER * BALL_DIAMETER) return true
+  }
+  return false
+}
+
 function placeCueIfInHand(frame: FrameState, shot: { cuePos?: { x: number; y: number } }): void {
   if (!frame.cueInHand || !shot.cuePos) return
   const cue = frame.balls.find((b) => b.isCue)
   if (!cue) return
-  const dx = shot.cuePos.x - BAULK_LINE_X
-  const dy = shot.cuePos.y - TABLE_WIDTH / 2
-  const inD = shot.cuePos.x <= BAULK_LINE_X && dx * dx + dy * dy <= D_RADIUS * D_RADIUS
-  if (!inD) return
-  cue.pos.x = shot.cuePos.x
-  cue.pos.y = shot.cuePos.y
+  const pos = resolveCuePlacement(frame, shot.cuePos)
+  if (!pos) return
+  cue.pos.x = pos.x
+  cue.pos.y = pos.y
   cue.vel = { x: 0, y: 0 }
   cue.spin = { x: 0, y: 0 }
 }
@@ -226,6 +296,13 @@ export interface FrameSnapshot {
   pottedOrder: number[]
   colorsRemaining: number[]
   cueInHand: boolean
+  /**
+   * The client draws "place the cue in the D" against this, so a mid-frame in-hand is
+   * not announced with break-off wording it is no longer subject to. Optional and
+   * defaulting to false, so a snapshot from before the split is read as unrestricted
+   * rather than as a break-off.
+   */
+  cueInHandInD?: boolean
   winnerIndex?: number
 }
 
@@ -241,6 +318,7 @@ export function frameSnapshot(frame: FrameState): FrameSnapshot {
     pottedOrder: [...frame.pottedOrder],
     colorsRemaining: [...frame.colorsRemaining],
     cueInHand: frame.cueInHand,
+    cueInHandInD: frame.cueInHandInD,
     winnerIndex: frame.winnerIndex
   }
 }
@@ -269,6 +347,7 @@ export function frameFromSnapshot(snapshot: FrameSnapshot): FrameState {
     remainingReds: snapshot.remainingReds,
     colorsRemaining: new Set(snapshot.colorsRemaining),
     cueInHand: snapshot.cueInHand,
+    cueInHandInD: snapshot.cueInHandInD ?? false,
     winnerIndex: snapshot.winnerIndex ?? undefined
   }
 }

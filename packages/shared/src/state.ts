@@ -89,6 +89,16 @@ export interface FrameState {
   remainingReds: number
   colorsRemaining: Set<number>
   cueInHand: boolean
+  /**
+   * Whether the cue ball in hand may only be placed inside the D.
+   *
+   * The D is a break-off restriction and nothing else. It is true for the opening
+   * stroke of a frame and false for every later in-hand — a cue potted mid-frame, an
+   * in-off, any other foul — because in real snooker the incoming player may then spot
+   * the cue ball anywhere on the table. Carried on the frame rather than inferred from
+   * the score, because "has anything been played yet" is the only thing that decides it.
+   */
+  cueInHandInD: boolean
   winnerIndex?: number
 }
 

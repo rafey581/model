@@ -40,6 +40,13 @@ export interface HudSnapshot {
   remainingReds: number
   balls: Array<{ id: number; potted: boolean }>
   cueInHand?: boolean
+  /**
+   * Whether the in-hand is still subject to the D. The D is a break-off restriction,
+   * so a mid-frame in-hand is free anywhere on the table and the banner has to say so
+   * rather than send the player to the wrong end of the table. Absent reads as
+   * unrestricted, which is the safer of the two to guess.
+   */
+  cueInHandInD?: boolean
 }
 
 export interface HudSide {
@@ -81,10 +88,12 @@ export interface HudState {
   /** Hex for the badge's dot, when a single ball is named. */
   ballOnDot: string | null
   /**
-   * The cue ball is in hand and has to be placed in the D. This used to be drawn on
+   * The cue ball is in hand and has to be placed. This used to be drawn on
    * the 2D canvas only, which meant the 3D table never said it.
    */
   cueInHand: boolean
+  /** True while the D still constrains that placement, i.e. the break-off. */
+  cueInHandInD: boolean
   /** True when the reds are the ball on, which is what highlights the red dots. */
   redsOn: boolean
   reds: { total: number; remaining: number; onTable: boolean[] }
@@ -220,6 +229,7 @@ export function deriveHudState(input: HudInput): HudState {
           ? ballColorHex(BALL_IDS.RED_MIN)
           : null,
     cueInHand: Boolean(snapshot?.cueInHand),
+    cueInHandInD: Boolean(snapshot?.cueInHandInD),
     redsOn: (snapshot?.ballOn ?? 'RED') === 'RED',
     reds: {
       total: TOTAL_REDS,
@@ -419,7 +429,6 @@ export function createHud(): Hud {
   const frameLabel = el('div', 'hud-frame-label')
   frameLabel.id = 'hud-frame-label'
   const inHand = el('div', 'hud-inhand')
-  inHand.textContent = 'Ball in hand — place the cue in the D'
   inHand.id = 'hud-inhand'
   inHand.hidden = true
   centre.append(prize, frames, frameLabel, inHand)
@@ -689,6 +698,7 @@ export function createHud(): Hud {
       setHidden(frames, state.frames === null)
       setText(frameLabel, state.frameLabel)
       setHidden(inHand, !state.cueInHand)
+      setText(inHand, state.cueInHandInD ? 'Ball in hand — place the cue in the D' : 'Ball in hand — place the cue anywhere on the table')
       setText(ballOnText, state.ballOnLabel)
       setText(brk, state.breakLabel ?? '')
       setHidden(brk, state.breakLabel === null)

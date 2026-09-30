@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { BALL_IDS, COLOR_ORDER, COLOR_VALUES, TOTAL_REDS, BALL_RADIUS } from '../constants.js'
+import { BAULK_LINE_X, BALL_IDS, COLOR_ORDER, COLOR_VALUES, TABLE_LENGTH, TABLE_WIDTH, TOTAL_REDS, BALL_RADIUS } from '../constants.js'
 import { colourSpotPosition, cueStartPosition } from '../physics/layout.js'
-import { vec } from '../vec.js'
+import { vec, type Vec2 } from '../vec.js'
 import type { FrameState } from '../state.js'
-import { applyFrameWinner, applyStroke, createFrame, createMatch, frameSnapshot, framesToWin, matchWinnerIndex, maybeEndFrame } from './frame.js'
+import { buildInitialBalls } from '../state.js'
+import { applyFrameWinner, applyStroke, createFrame, createMatch, frameFromSnapshot, frameSnapshot, framesToWin, matchWinnerIndex, maybeEndFrame } from './frame.js'
 import { applyResolution, isRedId, resolveStroke, respotBall, applyTimeoutFoul } from './snooker.js'
 
 function stroke(frame: FrameState, shooterIndex: number, pottedIds: number[], cuePotted: boolean, firstContactId: number | null): { frameEnded: boolean; frameWinner: number | null; reason?: string } {
@@ -595,5 +596,117 @@ describe('applyStroke integration', () => {
     expect(f.remainingReds).toBe(TOTAL_REDS)
     expect(ball(f, BALL_IDS.CUE).potted).toBe(false)
     expect(outcome.frameEnded).toBe(false)
+  })
+})
+
+/**
+ * The D is a break-off restriction and nothing else.
+ *
+ * Every test here plays at power 0, which the simulation settles on its first tick, so
+ * the cue ball is still exactly where the placement put it afterwards. That makes the
+ * accepted and rejected placements directly readable off the frame, with no replay to
+ * reason about.
+ */
+describe('ball in hand placement', () => {
+  const IN_D: Vec2 = vec(600, TABLE_WIDTH / 2)
+  /** Well clear of the D, and of every ball and pocket on the table. */
+  const ANYWHERE: Vec2 = vec(1200, 1400)
+  const ON_THE_BLUE = vec(TABLE_LENGTH / 2, TABLE_WIDTH / 2)
+
+  function place(frame: FrameState, at: { x: number; y: number }): Vec2 {
+    // Each placement consumes the in-hand, because playing a stroke clears it. Re-armed
+    // here so one test can assert several placements independently; `cueInHandInD` is
+    // left alone, since which side of the break-off we are on is what is under test.
+    frame.cueInHand = true
+    applyStroke(frame, frame.turnIndex, { aimAngle: 0, power: 0, spin: { x: 0, y: 0 }, cuePos: at })
+    return vec(ball(frame, BALL_IDS.CUE).pos.x, ball(frame, BALL_IDS.CUE).pos.y)
+  }
+
+  /** Puts the cue ball in hand the way a real in-off does, and returns that frame. */
+  function midFrameInHand(): FrameState {
+    const frame = createFrame(0)
+    frame.balls = frame.balls.filter((b) => b.isCue)
+    frame.balls[0]!.pos = vec(400, 400)
+    frame.balls[0]!.vel = vec(0, 0)
+    frame.cueInHand = false
+    frame.ballOn = 'RED'
+    const outcome = applyStroke(frame, 0, { aimAngle: Math.atan2(-400, -400), power: 0.15, spin: { x: 0, y: 0 } })
+    expect(outcome.sim.cuePotted).toBe(true)
+    expect(frame.cueInHand).toBe(true)
+    return frame
+  }
+
+  it('restricts the break-off to the D', () => {
+    const frame = createFrame(0)
+    expect(frame.cueInHandInD, 'a frame opens with the break-off restriction in force').toBe(true)
+    expect(place(frame, IN_D)).toEqual(IN_D)
+  })
+
+  it('refuses a break-off placement outside the D', () => {
+    const frame = createFrame(0)
+    // Anywhere is not the D: the rejected placement leaves the cue on its own spot.
+    expect(place(frame, ANYWHERE)).toEqual(cueStartPosition())
+  })
+
+  it('refuses a break-off placement short of the D, on the far side of the baulk line', () => {
+    const frame = createFrame(0)
+    // Inside the semicircle but on the wrong side of the baulk line is not in the D.
+    const beyondBaulk = vec(BAULK_LINE_X + 10, TABLE_WIDTH / 2)
+    expect(place(frame, beyondBaulk)).toEqual(cueStartPosition())
+  })
+
+  it('lets a mid-frame ball in hand go anywhere on the table', () => {
+    const frame = midFrameInHand()
+    expect(frame.cueInHandInD, 'the D restriction does not survive the first stroke').toBe(false)
+    expect(place(frame, ANYWHERE)).toEqual(ANYWHERE)
+  })
+
+  it('still refuses a mid-frame placement that is not on the table', () => {
+    const frame = midFrameInHand()
+    const before = vec(ball(frame, BALL_IDS.CUE).pos.x, ball(frame, BALL_IDS.CUE).pos.y)
+    for (const off of [vec(-500, 900), vec(9000, 900), vec(1200, -40), vec(1200, 1900)]) {
+      expect(place(frame, off), `placement ${off.x},${off.y} must be refused`).toEqual(before)
+    }
+  })
+
+  it('still refuses a mid-frame placement inside a pocket', () => {
+    const frame = midFrameInHand()
+    const before = vec(ball(frame, BALL_IDS.CUE).pos.x, ball(frame, BALL_IDS.CUE).pos.y)
+    // On the cloth by the test's own measure, but inside the corner pocket's jaws, so
+    // the cue ball would drop before it could be struck.
+    expect(place(frame, vec(30, 30))).toEqual(before)
+  })
+
+  it('still refuses a mid-frame placement overlapping a ball', () => {
+    const frame = midFrameInHand()
+    frame.balls = frame.balls.filter((b) => b.isCue)
+    // Two reds on the table, so the overlap check has something to reject against.
+    const reds = buildInitialBalls().filter((b) => b.isRed).slice(0, 2)
+    reds[0]!.pos = vec(1200, 400)
+    reds[1]!.pos = vec(1800, 900)
+    for (const red of reds) {
+      red.potted = false
+      red.vel = vec(0, 0)
+      frame.balls.push(red)
+    }
+    const before = vec(ball(frame, BALL_IDS.CUE).pos.x, ball(frame, BALL_IDS.CUE).pos.y)
+
+    expect(place(frame, vec(1200, 400)), 'inside a red').toEqual(before)
+    expect(place(frame, ON_THE_BLUE), 'inside a red').toEqual(before)
+    expect(place(frame, vec(1200, 445)), 'a ball a diameter away is still touching').toEqual(before)
+    expect(place(frame, vec(1200, 470)), 'a clear ball-width away is legal').toEqual(vec(1200, 470))
+  })
+
+  it('carries the restriction through a snapshot round trip', () => {
+    const frame = createFrame(0)
+    expect(frameSnapshot(frame).cueInHandInD).toBe(true)
+    const restored = frameFromSnapshot(frameSnapshot(midFrameInHand()))
+    expect(restored.cueInHandInD).toBe(false)
+  })
+
+  it('reads a pre-split snapshot as unrestricted rather than as a break-off', () => {
+    const legacy = frameSnapshot(createFrame(0))
+    delete legacy.cueInHandInD
+    expect(frameFromSnapshot(legacy).cueInHandInD).toBe(false)
   })
 })

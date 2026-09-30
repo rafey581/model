@@ -319,6 +319,25 @@ describe('break score', () => {
   })
 })
 
+describe('ball in hand', () => {
+  it('points the break-off at the D', () => {
+    const state = deriveHudState(input({ snapshot: fullTable({ cueInHand: true, cueInHandInD: true }) }))
+    expect(state.cueInHand).toBe(true)
+    expect(state.cueInHandInD).toBe(true)
+  })
+
+  it('lets a mid-frame in-hand go anywhere on the table', () => {
+    const state = deriveHudState(input({ snapshot: fullTable({ cueInHand: true, cueInHandInD: false }) }))
+    expect(state.cueInHand).toBe(true)
+    expect(state.cueInHandInD).toBe(false)
+  })
+
+  it('reads an absent flag as unrestricted rather than as a break-off', () => {
+    const state = deriveHudState(input({ snapshot: fullTable({ cueInHand: true }) }))
+    expect(state.cueInHandInD).toBe(false)
+  })
+})
+
 describe('the HUD uses the same colours as the table', () => {
   it('paints each chip with the ball it stands for', () => {
     const state = deriveHudState(input())
