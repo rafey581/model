@@ -23,6 +23,15 @@ const STICK_REST_GAP = 8
 const STICK_POWER_DRAW = 190
 const tableX = (x: number): number => x - HALF_L
 const tableZ = (y: number): number => y - HALF_W
+/**
+ * How far below its resting height a ball starts its rise back onto the cloth.
+ *
+ * The same depth the sink drops through, and both are driven at the same rate, so a ball
+ * that goes down and comes back spends equal time doing each.
+ */
+const RISE_DEPTH = 34
+/** The scale a ball starts its rise at, growing to full size as it reaches the cloth. */
+const RISE_START_SCALE = 0.6
 
 const textureCache = new Map<string, THREE.CanvasTexture>()
 
@@ -258,6 +267,9 @@ class BallRig {
   sinkT = 0
   sinkStart = new THREE.Vector3()
   sinkTarget = new THREE.Vector3()
+  rising = false
+  riseT = 0
+  riseFrom = new THREE.Vector3()
 
   constructor(radius: number, color: number, shadowTex: THREE.CanvasTexture) {
     // Phenolic resin: a hard, near-mirror lacquer over a dull core. The clearcoat
@@ -298,6 +310,26 @@ class BallRig {
     this.sinkTarget.set(targetX, this.group.position.y - 8, targetZ)
   }
 
+  /**
+   * Puts a ball back into play, the counterpart to the sink.
+   *
+   * A ball that comes back — the cue ball into hand after an in-off, a colour the rules
+   * re-spot — used to be teleported onto its spot, which reads as a glitch rather than
+   * as the table being re-racked. It comes up off the cloth instead, over the same
+   * fraction of a second the sink takes going down, so the two ends of a ball's journey
+   * off and back onto the table look like one motion.
+   */
+  startRise(targetX: number, targetZ: number): void {
+    // A sink still in flight is abandoned rather than raced. The ball is back on the
+    // table, so letting the drop finish would take it away again a moment later.
+    this.sinking = false
+    this.rising = true
+    this.riseT = 0
+    this.riseFrom.set(targetX, BALL_RADIUS - RISE_DEPTH, targetZ)
+    this.group.position.copy(this.riseFrom)
+    this.group.scale.set(RISE_START_SCALE, RISE_START_SCALE, RISE_START_SCALE)
+  }
+
   aim(targetX: number, targetZ: number, highlight: boolean, reset: boolean): void {
     if (reset) {
       this.group.position.set(targetX, BALL_RADIUS, targetZ)
@@ -320,6 +352,12 @@ export class Scene3D {
   private scene = new THREE.Scene()
   private camera: THREE.PerspectiveCamera
   private balls = new Map<number, BallRig>()
+  /**
+   * Whether each ball was potted in the previous update, so a ball coming back onto the
+   * table can be told from one that is merely being aimed at a new position. Kept here
+   * rather than passed in because the renderer is the only thing that sees every frame.
+   */
+  private wasPotted = new Map<number, boolean>()
   private shadowTexCache: THREE.CanvasTexture | null = null
   private cvw: number
   private cvh: number
@@ -745,6 +783,11 @@ export class Scene3D {
         const z = tableZ(ball.y)
         const moved = Math.hypot(rig.group.position.x - x, rig.group.position.z - z)
         rig.aim(x, z, ball.id === highlightId, rig.firstSeen || moved > 500)
+        // A ball that was potted and is now on the table has been re-racked rather than
+        // moved, so it rises onto its spot instead of being snapped there. The cue ball
+        // into hand after an in-off is the case this exists for; a colour the rules
+        // re-spot comes back the same way.
+        if (this.wasPotted.get(ball.id) === true) rig.startRise(x, z)
       } else if (rig.group.visible && !rig.sinking) {
         const px = tableX(ball.x)
         const pz = tableZ(ball.y)
@@ -765,6 +808,10 @@ export class Scene3D {
       } else {
         rig.firstSeen = true
       }
+      // Remembered after the ball has been placed, so the next update can tell a
+      // re-rack (potted, then not) apart from a ball that has only ever been on the
+      // table, which must not rise.
+      this.wasPotted.set(ball.id, ball.potted)
     }
     for (const [id, rig] of this.balls) {
       if (!seen.has(id)) rig.setVisible(false)
@@ -952,7 +999,30 @@ export class Scene3D {
       // simulation, so they are applied as-is instead of being smoothed again.
       const k = this.immediate ? 1 : 1 - Math.exp(-dt * 14)
       for (const rig of this.balls.values()) {
-        if (rig.group.visible && !rig.sinking) rig.group.position.lerp(rig.target, k)
+        if (rig.group.visible && !rig.sinking && !rig.rising) rig.group.position.lerp(rig.target, k)
+      }
+      for (const rig of this.balls.values()) {
+        if (rig.rising) {
+          // Eased out, so the ball leaves the cloth briskly and settles onto it, which is
+          // the reverse of the sink's ease-in.
+          rig.riseT += dt * 3.4
+          const t = Math.min(1, rig.riseT)
+          const eased = 1 - (1 - t) * (1 - t)
+          rig.group.position.set(
+            rig.riseFrom.x,
+            rig.riseFrom.y + (BALL_RADIUS - rig.riseFrom.y) * eased,
+            rig.riseFrom.z
+          )
+          const s = RISE_START_SCALE + (1 - RISE_START_SCALE) * eased
+          rig.group.scale.set(s, s, s)
+          if (t >= 1) {
+            rig.rising = false
+            rig.group.scale.set(1, 1, 1)
+            // Handed back to the ordinary target, so the ball keeps tracking a spot that
+            // moves for any reason other than the re-rack itself.
+            rig.group.position.set(rig.target.x, BALL_RADIUS, rig.target.z)
+          }
+        }
       }
       for (const rig of this.balls.values()) {
         if (!rig.sinking) continue
@@ -1005,5 +1075,6 @@ export class Scene3D {
     })
     for (const rig of this.balls.values()) rig.dispose()
     this.balls.clear()
+    this.wasPotted.clear()
   }
 }
