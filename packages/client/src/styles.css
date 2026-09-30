@@ -361,6 +361,23 @@ button.small {
   outline-offset: 2px;
 }
 
+/**
+ * Placement guidance, under the table. Same quiet one-liner style as the controls
+ * hint: muted text that appears while a placement is being rejected and says why,
+ * then disappears. Not a toast — this is continuous state, not an event.
+ */
+.placement-hint {
+  text-align: center;
+  color: var(--timer-warn);
+  font-size: 13px;
+  padding: 4px 0 0;
+  min-height: 1.2em;
+}
+
+.placement-hint[hidden] {
+  display: none;
+}
+
 .net-overlay {
   position: absolute;
   inset: 0;

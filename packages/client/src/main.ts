@@ -17,6 +17,7 @@ import type { Socket } from 'socket.io-client'
 import { playCushion, playFoul, playFrameEnd, playMatchEnd, playPot, setSoundMuted, isSoundMuted, unlockAudio } from './game/audio.js'
 import { ShotPlayer } from './game/playback.js'
 import type { PlaybackBall } from './game/playback.js'
+import { placementAimAngle, placementShot } from './game/placement.js'
 /** Radians of camera orbit per pixel of right-drag: a full-width drag sweeps half a turn. */
 const CAMERA_ORBIT_PER_PIXEL = Math.PI / 900
 
@@ -57,6 +58,24 @@ let scene3d: Scene3D | null = null
  */
 let cameraMode: 'AIM' | 'TOP_DOWN' = 'AIM'
 let cameraToggleEl: HTMLButtonElement | null = null
+/**
+ * The view the player chose themselves, remembered while ball-in-hand placement
+ * holds the camera overhead. When the placement ends the toggle is restored to
+ * this, so an automatic detour never steals the player's setting.
+ */
+let prePlacementCamera: 'AIM' | 'TOP_DOWN' | null = null
+/** True on the previous loop pass while a placement was live, so the end of one is detectable. */
+let placementWasActive = false
+/** Where the pointer last sat on the cloth during placement, in table millimetres. */
+let placementTarget: { x: number; y: number } | null = null
+/** Whether the ghost is currently sitting on a legal spot. */
+let placementLegal = false
+/** Table point a placement click was accepted at, so one click commits exactly one ball. */
+let placementPendingCommit: { x: number; y: number } | null = null
+/** Set when the placement click has been sent; cleared when the server's snapshot shows the cue down. */
+let placementCommitInFlight = false
+/** The last pointer position over the canvas, in client pixels, for the placement ghost. */
+let lastPointerCanvas: { clientX: number; clientY: number } | null = null
 let myTurn = false
 /** Non-null while a streamed shot is replaying; drives what the table shows. */
 let shotPlayer: ShotPlayer | null = null
@@ -1422,6 +1441,31 @@ function renderGame(): void {
   rgCanvas = canvas
   tableStageEl = stage
   tableFrame.appendChild(canvas)
+  // Placement guidance sits under the table and speaks only while it has
+  // something to say — a D restriction, a crowded spot — then goes quiet.
+  const placementHint = el('div', 'placement-hint')
+  placementHint.id = 'placement-hint'
+  placementHint.hidden = true
+  placementHint.setAttribute('role', 'status')
+  page.appendChild(placementHint)
+  placementHintEl = placementHint
+  // The pointer is followed so the ghost can track it; the click that commits a
+  // placement is captured once, here, and the normal aim gestures are untouched
+  // because placement only ever consumes the event when it is actually placing.
+  canvas.addEventListener('pointermove', (e) => {
+    lastPointerCanvas = { clientX: e.clientX, clientY: e.clientY }
+  })
+  canvas.addEventListener('pointerdown', (e) => {
+    lastPointerCanvas = { clientX: e.clientX, clientY: e.clientY }
+    if (!isPlacing() || placementCommitInFlight) return
+    const rect = canvas.getBoundingClientRect()
+    const px = ((e.clientX - rect.left) / rect.width) * canvas.width
+    const py = ((e.clientY - rect.top) / rect.height) * canvas.height
+    const tablePoint = scene3d?.screenToTable(px, py) ?? null
+    if (!tablePoint) return
+    placementPendingCommit = { x: tablePoint.x, y: tablePoint.y }
+    e.preventDefault()
+  })
   const overlay = el('div', 'net-overlay')
   overlay.appendChild(el('p', undefined, 'Connection lost — reconnecting…'))
   tableFrame.appendChild(overlay)
@@ -1858,6 +1902,134 @@ function handleSocketEvents(socket: Socket): void {
   })
 }
 
+/**
+ * Whether this client is mid-placement: my visit, the cue ball in hand, and the
+ * table settled. The frame's `cueInHandInD` says which restriction is in force —
+ * the D only at break-off, anywhere mid-frame — and the whole presentation flow
+ * (camera, D overlay, ghost) keys off this one question.
+ */
+function isPlacing(): boolean {
+  return isVisitPlayable() && frame?.cueInHand === true
+}
+
+/**
+ * Runs the ball-in-hand placement experience for one frame: the automatic
+ * overhead camera, the D-only or whole-table indication, the ghost cue ball and
+ * the click-to-place commit.
+ *
+ * The camera rule is the one piece of opinion here: entering placement forces
+ * TOP_DOWN (full-table visibility for choosing a spot), and when placement ends —
+ * the server's snapshot showing the cue ball down — the camera eases back to
+ * whatever the player had before. The player's own toggle still works during
+ * placement: it rewrites `cameraMode`, which this override remembers and honours
+ * the moment the placement clears.
+ */
+function stepPlacement(canvas: HTMLCanvasElement): void {
+  const placing = isPlacing()
+  const inD = frame?.cueInHandInD === true
+
+  if (placing && !placementWasActive) {
+    // Entering placement: take the camera overhead automatically, remembering
+    // what the player had chosen so it can be handed back afterwards.
+    prePlacementCamera = cameraMode
+    setCameraMode('TOP_DOWN')
+    placementTarget = null
+    placementLegal = false
+    placementPendingCommit = null
+    // A placement that was already sent (a fast double-click, say) must not be
+    // forgotten just because the placement state flickered; the in-flight flag
+    // is only cleared by the server showing the ball placed.
+    if (!placementCommitInFlight) {
+      scene3d?.setPlacementMode(true, inD)
+    } else {
+      scene3d?.setPlacementMode(false, false)
+    }
+  } else if (placing && placementWasActive) {
+    // Staying in placement: the D flag can change between frames (a snapshot
+    // arriving late), so the overlays follow it live.
+    if (!placementCommitInFlight) scene3d?.setPlacementMode(true, inD)
+  } else if (!placing && placementWasActive) {
+    // Placement over: the cue ball is down (or the visit moved on). Ease the
+    // camera back to the player's own choice — the normal post-shot return.
+    scene3d?.setPlacementMode(false, false)
+    setCameraMode(prePlacementCamera ?? 'AIM')
+    prePlacementCamera = null
+    placementTarget = null
+    placementPendingCommit = null
+    placementCommitInFlight = false
+  }
+  placementWasActive = placing && !placementCommitInFlight
+
+  if (placing && !placementCommitInFlight) {
+    // Track the pointer as the ghost's target. The pointer position is read
+    // through the live camera each frame, so the view easing toward overhead
+    // does not freeze the ghost at a stale spot.
+    if (lastPointerCanvas) {
+      const rect = canvas.getBoundingClientRect()
+      const px = ((lastPointerCanvas.clientX - rect.left) / rect.width) * canvas.width
+      const py = ((lastPointerCanvas.clientY - rect.top) / rect.height) * canvas.height
+      const tablePoint = scene3d?.screenToTable(px, py) ?? null
+      if (tablePoint) {
+        placementTarget = { x: tablePoint.x, y: tablePoint.y }
+        const snapshotBalls = frame?.balls ?? []
+        const status = scene3d?.updatePlacementGhost(placementTarget, inD, snapshotBalls)
+        placementLegal = status?.ok ?? false
+        if (status?.reason) {
+          const label =
+            status.reason === 'outside-D'
+              ? 'The cue must be placed inside the D at the break-off'
+              : status.reason === 'in-pocket'
+                ? 'Too close to a pocket'
+                : status.reason === 'crowded'
+                  ? 'Not enough room — a ball is in the way'
+                  : 'Place the cue on the table'
+          hintPlacement(label)
+        } else {
+          hintPlacement(null)
+        }
+      } else {
+        scene3d?.hidePlacementGhost()
+        placementLegal = false
+      }
+    }
+  }
+
+  // A click that was accepted fires the placement stroke exactly once. The shot
+  // carries `cuePos`, which is all the server needs to put the ball down and let
+  // the frame continue; everything else is the same shape a real shot has.
+  if (placementPendingCommit && placementLegal && !placementCommitInFlight && activeMatchId) {
+    const pos = placementPendingCommit
+    placementPendingCommit = null
+    placementCommitInFlight = true
+    scene3d?.setPlacementMode(false, false)
+    const shot = placementShot(pos, placementAimAngle(pos), cueController?.aim.power ?? 0)
+    getSocket().emit('shot:play', { matchId: activeMatchId, input: { ...shot, timestamp: Date.now() } })
+    toast('Cue ball placed', 'info')
+    hintPlacement(null)
+  }
+  // If the commit was lost — the server rejected the spot, say — the snapshot
+  // still says cueInHand and the placement state machine starts over cleanly.
+  if (placementCommitInFlight && frame?.cueInHand && isVisitPlayable() && !shotInFlight) {
+    placementCommitInFlight = false
+  }
+}
+
+/**
+ * A one-line helper message under the table while placing, shown only while it
+ * says something. Null clears it. Kept separate from toasts because a placement
+ * hint is continuous guidance, not an event.
+ */
+let placementHintEl: HTMLElement | null = null
+function hintPlacement(text: string | null): void {
+  if (!placementHintEl) return
+  if (text === null) {
+    placementHintEl.hidden = true
+  } else {
+    placementHintEl.hidden = false
+    if (placementHintEl.textContent !== text) placementHintEl.textContent = text
+  }
+}
+
 function loop(): void {
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement | null
   try {
@@ -1886,6 +2058,9 @@ function loop(): void {
       const shown = stepShotPlayback(frame, fdt / 1000)
       const cue = shown.balls.find((b) => b.id === 0 && !b.potted)
       if (cue) cueController?.setCuePosition(cue.x, cue.y)
+      // Ball-in-hand placement runs before the camera is set, because it is one
+      // of the things that decides what the camera should be doing this frame.
+      stepPlacement(canvas)
       // Aiming is only offered once the table has genuinely settled: no shot still
       // animating, and nothing waiting behind it. Without this the cue stick and the
       // aim guide were drawn while the balls were still moving. The power slider is

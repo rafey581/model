@@ -23,6 +23,7 @@ import {
   screenToTable,
   type PickCamera
 } from './cameraPick.js'
+import { placementStatus } from './placement.js'
 
 const HALF_L = TABLE_LENGTH / 2
 const HALF_W = TABLE_WIDTH / 2
@@ -463,6 +464,16 @@ export class Scene3D {
    * plus the player's own look-around. Aiming does not touch it.
    */
   private latch: HeadingLatch = initialHeadingLatch()
+  /** Ring + baulk line segment marking the D during break-off placement. Built once, shown on demand. */
+  private dZoneRing!: THREE.Mesh
+  /** Translucent disc shading the legal D area during break-off placement. */
+  private dZoneFill!: THREE.Mesh
+  /** Ghost cue ball the player moves while placing; hidden when not placing. */
+  private ghostBall!: THREE.Mesh
+  /** Current ghost position in table millimetres, so the follow easing has memory. */
+  private ghostPos = new THREE.Vector2(BAULK_LINE_X, TABLE_WIDTH / 2)
+  /** Whether the ghost is being shown at all this frame. */
+  private placementActive = false
 
   static create(canvas: HTMLCanvasElement, width: number, height: number): Scene3D | null {
     try {
@@ -509,6 +520,7 @@ export class Scene3D {
     this.buildLighting()
     this.buildTable()
     this.buildAim()
+    this.buildPlacement()
 
     const pmrem = new THREE.PMREMGenerator(this.renderer)
     this.scene.environment = pmrem.fromEquirectangular(envTexture()).texture
@@ -910,6 +922,112 @@ export class Scene3D {
     this.stick.add(shaft, butt, ferrule, tip, joint)
     this.stick.visible = false
     this.scene.add(this.stick)
+  }
+
+  /**
+   * The placement overlay: a D indicator for break-off and a ghost cue ball for
+   * every in-hand. Built once like the rest of the scene; the meshes only cost
+   * anything while they are visible, which is only while a placement is live.
+   */
+  private buildPlacement(): void {
+    // The legal D area, shaded. Flat-lit and transparent so it reads as an overlay,
+    // not as a patch of different cloth; depthWrite off so it never fights the bed.
+    this.dZoneFill = new THREE.Mesh(
+      new THREE.CircleGeometry(D_RADIUS, 48, Math.PI * 0.5, Math.PI),
+      new THREE.MeshBasicMaterial({
+        color: 0x9fe8b0,
+        transparent: true,
+        opacity: 0.14,
+        depthWrite: false
+      })
+    )
+    this.dZoneFill.rotation.x = -Math.PI / 2
+    this.dZoneFill.position.set(tableX(BAULK_LINE_X), 0.8, tableZ(TABLE_WIDTH / 2))
+    this.dZoneFill.renderOrder = 6
+    this.dZoneFill.visible = false
+    this.scene.add(this.dZoneFill)
+
+    // The D's own edge: the half-circle arc plus the baulk-line chord, one ring
+    // segment. LineDashed would fight the bed's markings; a thin tube reads at
+    // every angle without aliasing.
+    this.dZoneRing = new THREE.Mesh(
+      new THREE.TorusGeometry(D_RADIUS, 3.5, 8, 64, Math.PI),
+      new THREE.MeshBasicMaterial({ color: 0xd9f5df, transparent: true, opacity: 0.8, depthWrite: false })
+    )
+    this.dZoneRing.rotation.x = -Math.PI / 2
+    this.dZoneRing.rotation.z = 0
+    // Torus arc runs 0..π counterclockwise from +x; rotated flat, that spans the
+    // half-circle on the baulk side once centred on the D's middle point.
+    this.dZoneRing.position.set(tableX(BAULK_LINE_X), 1.2, tableZ(TABLE_WIDTH / 2))
+    this.dZoneRing.renderOrder = 7
+    this.dZoneRing.visible = false
+    this.scene.add(this.dZoneRing)
+
+    // The ghost cue ball: same size as the real one, half transparent, sitting at
+    // cloth height. It is the thing the player is actually pointing at.
+    this.ghostBall = new THREE.Mesh(
+      new THREE.SphereGeometry(BALL_RADIUS, 32, 20),
+      new THREE.MeshStandardMaterial({
+        color: 0xf4f9ff,
+        roughness: 0.35,
+        metalness: 0,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false
+      })
+    )
+    this.ghostBall.visible = false
+    this.scene.add(this.ghostBall)
+  }
+
+  /**
+   * Shows or hides ball-in-hand placement overlays.
+   *
+   * `inD` is the snapshot's `cueInHandInD`: true only at break-off, where the D
+   * indicator is shown. A mid-frame in-hand shows no D — the whole table is legal
+   * and a stale D highlight would claim otherwise.
+   */
+  setPlacementMode(active: boolean, inD: boolean): void {
+    this.placementActive = active
+    this.dZoneRing.visible = active && inD
+    this.dZoneFill.visible = active && inD
+    this.ghostBall.visible = active
+    if (!active) return
+    // Park the ghost on the D centre (break-off) or the table centre (mid-frame)
+    // so it is somewhere sensible the first frame before the pointer moves it.
+    const start = inD ? { x: BAULK_LINE_X, y: TABLE_WIDTH / 2 } : { x: TABLE_LENGTH / 2, y: TABLE_WIDTH / 2 }
+    this.ghostPos.set(start.x, start.y)
+    this.ghostBall.position.set(tableX(start.x), BALL_RADIUS, tableZ(start.y))
+  }
+
+  /**
+   * Moves the ghost to the table point the pointer is over and tints it by legality.
+   *
+   * The validity test mirrors the server's own rules, but is only a preview: the
+   * server still rejects an illegal placement authoritatively. Red ghost means the
+   * spot will not be accepted, with the reason readable from `status`.
+   */
+  updatePlacementGhost(
+    target: { x: number; y: number } | null,
+    inD: boolean,
+    balls: Array<{ id: number; x: number; y: number; potted: boolean }>
+  ): { ok: boolean; reason: string | null } {
+    if (!this.placementActive || !target) {
+      this.ghostBall.visible = false
+      return { ok: false, reason: null }
+    }
+    this.ghostBall.visible = true
+    this.ghostPos.set(target.x, target.y)
+    this.ghostBall.position.set(tableX(target.x), BALL_RADIUS, tableZ(target.y))
+    const status = placementStatus(target, inD, balls)
+    const mat = this.ghostBall.material as THREE.MeshStandardMaterial
+    mat.color.setHex(status.ok ? 0xf4f9ff : 0xff6b6b)
+    return status
+  }
+
+  /** Hides the ghost for the frame where the pointer is off the cloth. */
+  hidePlacementGhost(): void {
+    this.ghostBall.visible = false
   }
 
   update(snapshot: FrameSnapshotData | null, options: RenderOptions = {}): void {

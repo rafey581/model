@@ -18,6 +18,11 @@ export interface FrameSnapshotData {
   balls: DrawableBall[]
   phase?: string
   cueInHand?: boolean
+  /**
+   * Whether the in-hand is still restricted to the D — true only at break-off.
+   * Absent reads as unrestricted, which matches how the HUD treats it.
+   */
+  cueInHandInD?: boolean
 }
 
 export interface AimState {
