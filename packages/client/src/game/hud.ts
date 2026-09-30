@@ -9,6 +9,15 @@ import {
   sliderValueFromPower
 } from './power.js'
 import { POWER_FINE_STEP } from './power.js'
+import {
+  pointerToSpin,
+  snapToCentre,
+  spinAdjust as spinAdjustLocal,
+  spinToPixels,
+  spinChanged,
+  spinCentre,
+  type SpinPoint
+} from './spinDial.js'
 
 /**
  * The one switch behind the centre of the top bar.
@@ -401,6 +410,8 @@ export interface Hud {
   root: HTMLElement
   /** Mounted inside the table frame: the power rail, which overlays the table. */
   overlayRoot: HTMLElement
+  /** The spin dial, mounted inside the table frame on the side opposite the rail. */
+  spinDialRoot: HTMLElement
   update: (state: HudState) => void
   /** Raises a short-lived centre-screen banner for a key match event. */
   flashEvent: (text: string, tone: 'good' | 'bad' | 'info') => void
@@ -415,6 +426,17 @@ export interface Hud {
   setPowerSink: (sink: (power: number) => void) => void
   /** Told when a slider drag starts and stops, so the controller can be locked out of power writes for the gesture. */
   setPowerDragListener: (listener: ((dragging: boolean) => void) | null) => void
+  /**
+   * Shows a spin value on the dial, whatever wrote it: the drag, the arrow keys,
+   * a reset. The dial is a view of the one spin value, never a second one.
+   */
+  setSpin: (spin: SpinPoint) => void
+  /**
+   * Registers where the dial hands its value, the counterpart to `setSpin`. The
+   * caller connects the two ends to the same underlying aim, which is what keeps
+   * the widget and the arrow keys in step without either knowing the other.
+   */
+  setSpinSink: (sink: (spin: SpinPoint) => void) => void
   /**
    * The avatar frame of whoever is at the table, or null when nobody is. Phase H2's
    * turn timer hangs off this rather than re-finding it in the document.
@@ -676,6 +698,100 @@ export function createHud(): Hud {
   window.addEventListener('pointerup', endRailDrag)
   window.addEventListener('pointercancel', endRailDrag)
 
+  /**
+   * The spin dial: a cue ball face-on in the bottom-left of the table frame, the
+   * power rail's opposite side. One circle, one crosshair, one dot; the dot's
+   * distance from centre is the strike offset, its direction the spin's blend of
+   * follow/draw and side. It is a view of — and a second way into — the same spin
+   * value the arrow keys already set, never a second value.
+   */
+  const spinDial = el('div', 'spin-dial')
+  spinDial.id = 'spin-dial'
+  spinDial.setAttribute('role', 'application')
+  spinDial.setAttribute('aria-label', 'Spin control — drag the dot off centre; up topspin, down backspin, left and right side')
+  spinDial.tabIndex = 0
+
+  const dialBall = el('div', 'spin-dial-ball')
+  dialBall.setAttribute('aria-hidden', 'true')
+  const dialDot = el('div', 'spin-dial-dot')
+  dialDot.id = 'spin-dial-dot'
+  dialDot.setAttribute('aria-hidden', 'true')
+  dialBall.appendChild(dialDot)
+  spinDial.appendChild(dialBall)
+
+  /** The dot's travel radius in CSS pixels, read from the drawn ball's box. */
+  const dialRadius = (): number => dialBall.clientWidth / 2
+
+  /** The last spin this dial rendered, so a drag can diff instead of reflowing every move. */
+  let dialShown: SpinPoint = spinCentre()
+  /** True while the dial itself is driving the value, so inbound setSpin calls skip the DOM write. */
+  let dialDriving = false
+  /** The write-only wire to the underlying aim, connected by the caller at mount. */
+  let spinSink: (spin: SpinPoint) => void = () => {}
+
+  function renderDial(spin: SpinPoint): void {
+    const r = dialRadius()
+    const px = spinToPixels(spin, r)
+    dialDot.style.transform = `translate(calc(-50% + ${px.x}px), calc(-50% + ${px.y}px))`
+    dialDot.style.opacity = spin.x === 0 && spin.y === 0 ? '0.55' : '1'
+    dialShown = { x: spin.x, y: spin.y }
+  }
+
+  const onDialPointerDown = (event: PointerEvent): void => {
+    event.preventDefault()
+    dialDriving = true
+    spinDial.setPointerCapture(event.pointerId)
+    const rect = dialBall.getBoundingClientRect()
+    const next = snapToCentre(
+      pointerToSpin(event.clientX, event.clientY, rect.left + rect.width / 2, rect.top + rect.height / 2, dialRadius())
+    )
+    if (spinChanged(dialShown, next)) {
+      renderDial(next)
+      spinSink(next)
+    }
+  }
+  const onDialPointerMove = (event: PointerEvent): void => {
+    if (!dialDriving) return
+    event.preventDefault()
+    const rect = dialBall.getBoundingClientRect()
+    const next = pointerToSpin(
+      event.clientX,
+      event.clientY,
+      rect.left + rect.width / 2,
+      rect.top + rect.height / 2,
+      dialRadius()
+    )
+    if (spinChanged(dialShown, next)) {
+      renderDial(next)
+      spinSink(next)
+    }
+  }
+  const endDialDrag = (event: PointerEvent): void => {
+    if (!dialDriving) return
+    dialDriving = false
+    if (spinDial.hasPointerCapture(event.pointerId)) spinDial.releasePointerCapture(event.pointerId)
+  }
+  spinDial.addEventListener('pointerdown', onDialPointerDown)
+  spinDial.addEventListener('pointermove', onDialPointerMove)
+  spinDial.addEventListener('pointerup', endDialDrag)
+  spinDial.addEventListener('pointercancel', endDialDrag)
+  // Keyboard nudges on the same axes the arrow keys use one level up, for a
+  // dial that has focus: W/S vertical, left/right side, Home back to centre.
+  const onDialKeyDown = (event: KeyboardEvent): void => {
+    let next: SpinPoint | null = null
+    if (event.key === 'ArrowLeft' || event.key === 'a') next = spinAdjustLocal(dialShown, 'x', -1, POWER_FINE_STEP)
+    else if (event.key === 'ArrowRight' || event.key === 'd') next = spinAdjustLocal(dialShown, 'x', 1, POWER_FINE_STEP)
+    else if (event.key === 'ArrowUp' || event.key === 'w') next = spinAdjustLocal(dialShown, 'y', 1, POWER_FINE_STEP)
+    else if (event.key === 'ArrowDown' || event.key === 's') next = spinAdjustLocal(dialShown, 'y', -1, POWER_FINE_STEP)
+    else if (event.key === 'Home' || event.key === 'Escape') next = spinCentre()
+    else return
+    event.preventDefault()
+    event.stopPropagation()
+    renderDial(next)
+    spinSink(next)
+  }
+  spinDial.addEventListener('keydown', onDialKeyDown)
+
   const onSliderKeyDown = (event: KeyboardEvent): void => {
     if (!sliderEnabled) return
     let delta = 0
@@ -720,6 +836,9 @@ export function createHud(): Hud {
   }
 
   root.append(top, strip, live, eventLayer)
+  // The dial rides the game overlay like the power rail does, so it sits over
+  // the cloth it applies to; the caller mounts the overlay inside the frame.
+  overlay.appendChild(spinDial)
 
   // The eased percentage the bar shows, so a jittery raw value does not make the
   // number flicker. Owned by the rail rather than by update(), which is called on
@@ -735,6 +854,7 @@ export function createHud(): Hud {
   return {
     root,
     overlayRoot: overlay,
+    spinDialRoot: spinDial,
     update: (state: HudState) => {
       updateAvatar(youAvatar, state.you)
       updateAvatar(oppAvatar, state.opponent)
@@ -819,6 +939,15 @@ export function createHud(): Hud {
     },
     setPowerDragListener: (listener) => {
       powerDragListener = listener
+    },
+    setSpin: (spin) => {
+      // While the dial itself is being dragged it is the authority on what is
+      // shown; every other writer (arrow keys, reset) is adopted.
+      if (dialDriving) return
+      if (spinChanged(dialShown, spin)) renderDial(spin)
+    },
+    setSpinSink: (sink) => {
+      spinSink = sink
     },
     /**
      * Raises a centre-screen banner for a key event and retires it itself.

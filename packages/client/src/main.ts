@@ -1565,6 +1565,9 @@ function renderGame(): void {
     enabled: () => isVisitPlayable(),
     onChange: (aim) => {
       hud?.setPower(aim.power)
+      // The dial mirrors whatever wrote the spin — arrows, its own drag, a reset —
+      // because both controls are views of this one pair of numbers.
+      hud?.setSpin({ x: aim.spinX, y: aim.spinY })
       spinLabel.textContent = `Spin: ${aim.spinX.toFixed(1)} / ${aim.spinY.toFixed(1)}`
     },
     onShoot: (shot: Omit<ShotInput, 'timestamp'>) => {
@@ -1588,6 +1591,19 @@ function renderGame(): void {
     if (!cueController) return
     if (dragging) cueController.lockPower()
     else cueController.unlockPower()
+  })
+  // The spin dial is the other way into the same spin pair the arrow keys set:
+  // dragging the dot writes straight into the controller's aim, and the controller's
+  // onChange loops the value back to the dial (skipped while the dial drives), so
+  // both controls and the readout stay one value apart from the physics.
+  hud?.setSpinSink((spin) => {
+    if (!cueController) return
+    cueController.aim.spinX = spin.x
+    cueController.aim.spinY = spin.y
+    // The controller does not fire onChange for direct writes, so the readout and
+    // the dial's own dot are refreshed here; the dial skips this while driving.
+    hud?.setSpin({ x: spin.x, y: spin.y })
+    spinLabel.textContent = `Spin: ${spin.x.toFixed(1)} / ${spin.y.toFixed(1)}`
   })
   hud?.setPower(0)
 }
@@ -1650,6 +1666,22 @@ function isVisitPlayable(): boolean {
 }
 
 /**
+ * Returns spin to centre, the dial with it.
+ *
+ * A fresh visit starts with no spin applied, exactly as it starts with an empty
+ * power bar: leftover english from a previous shot is a value the player is no
+ * longer setting, and the one place it would still be visible — the dial's dot —
+ * would be lying about what the next shot will do. Fired wherever the visit's
+ * power is reset, so both between-shot controls move together.
+ */
+function resetSpin(): void {
+  if (!cueController) return
+  cueController.aim.spinX = 0
+  cueController.aim.spinY = 0
+  hud?.setSpin({ x: 0, y: 0 })
+}
+
+/**
  * Drops any replay in progress and forgets anything queued behind it. Used when
  * the server replaces the table outright (a new match, or a reconnect) so the
  * authoritative state is adopted immediately rather than after a stale animation.
@@ -1680,7 +1712,10 @@ function applyGameUpdate(data: GameUpdatePayload): void {
   // which is not a state a player asked for and one click of the mouse away from a
   // full-power shot. Keyed on the change rather than on every update, so a player who
   // has already set their power keeps it for the rest of the visit.
-  if (myTurn && !wasMyTurn) cueController?.resetPower()
+  if (myTurn && !wasMyTurn) {
+    cueController?.resetPower()
+    resetSpin()
+  }
   // Ball in hand is a rule moment, not a chat line: when the cue comes to hand on
   // this client's visit it is announced centre-screen, once per change of state.
   if (data.frame.cueInHand && previous?.cueInHand !== true && myTurn) {
@@ -1827,7 +1862,10 @@ function handleSocketEvents(socket: Socket): void {
     frame = data.snapshot
     myTurn = mySeat !== undefined && data.snapshot.turnIndex === mySeat
     // Whatever was charged on the previous match's table is not this match's business.
-    if (myTurn) cueController?.resetPower()
+    if (myTurn) {
+      cueController?.resetPower()
+      resetSpin()
+    }
     applyTurnTiming(data.turn)
     toast('Match started!')
     updateHud()
