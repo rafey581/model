@@ -41,6 +41,29 @@ export interface RoomCallbacks {
 
 export type ShotInputDto = Pick<ShotInput, 'aimAngle' | 'power' | 'spin' | 'cuePos'>
 
+/**
+ * The execution states the room moves through, in the order a stroke experiences them.
+ *
+ * This is the vocabulary for the pacing gates below; it is a read-only view of the
+ * flags the room already keeps (`simulating`, `awaitingPlayback`, the frame's phase
+ * and `cueInHand`), not a second state machine running beside them. Rules are only
+ * ever applied inside `applyStroke`, which runs after the physics simulation has
+ * settled every ball, so rule evaluation is structurally pinned to the state after
+ * `PHYSICS_SIMULATION` and cannot fire early.
+ *
+ * `SHOT_EXECUTING` has no observable instant of its own — executing the shot runs the
+ * simulation to rest synchronously — so it is folded into `PHYSICS_SIMULATION` here.
+ */
+export type ExecutionState =
+  | 'BALL_IN_HAND_PLACEMENT'
+  | 'PLAYER_AIMING'
+  | 'PHYSICS_SIMULATION'
+  | 'RULE_EVALUATION'
+  | 'TURN_TRANSITION'
+
+/** How long the bot waits, after being given a settled table, before it fires. */
+export const BOT_SHOT_DELAY_MS = 1200
+
 export class GameRoom {
   readonly matchId: string
   readonly matchType: string
@@ -241,6 +264,27 @@ export class GameRoom {
     return this.seatOfUser.get(userId)
   }
 
+  /**
+   * Which execution state the room is in right now.
+   *
+   * Derived, never stored: every branch below reads a flag that is already
+   * maintained on the exact code paths that change it, so this can never drift
+   * from the truth it reports. The mapping is deliberately conservative — anything
+   * not provably a settled, playable table is reported as something other than
+   * `PLAYER_AIMING`, which is the state every gate below wants to be sure of.
+   */
+  executionState(): ExecutionState {
+    const frame = this.match.currentFrame
+    if (!frame || frame.phase === 'FRAME_END') return 'TURN_TRANSITION'
+    if (this.simulating) return 'PHYSICS_SIMULATION'
+    // The verdict for the shot on screen is settled and persisted; the hold is the
+    // pipeline between it and the next visit, and no new decision may be made
+    // until every client has seen it.
+    if (this.awaitingPlayback) return 'RULE_EVALUATION'
+    if (frame.cueInHand) return 'BALL_IN_HAND_PLACEMENT'
+    return 'PLAYER_AIMING'
+  }
+
   isSeatDisconnected(seat: number): boolean {
     return this.disconnectedAt.has(seat)
   }
@@ -313,6 +357,11 @@ export class GameRoom {
     if (this.awaitingPlayback) return
     const frame = this.match.currentFrame
     if (!frame || frame.phase === 'FRAME_END') return
+    // BALL_IN_HAND_PLACEMENT: the striker is putting the cue ball down. That is not a
+    // turn being spent, so no clock runs across it and no timeout can fire. The clock
+    // re-arms from full the moment the placement is committed with its stroke and the
+    // replay has been watched.
+    if (frame.cueInHand) return
     const seat = frame.turnIndex
     // The clock is armed on the robot's visit too. The ring is a shared view of whose
     // visit it is, so it must attach to whichever avatar is at the table; what a
@@ -359,12 +408,15 @@ export class GameRoom {
   }
 
   private onTurnTimeout(): void {
-    if (this.stopped || this.simulating) return
+    if (this.stopped) return
+    // The timeout is a foul for an aiming turn that was never used. Any other
+    // execution state — balls moving, a replay being watched, the cue ball being
+    // placed — is not that, so the existing rule check is simply never reached.
+    if (this.executionState() !== 'PLAYER_AIMING') return
     const frame = this.match.currentFrame
-    if (!frame || frame.phase === 'FRAME_END') return
+    if (!frame) return
     const seat = frame.turnIndex
     if (!this.isHumanTurn(seat) || this.isSeatDisconnected(seat)) return
-    if (this.awaitingPlayback) return
     this.simulating = true
     try {
       const { foulValue, reason } = applyTimeoutFoul(frame, seat, 'turn timeout')
@@ -547,14 +599,29 @@ export class GameRoom {
     // broadcast into the middle of the previous replay.
     if (this.awaitingPlayback) return
     const level = this.aiLevel ?? 'MEDIUM'
-    const delay = 800 + Math.floor(seededRandom(`${this.matchId}:t${this.seq}`)() * 1500)
+    // A fixed think time. The old randomised 800-2300ms let a short roll of the dice
+    // fire the bot while the room was still in RULE_EVALUATION on a slow client, which
+    // read as the bot playing before the balls had stopped. The delay is now measured
+    // from the moment the room is actually giving the bot a settled turn, and the
+    // fire-time gate below refuses anything else.
     this.botTimer = setTimeout(() => {
       this.botTimer = null
       const frame = this.match.currentFrame
       if (!frame || frame.turnIndex !== 1 || this.simulating || this.awaitingPlayback) return
+      // Strict execution-state gate. The bot fires only with a settled table under its
+      // control: PLAYER_AIMING, or BALL_IN_HAND_PLACEMENT, where the stroke it is about
+      // to commit carries the cue ball's own legal placement (computeBotShot returns a
+      // cuePos whenever the cue is in hand, so its shot completes the placement).
+      // Every other state — balls moving, a verdict still being watched, the frame
+      // handing over — refuses the shot and reschedules rather than playing out of sync.
+      const state = this.executionState()
+      if (state !== 'PLAYER_AIMING' && state !== 'BALL_IN_HAND_PLACEMENT') {
+        this.scheduleBotIfNeeded()
+        return
+      }
       const bot = computeBotShot(frame, level, this.matchId)
       this.executeShot(1, { aimAngle: bot.shot.aimAngle, power: bot.shot.power, spin: bot.shot.spin, cuePos: bot.shot.cuePos })
-    }, delay)
+    }, BOT_SHOT_DELAY_MS)
   }
 
   /**

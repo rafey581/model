@@ -6,8 +6,12 @@ import { setTableTransform } from './renderer.js'
 import { ballColor } from './palette.js'
 import {
   type CameraRigState,
+  type HeadingLatch,
   initialRigState,
-  stepCameraRig
+  initialHeadingLatch,
+  stepCameraRig,
+  stepHeadingLatch,
+  addOrbit
 } from './camera.js'
 import {
   ballRadiusPx,
@@ -62,55 +66,82 @@ function cachedTexture(key: string, make: () => THREE.CanvasTexture): THREE.Canv
 }
 const POCKETS = pocketPositions()
 
+/**
+ * A single shared anisotropy cap, set once when the renderer exists.
+ *
+ * Conservative on purpose — 4× is where a grazing cue-view angle stops shimmering
+ * and a weak GPU stops paying for the wider sampling footprint. Captured rather
+ * than queried per texture, because the answer never changes.
+ */
+let MAX_ANISO = 4
+
 function feltTexture(): THREE.CanvasTexture {
   return cachedTexture('felt', () => {
-    const w = 2048
-    const h = 1024
+    // 512×512, one tile across the whole bed. The old 2048×1024 canvas cost VRAM and
+    // per-frame texture bandwidth for detail the lens cannot hold at any playable
+    // distance; mipmapping does the smoothing work, and the markings are baked into
+    // this one texture rather than drawn as separate meshes.
+    const size = 512
     const canvas = document.createElement('canvas')
-    canvas.width = w
-    canvas.height = h
+    canvas.width = size
+    canvas.height = size
     const ctx = canvas.getContext('2d')!
-    ctx.fillStyle = '#0f8650'
-    ctx.fillRect(0, 0, w, h)
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)'
-    ctx.lineWidth = 1
-    for (let i = 0; i < w; i += 20) {
-      ctx.beginPath()
-      ctx.moveTo(i, 0)
-      ctx.lineTo(i, h)
-      ctx.stroke()
+    // Rich baize green, flat: depth comes from the lighting, not painted gradients
+    // that pull apart from the shaded geometry at grazing angles. Bright, saturated
+    // tournament green — the tone reads vivid under the warm lamp and tone mapping.
+    ctx.fillStyle = '#1ea838'
+    ctx.fillRect(0, 0, size, size)
+
+    // Seamless baize: wrap-around noise, four offset copies, so a mip edge never
+    // shows a seam line and tiling stays invisible.
+    let seed = 20260930
+    const rand = (): number => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff
+      return seed / 0x7fffffff
     }
-    const shade = ctx.createRadialGradient(w * 0.5, h * 0.42, w * 0.08, w * 0.5, h * 0.5, w * 0.7)
-    shade.addColorStop(0, 'rgba(40,160,95,0.28)')
-    shade.addColorStop(1, 'rgba(0,0,0,0.30)')
-    ctx.fillStyle = shade
-    ctx.fillRect(0, 0, w, h)
+    ctx.fillStyle = 'rgba(255,255,255,0.035)'
+    for (let i = 0; i < 900; i++) {
+      const x = rand() * size
+      const y = rand() * size
+      for (const dx of [-size, 0, size]) {
+        for (const dy of [-size, 0, size]) {
+          ctx.fillRect(x + dx, y + dy, 1.4, 1.4)
+        }
+      }
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.05)'
+    for (let i = 0; i < 700; i++) {
+      const x = rand() * size
+      const y = rand() * size
+      for (const dx of [-size, 0, size]) {
+        for (const dy of [-size, 0, size]) {
+          ctx.fillRect(x + dx, y + dy, 1.4, 1.4)
+        }
+      }
+    }
 
-    const vignette = ctx.createRadialGradient(w / 2, h / 2, w * 0.62, w / 2, h / 2, w * 0.82)
-    vignette.addColorStop(0, 'rgba(0,0,0,0)')
-    vignette.addColorStop(1, 'rgba(0,0,0,0.26)')
-    ctx.fillStyle = vignette
-    ctx.fillRect(0, 0, w, h)
-
+    // Baulk line, the D and the spot marks, baked into the cloth: no line meshes,
+    // no extra draw calls, and the markings mip down with the baize instead of
+    // crawling over it.
     const mark = (tableXmm: number, tableYmm: number): void => {
-      const u = (tableXmm / TABLE_LENGTH) * w
-      const v = (tableYmm / TABLE_WIDTH) * h
+      const u = (tableXmm / TABLE_LENGTH) * size
+      const v = (tableYmm / TABLE_WIDTH) * size
       ctx.fillStyle = '#e6d9ae'
       ctx.beginPath()
-      ctx.arc(u, v, 4, 0, Math.PI * 2)
+      ctx.arc(u, v, 3, 0, Math.PI * 2)
       ctx.fill()
     }
 
-    const bx = (BAULK_LINE_X / TABLE_LENGTH) * w
-    const mid = h / 2
+    const bx = (BAULK_LINE_X / TABLE_LENGTH) * size
+    const mid = size / 2
     ctx.strokeStyle = '#d8b15c'
     ctx.lineWidth = 3
     ctx.beginPath()
     ctx.moveTo(bx, 0)
-    ctx.lineTo(bx, h)
+    ctx.lineTo(bx, size)
     ctx.stroke()
     ctx.beginPath()
-    ctx.arc(bx, mid, (D_RADIUS / TABLE_WIDTH) * h, Math.PI * 0.5, Math.PI * 1.5)
+    ctx.arc(bx, mid, (D_RADIUS / TABLE_WIDTH) * size, Math.PI * 0.5, Math.PI * 1.5)
     ctx.stroke()
 
     mark(BAULK_LINE_X, TABLE_WIDTH / 2 + D_RADIUS * 0.9)
@@ -122,7 +153,15 @@ function feltTexture(): THREE.CanvasTexture {
 
     const texture = new THREE.CanvasTexture(canvas)
     texture.colorSpace = THREE.SRGBColorSpace
-    texture.anisotropy = 4
+    // Trilinear mipmapping with the anisotropy cap is what stops the flicker:
+    // minified baize sampled without it shimmers at every grazing angle the cue
+    // camera has, and the shimmer reads as texture crawling during transitions.
+    texture.generateMipmaps = true
+    texture.minFilter = THREE.LinearMipmapLinearFilter
+    texture.magFilter = THREE.LinearFilter
+    texture.wrapS = THREE.RepeatWrapping
+    texture.wrapT = THREE.RepeatWrapping
+    texture.anisotropy = MAX_ANISO
     return texture
   })
 }
@@ -168,11 +207,12 @@ function woodTexture(): THREE.CanvasTexture {
     canvas.width = size
     canvas.height = size
     const ctx = canvas.getContext('2d')!
-    ctx.fillStyle = '#6b4526'
+    // Mahogany: deep red-brown figure, the tone the rails read as under lamp light.
+    ctx.fillStyle = '#5c2d1e'
     ctx.fillRect(0, 0, size, size)
     for (let y = 0; y < size; y += 4) {
-      const tone = 60 + Math.random() * 40
-      ctx.fillStyle = `rgb(${Math.round(tone)}, ${Math.round(tone * 0.66)}, ${Math.round(tone * 0.4)})`
+      const tone = 70 + Math.random() * 45
+      ctx.fillStyle = `rgb(${Math.round(tone * 1.15)}, ${Math.round(tone * 0.5)}, ${Math.round(tone * 0.34)})`
       ctx.fillRect(0, y, size, 2)
     }
     ctx.fillStyle = 'rgba(255,255,255,0.08)'
@@ -276,7 +316,7 @@ function envTexture(): THREE.CanvasTexture {
 class BallRig {
   group = new THREE.Group()
   sphere: THREE.Mesh
-  material: THREE.MeshPhysicalMaterial
+  material: THREE.MeshStandardMaterial
   blob: THREE.Mesh
   target = new THREE.Vector3()
   firstSeen = true
@@ -289,20 +329,24 @@ class BallRig {
   riseFrom = new THREE.Vector3()
 
   constructor(radius: number, color: number, shadowTex: THREE.CanvasTexture) {
-    // Phenolic resin: a hard, near-mirror lacquer over a dull core. The clearcoat
-    // carries the lamp reflections (fully on, tight), the base layer keeps a low
-    // roughness with no metallic response, and the environment map supplies the
-    // studio highlights that sell the polish.
-    this.material = new THREE.MeshPhysicalMaterial({
+    // Phenolic resin look, without the clearcoat pass. A tight roughness with a
+    // strong environment map gives the hard specular highlight the ball is known by;
+    // MeshPhysicalMaterial's extra clearcoat layer cost a second shading pass per
+    // ball for a sheen the env map already supplies. Emissive stays zero: it is only
+    // ever set on highlight, and setting it costs nothing while unlit.
+    this.material = new THREE.MeshStandardMaterial({
       color,
       roughness: 0.12,
       metalness: 0.0,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.1,
-      emissive: 0x000000
+      emissive: 0x000000,
+      envMapIntensity: 1.2
     })
     this.sphere = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 28), this.material)
-    this.sphere.castShadow = true
+    // Balls never cast into the scene's one static shadow map: a shadow baked at
+    // frame one would sit forever where the ball first stood. Grounding is sold by
+    // the soft contact blob under the ball instead, which moves with it and costs
+    // no shadow renders.
+    this.sphere.castShadow = false
     this.group.add(this.sphere)
     const blobMat = new THREE.MeshBasicMaterial({
       map: shadowTex,
@@ -397,14 +441,28 @@ export class Scene3D {
    * when the aim crosses 180 degrees.
    */
   private rig: CameraRigState
+  /**
+   * The one shadow-casting lamp, kept for `render()`: the shadow pass pins its
+   * shadow camera's basis before the map is baked, so the bake cannot inherit a
+   * view-dependent orientation from whichever camera happens to be drawing.
+   */
+  private lamp!: THREE.SpotLight
   /** Which view the player has asked for. The rig follows it unless a shot overrides it. */
   private cameraMode: 'AIM' | 'TOP_DOWN' = 'AIM'
   /** True while a shot is being watched, which is when the camera follows the balls. */
   private tracking = false
   /** The snapshot last handed to `update`, which is what the camera reads its cue ball from. */
   private lastSnapshot: FrameSnapshotData | null = null
-  /** The last aim the player gave, which is the heading the camera turns to. */
+  /**
+   * The aim the player is setting right now. It turns the cue; it never turns the
+   * camera, which is what the latch below is for.
+   */
   private lastAimAngle = 0
+  /**
+   * Where the camera is pointed: the heading latched when the last shot was played,
+   * plus the player's own look-around. Aiming does not touch it.
+   */
+  private latch: HeadingLatch = initialHeadingLatch()
 
   static create(canvas: HTMLCanvasElement, width: number, height: number): Scene3D | null {
     try {
@@ -417,15 +475,31 @@ export class Scene3D {
   private constructor(canvas: HTMLCanvasElement, width: number, height: number) {
     this.cvw = width
     this.cvh = height
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
+    // The canvas backing store is already sized with the device pixel ratio by the
+    // caller (capped at 1.5 in main.ts), so the renderer draws at one pixel per backing
+    // pixel. AA is decided once from the device rather than asked for unconditionally:
+    // MSAA costs fill rate on every pass, and a weak GPU with a small backing store
+    // does better spending it on pixels than on edges.
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: (window.devicePixelRatio || 1) < 1.75,
+      powerPreference: 'high-performance'
+    })
     this.renderer.setPixelRatio(1)
     this.renderer.setSize(width, height, false)
+    // One query, one clamp, shared by every texture built after this line.
+    MAX_ANISO = Math.min(this.renderer.capabilities.getMaxAnisotropy(), 4)
     this.renderer.shadowMap.enabled = true
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    // Everything this light can see is static, so the map is rendered exactly once —
+    // the flag is raised after the scene is fully built and never touched again.
+    this.renderer.shadowMap.autoUpdate = false
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 1.35
+    // sRGB output, by its current name (outputEncoding was retired in r152).
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace
 
-    this.scene.background = new THREE.Color('#0f1317')
+    this.scene.background = new THREE.Color('#161d27')
 
     this.camera = new THREE.PerspectiveCamera(50, width / height, 1, 20000)
     this.rig = initialRigState(width / height)
@@ -439,46 +513,77 @@ export class Scene3D {
     const pmrem = new THREE.PMREMGenerator(this.renderer)
     this.scene.environment = pmrem.fromEquirectangular(envTexture()).texture
     pmrem.dispose()
+
+    // The one and only shadow bake, over the finished static set: cushions, pockets,
+    // floor, lamp shade. Every later frame reuses this map at zero shadow cost.
+    this.renderer.shadowMap.needsUpdate = true
   }
 
   private buildLighting(): void {
-    // Overhead rig: three spotlights hung like the lamps over a real table — one
-    // over each half of the cloth and one over the centre — so every cushion and
-    // the middle of the bed get their own pooling of light and their own soft
-    // shadow directly beneath. Directional lights cast one flat set of shadows
-    // from one direction, which is the look this replaces.
-    const spots: Array<{ x: number; z: number; intensity: number }> = [
-      { x: 0, z: 0, intensity: 2600000 },
-      { x: -HALF_L * 0.62, z: 0, intensity: 1900000 },
-      { x: HALF_L * 0.62, z: 0, intensity: 1900000 }
-    ]
-    for (const spec of spots) {
-      const spot = new THREE.SpotLight(0xffecc9, spec.intensity, 0, Math.PI / 4.6, 0.55, 2)
-      spot.position.set(spec.x, 1650, spec.z)
-      spot.target.position.set(spec.x, 0, spec.z)
-      spot.castShadow = true
-      spot.shadow.mapSize.set(1024, 1024)
-      spot.shadow.camera.near = 400
-      spot.shadow.camera.far = 4000
-      spot.shadow.bias = -0.0018
-      spot.shadow.radius = 3
-      this.scene.add(spot)
-      this.scene.add(spot.target)
-    }
+    // One lamp over the table, like a real snooker room: a warm cone strictly over the
+    // bed, the only shadow caster in the scene. It used to be three shadow-casting
+    // spotlights with 1024² maps — three shadow renders every frame for pools of light
+    // that baked textures and contact blobs already supply — which is exactly the
+    // overhead a low-end GPU does not have to spend.
+    const lamp = (this.lamp = new THREE.SpotLight(0xffd9a0, 4600000, 0, Math.PI / 4.6, 0.6, 2))
+    lamp.position.set(0, 1750, 0)
+    lamp.target.position.set(0, 0, 0)
+    lamp.castShadow = true
+    // 2048² costs nothing per frame — the map is baked once over the static set —
+    // and the finer texels are what let the acne fixes stay gentle.
+    lamp.shadow.mapSize.set(2048, 2048)
+    // The frustum is squeezed onto the table. Stripe artifacts on the baize are a
+    // depth-precision problem: with near 400 and far 4000 the map spread 3600mm of
+    // depth over 2048² texels and the cloth's minified sampling landed several
+    // texels deep inside the cushions' shadows, drawing banded stripes across the
+    // bed. Everything that casts or receives sits between ~1730mm (cushion tops)
+    // and ~2600mm (the arena floor) below the lamp, so a tight band holds them all
+    // and each texel now resolves a fraction of the depth it used to.
+    lamp.shadow.camera.near = 1600
+    lamp.shadow.camera.far = 2800
+    lamp.shadow.camera.updateProjectionMatrix()
+    // Stripe artifacts come from self-shadowing surfaces the depth map cannot
+    // resolve: the bias pulls the sample back along the light ray, the normalBias
+    // pushes the sampled surface out along its own normal. Together they clear the
+    // banding without visibly detaching shadows from their casters.
+    lamp.shadow.bias = -0.0001
+    lamp.shadow.normalBias = 0.02
+    lamp.shadow.radius = 3
+    this.scene.add(lamp)
+    this.scene.add(lamp.target)
 
-    const hemi = new THREE.HemisphereLight(0xdfe8ff, 0x3a2f24, 0.5)
+    // The arena has to read as a lit venue, not a void: an ambient base over the
+    // whole scene, the warm hemisphere for the room, and two balanced directionals
+    // so walls, floor and hoardings all carry colour from more than one side.
+    const ambient = new THREE.AmbientLight(0xdfe8ff, 0.55)
+    this.scene.add(ambient)
+
+    const hemi = new THREE.HemisphereLight(0xffe2b8, 0x2e2419, 0.55)
     this.scene.add(hemi)
 
-    const fill = new THREE.DirectionalLight(0x9fc0e8, 0.3)
+    const fill = new THREE.DirectionalLight(0x9fc0e8, 0.5)
     fill.position.set(2200, 1200, -1100)
     this.scene.add(fill)
+
+    const warm = new THREE.DirectionalLight(0xffd9a8, 0.35)
+    warm.position.set(-2200, 1400, 1600)
+    this.scene.add(warm)
   }
 
   private buildTable(): void {
     const pad = 64
     const cloth = new THREE.Mesh(
       new THREE.PlaneGeometry(TABLE_LENGTH, TABLE_WIDTH),
-      new THREE.MeshStandardMaterial({ map: feltTexture(), roughness: 0.92, metalness: 0 })
+      // High-grade matte baize: 0.88 roughness, a whisper of metalness. The texture
+      // carries the colour (mapped white, so tinting stays in one place) and the
+      // baked markings; mipmapping on that texture is what keeps this surface calm
+      // from the low cue angle.
+      new THREE.MeshStandardMaterial({
+        map: feltTexture(),
+        color: 0xffffff,
+        roughness: 0.88,
+        metalness: 0.02
+      })
     )
     cloth.rotation.x = -Math.PI / 2
     cloth.receiveShadow = true
@@ -486,14 +591,16 @@ export class Scene3D {
 
     const apron = new THREE.Mesh(
       new THREE.BoxGeometry(TABLE_LENGTH + pad, 130, TABLE_WIDTH + pad),
-      new THREE.MeshStandardMaterial({ map: woodTexture(), roughness: 0.55 })
+      // Glossy polished mahogany: low roughness picks up the env map's lamp band as
+      // a specular streak along the rail, which is the polished-wood read.
+      new THREE.MeshStandardMaterial({ map: woodTexture(), roughness: 0.3, metalness: 0.05, envMapIntensity: 1.0 })
     )
     apron.position.y = -66
     apron.castShadow = true
     this.scene.add(apron)
 
     const legGeo = new THREE.BoxGeometry(90, 470, 90)
-    const legMat = new THREE.MeshStandardMaterial({ map: woodTexture(), roughness: 0.7 })
+    const legMat = new THREE.MeshStandardMaterial({ map: woodTexture(), roughness: 0.45, metalness: 0.05, envMapIntensity: 0.8 })
     for (const sx of [-1, 1]) {
       for (const sz of [-1, 1]) {
         const leg = new THREE.Mesh(legGeo, legMat)
@@ -527,8 +634,9 @@ export class Scene3D {
       }
     }
 
-    const cushionMat = new THREE.MeshStandardMaterial({ color: 0x0a5a33, roughness: 0.55, side: THREE.DoubleSide })
-    const noseMat = new THREE.MeshStandardMaterial({ color: 0x1b8a55, roughness: 0.5, side: THREE.DoubleSide })
+    // Cushions match the bright baize so cloth and rubber read as one surface.
+    const cushionMat = new THREE.MeshStandardMaterial({ color: 0x17943a, roughness: 0.6, side: THREE.DoubleSide })
+    const noseMat = new THREE.MeshStandardMaterial({ color: 0x1fae4a, roughness: 0.5, side: THREE.DoubleSide })
     const gapHalf = POCKET_RADIUS_CORNER
     const midGapHalf = POCKET_RADIUS_MIDDLE
     const longSegments: Array<[number, number]> = [
@@ -634,9 +742,10 @@ export class Scene3D {
       this.scene.add(brass)
     }
 
+    // Burgundy arena carpet, bright enough to read as a lit floor rather than a void.
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(16000, 9000),
-      new THREE.MeshStandardMaterial({ color: 0x0c0e12, roughness: 1 })
+      new THREE.MeshStandardMaterial({ color: 0x6b2731, roughness: 0.55, metalness: 0.0, envMapIntensity: 0.5 })
     )
     floor.rotation.x = -Math.PI / 2
     floor.position.y = -790
@@ -645,28 +754,38 @@ export class Scene3D {
 
     const backWall = new THREE.Mesh(
       new THREE.PlaneGeometry(14000, 7000),
-      new THREE.MeshStandardMaterial({ color: 0x11151c, roughness: 1 })
+      new THREE.MeshStandardMaterial({ color: 0x27344a, roughness: 0.9 })
     )
     backWall.position.set(0, 500, -4600)
     this.scene.add(backWall)
 
+    // The fixture meshes stay in the scene graph but are not rendered: the shade
+    // sits exactly on the line between the overhead camera and the table centre, so
+    // in the top-down view it filled the frame with a brown cone. The light itself
+    // lives in buildLighting and is untouched — only the geometry is hidden.
     const shade = new THREE.Mesh(
       new THREE.CylinderGeometry(80, 330, 260, 28),
       new THREE.MeshStandardMaterial({ color: 0x8a6a34, roughness: 0.35, metalness: 0.6 })
     )
     shade.position.set(0, 1900, 0)
+    shade.visible = false
     this.scene.add(shade)
     const bulb = new THREE.Mesh(
       new THREE.SphereGeometry(60, 24, 16),
       new THREE.MeshBasicMaterial({ color: 0xfff3cf })
     )
     bulb.position.set(0, 1790, 0)
+    bulb.visible = false
     this.scene.add(bulb)
-    const lamp = new THREE.SpotLight(0xffecc9, 4500000, 0, Math.PI / 5.5, 0.4, 2)
-    lamp.position.set(0, 1800, 0)
-    lamp.target.position.set(0, 0, 0)
-    this.scene.add(lamp)
-    this.scene.add(lamp.target)
+
+    // The whole set built above — cloth, cushions, pockets, floor, lamp shade — is
+    // static. Freezing every matrix here means the one static shadow frame and every
+    // later render skip their matrix recalculations, and the fixture part of the
+    // shadow map is settled before the first frame is ever drawn.
+    this.scene.traverse((obj) => {
+      obj.matrixAutoUpdate = false
+      obj.updateMatrix()
+    })
   }
 
   private buildAim(): void {
@@ -773,11 +892,12 @@ export class Scene3D {
     // Shaft: taper from the 9mm tip end to the 12.5mm joint, 1200mm long.
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 12.5, 1200, 20), shaftMat)
     shaft.position.y = 0
-    shaft.castShadow = true
+    // Same rule as the balls: the stick moves, the shadow map does not.
+    shaft.castShadow = false
     // Butt extension past the joint, 300mm, flaring slightly.
     const butt = new THREE.Mesh(new THREE.CylinderGeometry(12.5, 14, 300, 20), buttMat)
     butt.position.y = -750
-    butt.castShadow = true
+    butt.castShadow = false
     // Brass ferrule at the tip end of the shaft.
     const ferrule = new THREE.Mesh(new THREE.CylinderGeometry(5.4, 5.6, 30, 16), ferruleMat)
     ferrule.position.y = 612
@@ -797,7 +917,13 @@ export class Scene3D {
     // Kept for the camera, which moves on its own clock in `render` rather than in here:
     // the balls it follows and the heading it turns to are both read from here.
     this.lastSnapshot = snapshot
-    if (options.aim) this.lastAimAngle = options.aim.angle
+    if (options.aim) {
+      this.lastAimAngle = options.aim.angle
+      // The aim is free to swing all it likes while the player hovers; the latch only
+      // takes a new heading when a shot is actually played, so between shots the
+      // camera stands exactly where it was.
+      this.latch = stepHeadingLatch(this.latch, this.lastAimAngle, this.tracking)
+    }
     if (!snapshot) {
       for (const rig of this.balls.values()) rig.setVisible(false)
       this.hideAim()
@@ -1041,6 +1167,16 @@ export class Scene3D {
     this.tracking = tracking
   }
 
+  /**
+   * Adds one drag step to the player's look-around, in radians.
+   *
+   * This is the only way the aim-mode camera turns between shots: a deliberate
+   * right- or middle-button drag, never a hovering pointer.
+   */
+  orbitBy(delta: number): void {
+    this.latch = addOrbit(this.latch, delta)
+  }
+
   /** The view the camera is being asked for, for the toggle to reflect. */
   currentCameraMode(): 'AIM' | 'TOP_DOWN' {
     return this.cameraMode
@@ -1151,6 +1287,7 @@ export class Scene3D {
         aspect: this.cvw / Math.max(1, this.cvh),
         cue,
         aimAngle: this.lastAimAngle,
+        latch: this.latch,
         focus: count > 0 ? { x: sumX / count, y: sumY / count, spread } : null
       },
       dt
@@ -1233,11 +1370,34 @@ export class Scene3D {
     const sx = (toScreen(ax).x - sc.x) / 600
     const sz = (toScreen(az).y - sc.y) / 600
     const scale = (sx + sz) / 2
+    // Handed back every frame: the 2D HUD's power rail picks table points, and the
+    // cue controller's fallback projection reads the same transform. Cutting this
+    // from the render pass desynced those from the live camera.
     setTableTransform({
       offsetX: sc.x - scale * (TABLE_LENGTH / 2),
       offsetY: sc.y - scale * (TABLE_WIDTH / 2),
       scale
     })
+    // No per-frame shadow work happens here: the map was baked once, and moving balls
+    // are shaded by the lamp itself, so they read as lit rather than floating — their
+    // contact with the cloth is sold by the textured blobs under them, which move
+    // with the balls and cost no shadow renders.
+    //
+    // Before any render that might be the one shadow pass, the shadow camera's basis
+    // is pinned: three.js derives that basis from the render camera's orientation at
+    // the moment it renders the shadow map, and the bake frame would otherwise be
+    // whichever view happened to be on screen first. A map baked under one view and
+    // sampled under the other is the mechanism behind the diagonal stripe artifacts
+    // that appeared when toggling between the two views — the depth matrix disagreed
+    // with itself by a rotation. Pinning it to the world axes makes the map, and every
+    // sample of it, view-independent by construction.
+    if (this.renderer.shadowMap.needsUpdate) {
+      const shadowCam = this.lamp.shadow.camera
+      shadowCam.position.set(0, 1750, 0)
+      shadowCam.up.set(0, 0, -1)
+      shadowCam.lookAt(0, 0, 0)
+      shadowCam.updateMatrixWorld(true)
+    }
     this.renderer.render(this.scene, this.camera)
   }
 

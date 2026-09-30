@@ -8,6 +8,11 @@ import {
   MAX_CAMERA_HEIGHT_MM,
   MIN_CAMERA_HEIGHT_MM,
   TOP_DOWN_MIN_HEIGHT_MM,
+  initialHeadingLatch,
+  stepHeadingLatch,
+  latchedCameraYaw,
+  addOrbit,
+  MAX_ORBIT_RAD,
   TRACK_MIN_HEIGHT_MM,
   VISIBLE_HALF_LENGTH,
   VISIBLE_HALF_WIDTH,
@@ -33,6 +38,7 @@ const request = (overrides: Partial<Parameters<typeof resolveCameraTarget>[0]> =
   aspect: ASPECT_2_TO_1,
   cue: { x: HALF_L, y: HALF_W },
   aimAngle: 0,
+  latch: initialHeadingLatch(0),
   focus: null,
   ...overrides
 })
@@ -44,6 +50,53 @@ function run(state: ReturnType<typeof initialRigState>, req: ReturnType<typeof r
   for (let i = 0; i < steps; i++) current = stepCameraRig(current, req, 1 / 60)
   return current
 }
+
+describe('the heading latch', () => {
+  it('does not move while no shot is being played', () => {
+    const latch = initialHeadingLatch(0.5)
+    expect(stepHeadingLatch(latch, 2.5, false)).toBe(latch)
+    expect(latchedCameraYaw(stepHeadingLatch(latch, 2.5, false))).toBeCloseTo(0.5, 12)
+  })
+
+  it('re-latches on a played shot and drops the look-around with it', () => {
+    let latch = addOrbit(initialHeadingLatch(0), 0.6)
+    latch = stepHeadingLatch(latch, 1.25, true)
+    expect(latch.heading).toBeCloseTo(1.25, 12)
+    expect(latch.orbit).toBe(0)
+  })
+
+  it('keeps a drag inside half a turn either way', () => {
+    let latch = initialHeadingLatch(0)
+    latch = addOrbit(latch, 99)
+    expect(latch.orbit).toBeCloseTo(MAX_ORBIT_RAD, 12)
+    latch = addOrbit(latch, -99)
+    expect(latch.orbit).toBeCloseTo(-MAX_ORBIT_RAD, 12)
+  })
+
+  it('never lets a sweeping aim turn the camera', () => {
+    // The bug this rig exists to fix: the player sweeps their aim across the whole
+    // table with the pointer and the camera used to follow every degree of it. With
+    // the latch in place the rig's heading is taken from the latch, so an aim that
+    // moves without a shot being played leaves the camera exactly where it was.
+    let state = run(initialRigState(ASPECT_2_TO_1), request({ aimAngle: 0 }), 3)
+    const settledYaw = state.yaw
+    for (const angle of [0.4, 1.2, 2.4, -1.6, 3.0]) {
+      state = run(state, request({ aimAngle: angle }), 1)
+      expect(state.yaw).toBeCloseTo(settledYaw, 6)
+      expect(state.pose.x).toBeCloseTo(state.pose.x, 12)
+    }
+  })
+
+  it('turns only when a shot is played or the player drags, and eases between them', () => {
+    // Re-latch on a played shot: the camera comes round behind the new heading.
+    let state = run(initialRigState(ASPECT_2_TO_1), request({ aimAngle: 0 }), 3)
+    state = run(state, request({ aimAngle: Math.PI / 2, latch: initialHeadingLatch(Math.PI / 2) }), 2)
+    expect(state.yaw).toBeCloseTo(Math.PI / 2, 4)
+    // Drag the look-around: the rig eases there too, via the same latch.
+    state = run(state, request({ aimAngle: Math.PI / 2, latch: addOrbit(initialHeadingLatch(Math.PI / 2), 0.5) }), 2)
+    expect(state.yaw).toBeCloseTo(Math.PI / 2 + 0.5, 4)
+  })
+})
 
 describe('the shortest way round', () => {
   it('takes the direct line when there is one', () => {
@@ -299,7 +352,9 @@ describe('the rig', () => {
   it('comes back to the aim camera behind where the cue ball has ended up', () => {
     let state = run(initialRigState(ASPECT_2_TO_1), request({ cue: { x: 400, y: 500 } }), 2)
     const moved = { x: 2800, y: 1200 }
-    state = run(state, request({ cue: moved, aimAngle: 180 * DEG }), 4)
+    // The heading arrives via the latch, which a real played shot re-latches; the
+    // bare aim angle on its own cannot move the camera any more.
+    state = run(state, request({ cue: moved, aimAngle: 180 * DEG, latch: initialHeadingLatch(180 * DEG) }), 4)
     expect(state.pose.x).toBeCloseTo(moved.x - AIM_BACK_MM * Math.cos(Math.PI), 1)
     expect(state.pose.height).toBeCloseTo(AIM_HEIGHT_MM, 1)
   })

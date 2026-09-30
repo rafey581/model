@@ -17,6 +17,8 @@ import type { Socket } from 'socket.io-client'
 import { playCushion, playFoul, playFrameEnd, playMatchEnd, playPot, setSoundMuted, isSoundMuted, unlockAudio } from './game/audio.js'
 import { ShotPlayer } from './game/playback.js'
 import type { PlaybackBall } from './game/playback.js'
+/** Radians of camera orbit per pixel of right-drag: a full-width drag sweeps half a turn. */
+const CAMERA_ORBIT_PER_PIXEL = Math.PI / 900
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 const toast = makeToast(document.body)
@@ -121,7 +123,13 @@ let hudFrame: FrameSnapshotData | null = null
 let hintDismissed = false
 /** What the table is worth, read once from the match rather than recomputed. */
 let matchPrizeCredits = 0
-let dprCap = 2
+/**
+ * The ceiling for the canvas backing store's device pixel ratio. 1.5 keeps a
+ * high-DPI screen sharper than plain 1× while capping the fragment load that 4K
+ * panels (DPR 2+) would otherwise put on a weak GPU; the adaptive ladder below
+ * steps between 1 and this, and never above it.
+ */
+let dprCap = 1.5
 let frameEma = 0
 let lastFrameTime = 0
 let slowFrames = 0
@@ -1476,7 +1484,7 @@ function renderGame(): void {
   gameResizeObserver?.disconnect()
   gameResizeObserver = new ResizeObserver(() => applyCanvasSize())
   gameResizeObserver.observe(stage)
-  dprCap = 2
+  dprCap = 1.5
   frameEma = 0
   slowFrames = 0
 
@@ -1503,6 +1511,10 @@ function renderGame(): void {
             ballRadiusPx: (x, y, radius) => scene3d?.ballRadiusPx(x, y, radius) ?? 0
           }
         : undefined,
+    // The only gesture that turns the camera between shots: a deliberate right- or
+    // middle-button drag. Hovering the pointer over the table never rotates anything —
+    // it aims the cue, and the camera stands exactly where the last shot left it.
+    onOrbit: (pixels) => scene3d?.orbitBy(pixels * CAMERA_ORBIT_PER_PIXEL),
     // The visit is only playable when the table has settled, which is the same
     // condition that draws the cue. Firing while a shot is still animating used to
     // be accepted by the server and cut the animation dead.
@@ -1858,14 +1870,14 @@ function loop(): void {
         if (frameEma > 28) slowFrames++
         else slowFrames = 0
         if (slowFrames > 90 && dprCap > 1) {
-          dprCap = dprCap === 2 ? 1.5 : 1
+          dprCap = 1
           slowFrames = 0
           applyCanvasSize()
           toast('Lowered graphics quality for smoother play', 'info')
         }
-        if (frameEma < 14 && dprCap < 2 && now - lastDprUpAt > 20000) {
+        if (frameEma < 14 && dprCap < 1.5 && now - lastDprUpAt > 20000) {
           lastDprUpAt = now
-          dprCap = dprCap === 1 ? 1.5 : 2
+          dprCap = 1.5
           applyCanvasSize()
         }
       }

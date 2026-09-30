@@ -153,6 +153,67 @@ export interface CameraPose {
   fov: number
 }
 
+/**
+ * How far the player may push the camera round from the shot's own heading, in radians.
+ *
+ * Half a turn either way is more than any shot needs: the camera can end up in front of
+ * the cue ball looking back, which is the view you want when the ball is tight against a
+ * cushion, and no further.
+ */
+export const MAX_ORBIT_RAD = Math.PI
+
+/**
+ * Where the camera is pointed, kept apart from where the cue is pointed.
+ *
+ * These are two different questions and the rig is not allowed to answer one with the
+ * other. Aiming sweeps the cue the whole length of the table, and a camera bolted to that
+ * angle swings round behind the cue ball with it, so sweeping out a shot line turns the
+ * room over rather than turning the cue. The heading is therefore latched when a shot
+ * starts and held for as long as the player spends on that shot, and the player's own
+ * look-around is kept as a separate offset that only a deliberate drag can move.
+ */
+export interface HeadingLatch {
+  /** The heading the camera was last pointed at. Fixed for the length of a shot. */
+  heading: number
+  /** The player's look-around from the current heading. Right-drag only. */
+  orbit: number
+}
+
+export function initialHeadingLatch(aimAngle: number = 0): HeadingLatch {
+  return { heading: aimAngle, orbit: 0 }
+}
+
+/**
+ * Carries the latch from one frame to the next.
+ *
+ * `startingShot` is the signal that a new shot is being set up. While it is false nothing
+ * about the aim can reach the camera, which is what keeps a moving cursor from turning
+ * anything: however far the player's aim travels in between, the heading and the orbit
+ * come back out of here untouched.
+ *
+ * A new shot re-latches from the aim it starts with and drops the look-around, because
+ * that aim is the direction the player just played, so the camera comes back to the view
+ * the shot was taken from rather than to wherever they had wandered.
+ */
+export function stepHeadingLatch(
+  latch: HeadingLatch,
+  aimAngle: number,
+  startingShot: boolean
+): HeadingLatch {
+  if (!startingShot) return latch
+  return { heading: aimAngle, orbit: 0 }
+}
+
+/** Adds a drag to the player's look-around, held inside {@link MAX_ORBIT_RAD}. */
+export function addOrbit(latch: HeadingLatch, delta: number): HeadingLatch {
+  return { heading: latch.heading, orbit: clamp(latch.orbit + delta, -MAX_ORBIT_RAD, MAX_ORBIT_RAD) }
+}
+
+/** The heading the camera is actually pointed along: the latched one, plus the look-around. */
+export function latchedCameraYaw(latch: HeadingLatch): number {
+  return latch.heading + latch.orbit
+}
+
 /** What the rig is being asked to do this frame. */
 export interface CameraRequest {
   mode: CameraMode
@@ -164,8 +225,19 @@ export interface CameraRequest {
   aspect: number
   /** Where the cue ball is. Null before the table has said where anything is. */
   cue: { x: number; y: number } | null
-  /** The heading the shot is being played along, in radians. */
+  /**
+   * The heading the shot is being played along, in radians.
+   *
+   * Read by {@link resolveCameraTarget} when it is called directly. The rig itself takes
+   * its heading from the latch below, never from a live aim — which is what keeps a
+   * hovering pointer from rotating anything.
+   */
   aimAngle: number
+  /**
+   * Where the camera is pointed: the latched shot heading plus the player's own
+   * look-around. This, and only this, is what the rig eases its yaw towards.
+   */
+  latch: HeadingLatch
   /**
    * The point the tracking camera should hold in frame, and how far the balls spread
    * around it. Null when there is nothing worth following, which drops the camera back to
@@ -370,7 +442,10 @@ function dampPose(current: CameraPose, target: CameraPose, rate: number, fovRate
 export function stepCameraRig(state: CameraRigState, request: CameraRequest, dt: number): CameraRigState {
   const step = Math.max(0, Math.min(dt, 0.1))
   const tracking = request.mode === 'TRACK'
-  const yaw = dampAngle(state.yaw, request.aimAngle, tracking ? TRACK_YAW_RATE : YAW_RATE, step)
+  // The heading the rig eases towards is the latched one, plus whatever look-around the
+  // player has dragged in. The live aim is nowhere in it: aiming turns the cue, and only
+  // a played shot re-latching or an explicit drag can move this target.
+  const yaw = dampAngle(state.yaw, latchedCameraYaw(request.latch), tracking ? TRACK_YAW_RATE : YAW_RATE, step)
 
   // The aim pose is rebuilt from the eased heading, so its own position eases with it.
   // The other modes resolve normally: their headings come out of their geometry.

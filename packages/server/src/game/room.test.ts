@@ -436,12 +436,37 @@ describe('turn clock', () => {
     return update[update.length - 1]?.payload?.turn
   }
 
-  it('runs from the moment the match starts, on the striker—s seat', () => {
+  /**
+   * Plays and watches the break-off, so the frame is past its opening ball-in-hand.
+   *
+   * The execution state machine keeps the clock stopped while the striker is placing
+   * the cue ball, and a fresh frame opens in hand, so any test that wants a running
+   * clock has to get through the break first. The stroke places the cue on its layout
+   * spot, which is a legal D placement, and the acknowledgement hands the visit on.
+   */
+  function playBreak(room: GameRoom, cbs: ReturnType<typeof callbacks>): void {
+    const frame = room.match.currentFrame
+    const cue = frame?.balls.find((b) => b.isCue)
+    const placed = room.handleShot('user-a', {
+      ...SHOT,
+      cuePos: cue ? { x: cue.pos.x, y: cue.pos.y } : undefined
+    })
+    expect(placed.accepted).toBe(true)
+    room.noteShotPlayed('user-a', lastToken(cbs), 'sock-a')
+  }
+
+  it('pauses the clock for the opening ball in hand, and runs once the break is watched', () => {
     const { room, cbs } = startedRoom()
-    const timing = lastTiming(cbs)
+    // BALL_IN_HAND_PLACEMENT: the striker has not put the cue ball down yet, so no
+    // turn is being spent and no deadline exists to draw.
+    expect(room.turnTiming().turnDeadlineAt).toBeNull()
+    playBreak(room, cbs)
+    // The break has been watched, the cue is on the cloth, and the next visit is
+    // genuinely aiming: from here the clock runs a full turn.
+    const timing = room.turnTiming()
     expect(timing.turnDeadlineAt).not.toBeNull()
     // The deadline is an absolute instant on the server clock, a full turn ahead of it.
-    expect(timing.turnDeadlineAt - timing.serverNow).toBe(30_000)
+    expect(timing.turnDeadlineAt! - timing.serverNow).toBe(30_000)
     expect(timing.turnDurationMs).toBe(30_000)
   })
 
@@ -498,16 +523,24 @@ describe('turn clock', () => {
   })
 
   it('stops when a player disconnects, and starts again when they come back', () => {
-    const { room } = startedRoom()
-    room.unregisterSocket('user-a', 'sock-a')
+    const { room, cbs } = startedRoom()
+    playBreak(room, cbs)
+    // The break has passed the visit to seat 1, so the striker going quiet is what
+    // stops the clock: nobody may be fouled for a turn they are not there to play.
+    room.unregisterSocket('user-b', 'sock-b')
     expect(room.turnTiming().turnDeadlineAt).toBeNull()
-    room.registerSocket('user-a', 0, 'sock-a2')
+    room.registerSocket('user-b', 1, 'sock-b2')
     expect(room.turnTiming().turnDeadlineAt).not.toBeNull()
   })
 
   it('keeps telling a client the deadline it was last given, while the clock stands', () => {
     const { room, cbs } = startedRoom()
-    const told = lastTiming(cbs)
+    playBreak(room, cbs)
+    // The fresh deadline travelled on the turn:clock announcement that followed the
+    // release, so the client's view of it is read from there rather than from an
+    // older table broadcast that predates the clock.
+    const told = room.turnTiming()
+    expect(told.turnDeadlineAt).not.toBeNull()
     // Nothing has happened to the room, so the instant a client is holding is still the
     // instant the room is enforcing. A deadline that drifted between messages would put
     // the ring and the eventual foul in different places.
@@ -518,10 +551,11 @@ describe('turn clock', () => {
     // A client that was disconnected has no countdown to draw, so it starts again at
     // full. The alternative — a deadline that expired while they were away would
     // foul a player for a turn they were never given the chance to play.
-    const { room } = startedRoom()
-    room.unregisterSocket('user-a', 'sock-a')
+    const { room, cbs } = startedRoom()
+    playBreak(room, cbs)
+    room.unregisterSocket('user-b', 'sock-b')
     const before = Date.now()
-    room.registerSocket('user-a', 0, 'sock-a2')
+    room.registerSocket('user-b', 1, 'sock-b2')
     const timing = room.turnTiming()
     expect(timing.turnDeadlineAt! - before).toBeGreaterThanOrEqual(30_000 - 50)
   })
@@ -533,14 +567,13 @@ describe('turn clock', () => {
     // only bot the room knows about: it is identified by that seat, not by a flag.
     room.registerSocket('user-a', 0, 'sock-a')
     room.tryStart()
-    // A clock runs for the human.
-    expect(room.turnTiming().turnDeadlineAt).not.toBeNull()
-    // One shot played and watched, and the visit passes to the robot. The clock is
-    // armed on its visit too, so the ring follows whoever is at the table — but the
-    // timeout must never charge the robot a foul, because its think delay is its own
-    // business and always lands well inside a turn.
-    room.handleShot('user-a', SHOT)
-    room.noteShotPlayed('user-a', lastToken(cbs), 'sock-a')
+    // The break is watched first: the clock does not run across the opening ball in
+    // hand, so the human's clock only exists once the frame is past it.
+    playBreak(room, cbs)
+    // The visit has passed to the robot. The clock is armed on its visit too, so the
+    // ring follows whoever is at the table — but the timeout must never charge the
+    // robot a foul, because its think delay is its own business and always lands
+    // well inside a turn.
     expect(room.isBotTurn()).toBe(true)
     expect(room.turnTiming().turnDeadlineAt).not.toBeNull()
     const clocks = cbs.broadcasts.filter((b) => b.event === 'turn:clock')
@@ -556,21 +589,20 @@ describe('turn clock', () => {
   })
 
   it('leaves the striker clock alone when it is the other player who drops out', () => {
-    const { room } = startedRoom({ connect: ['a', 'b'] })
-    // Seat 0 is at the table. The opponent going quiet must not hand seat 0 the turn
-    // again from the top, which is what re-arming here would do.
+    const { room, cbs } = startedRoom({ connect: ['a', 'b'] })
+    playBreak(room, cbs)
+    // The break passed the visit to seat 1, so seat 0 is now the other player. Their
+    // going quiet must not stop — or restart — the striker's clock.
     const before = room.turnTiming().turnDeadlineAt
     expect(before).not.toBeNull()
-    room.unregisterSocket('user-b', 'sock-b')
+    room.unregisterSocket('user-a', 'sock-a')
     expect(room.turnTiming().turnDeadlineAt).toBe(before)
   })
 
   it('stops the clock when the turn actually times out', () => {
     const { room, cbs } = startedRoom({ timeoutSec: 1 })
+    playBreak(room, cbs)
     expect(room.turnTiming().turnDeadlineAt).not.toBeNull()
-    room.handleShot('user-a', SHOT)
-    const token = lastToken(cbs)
-    room.noteShotPlayed('user-a', token, 'sock-a')
     vi.advanceTimersByTime(1_500)
     // The expiry foul passed the visit on, so the clock now belongs to the other
     // player and nothing is left of the one that ran out.
@@ -619,9 +651,10 @@ describe('turn clock', () => {
 
   it('announces the re-armed clock when a player returns', () => {
     const { room, cbs } = startedRoom()
-    room.unregisterSocket('user-a', 'sock-a')
+    playBreak(room, cbs)
+    room.unregisterSocket('user-b', 'sock-b')
     const before = Date.now()
-    room.registerSocket('user-a', 0, 'sock-a2')
+    room.registerSocket('user-b', 1, 'sock-b2')
     const clocks = cbs.broadcasts.filter((b) => b.event === 'turn:clock')
     const last = clocks[clocks.length - 1]?.payload?.turn
     expect(last?.turnDeadlineAt).not.toBeNull()
@@ -633,6 +666,7 @@ describe('turn clock', () => {
     // is spent. Stamped as-is, clients would draw an empty clock across the whole
     // frame ceremony.
     const { room, cbs } = startedRoom()
+    playBreak(room, cbs)
     expect(room.turnTiming().turnDeadlineAt).not.toBeNull()
     await (room as unknown as { handleFrameEnd(w: number, f: unknown): Promise<void> }).handleFrameEnd(
       0,

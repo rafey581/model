@@ -91,7 +91,7 @@ interface Harness {
   aimNow: () => AimState
 }
 
-function harness(options: { view?: () => TableView | undefined; enabled?: () => boolean } = {}): Harness {
+function harness(options: { view?: () => TableView | undefined; enabled?: () => boolean; onOrbit?: (pixels: number) => void } = {}): Harness {
   const canvas = new FakeCanvas()
   const aim: AimState[] = []
   const shots: Array<{ aimAngle: number; power: number }> = []
@@ -101,6 +101,7 @@ function harness(options: { view?: () => TableView | undefined; enabled?: () => 
     enabled: options.enabled ?? ((): boolean => true),
     onChange: (state) => aim.push({ ...state }),
     onShoot: (shot) => shots.push({ aimAngle: shot.aimAngle, power: shot.power }),
+    onOrbit: options.onOrbit,
     view: options.view
   })
   return { canvas, shots, states: aim, aimNow: () => aim[aim.length - 1]! }
@@ -248,6 +249,83 @@ it('gives the same answer as the flat projection does overhead', () => {
     sceneAlive = false
     h.canvas.fire('pointermove', pointer(cue.x + 200, cue.y))
     expect(h.aimNow().angle).toBeCloseTo(0, 9)
+  })
+})
+
+describe('the aim gesture and the camera gesture', () => {
+  it('does not aim while a right button is held, even though the pointer moves', () => {
+    // Right-drag is the camera's gesture. A pointer gliding across the cloth with the
+    // right button down used to swing the aim as a side effect; the camera drag must
+    // leave the shot angle exactly where the player set it.
+    const camera = aimCameraFor(0)
+    const h = harness({ view: () => viewOver(camera) })
+    const target = pixelOf({ x: 2400, y: 500 }, camera)
+    h.canvas.fire('pointermove', pointer(target.x, target.y))
+    const aimed = h.aimNow().angle
+
+    h.canvas.fire('pointermove', { ...pointer(target.x + 300, target.y + 200), buttons: 2 })
+    expect(h.aimNow().angle).toBe(aimed)
+    expect(h.shots).toHaveLength(0)
+  })
+
+  it('aims on hover, with no button held at all', () => {
+    const camera = aimCameraFor(0)
+    const h = harness({ view: () => viewOver(camera) })
+    const first = pixelOf({ x: 2400, y: 500 }, camera)
+    const second = pixelOf({ x: 900, y: 1100 }, camera)
+    h.canvas.fire('pointermove', { ...pointer(first.x, first.y), buttons: 0 })
+    const aimed = h.aimNow().angle
+    h.canvas.fire('pointermove', { ...pointer(second.x, second.y), buttons: 0 })
+    expect(h.aimNow().angle).not.toBe(aimed)
+  })
+
+  it('reports right-drag as orbit pixels, without aiming or firing', () => {
+    const orbitPixels: number[] = []
+    const camera = aimCameraFor(0)
+    const h = harness({ view: () => viewOver(camera), onOrbit: (px) => orbitPixels.push(px) })
+    const onBall = pixelOf(CUE, camera)
+
+    h.canvas.fire('pointerdown', { ...pointer(onBall.x, onBall.y), button: 2, buttons: 2 })
+    h.canvas.fire('pointermove', { ...pointer(onBall.x + 120, onBall.y), buttons: 2 })
+    h.canvas.fire('pointermove', { ...pointer(onBall.x + 320, onBall.y), buttons: 2 })
+    h.canvas.fire('pointerup', { ...pointer(onBall.x + 320, onBall.y), button: 2, buttons: 0 })
+
+    expect(orbitPixels).toEqual([120, 200])
+    expect(h.shots).toHaveLength(0)
+  })
+
+  it('reports middle-drag as orbit too', () => {
+    const orbitPixels: number[] = []
+    const h = harness({ onOrbit: (px) => orbitPixels.push(px) })
+    h.canvas.fire('pointerdown', { ...pointer(500, 500), button: 1, buttons: 4 })
+    h.canvas.fire('pointermove', { ...pointer(560, 500), buttons: 4 })
+    h.canvas.fire('pointerup', { ...pointer(560, 500), button: 1, buttons: 0 })
+    expect(orbitPixels).toEqual([60])
+    expect(h.shots).toHaveLength(0)
+  })
+
+  it('still aims with no button bit set at all', () => {
+    // Synthetic events in tests carry no `buttons`; a real hover always does. The
+    // gesture has to treat the missing field as a plain hover rather than as a held
+    // non-primary button.
+    const h = harness()
+    const cue = flatPixel(CUE.x, CUE.y)
+    h.canvas.fire('pointermove', pointer(cue.x + 200, cue.y))
+    expect(h.aimNow().angle).toBeCloseTo(0, 9)
+  })
+
+  it('leaves the aim alone while the visit is not playable, and keeps it once it is', () => {
+    // Aiming mid-replay used to swing the angle on a table that was still moving;
+    // the frozen angle is also the one the latched camera keeps steady across.
+    let playable = false
+    const h = harness({ enabled: () => playable })
+    const cue = flatPixel(CUE.x, CUE.y)
+    h.canvas.fire('pointermove', pointer(cue.x + 200, cue.y))
+    expect(h.states).toHaveLength(0)
+
+    playable = true
+    h.canvas.fire('pointermove', pointer(cue.x, cue.y + 200))
+    expect(h.aimNow().angle).toBeCloseTo(Math.PI / 2, 9)
   })
 })
 

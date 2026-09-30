@@ -34,6 +34,12 @@ export interface CueControllerOptions {
   onChange: (aim: AimState) => void
   onShoot: (shot: Omit<ShotInput, 'timestamp'>) => void
   /**
+   * One step of look-around, in pixels of horizontal drag. Only ever called for a
+   * deliberate right- or middle-button drag, which is the only gesture that turns
+   * the camera — a plain pointer move never does.
+   */
+  onOrbit?: (pixels: number) => void
+  /**
    * The view to ask, if there is one right now.
    *
    * Asked for fresh each time rather than handed over once, because a view can stop
@@ -76,6 +82,22 @@ const CHARGE_DEADZONE_PX = 6
 /** Releasing further than this from the cue ball is a cancellation, not a shot. */
 const SHOOT_RADIUS_PX = 12
 /**
+ * The primary button, the one that aims, charges and fires. A bitmask against
+ * `PointerEvent.buttons`, where bit 0 is the primary button.
+ */
+const PRIMARY_BUTTON = 1
+/**
+ * `PointerEvent.button` for the right button: the one held to drag the camera round,
+ * not to aim. Note this is the `button` property value, not the `buttons` bitmask.
+ */
+const BUTTON_RIGHT = 2
+/**
+ * `PointerEvent.button` for the middle button, the other one that may drag the
+ * camera. Again the `button` property value — a middle press reports 1 here and 4
+ * in the `buttons` bitmask — which is why the two constants must not be shared.
+ */
+const BUTTON_MIDDLE = 1
+/**
  * How far behind the cue ball the cue axis is sampled to find its direction on screen.
  *
  * A couple of ball diameters is enough to be well clear of the projection's own precision
@@ -113,6 +135,10 @@ export function createCueController(options: CueControllerOptions): CueControlle
    * by whichever animation happened to be running.
    */
   let powerLocked = false
+  /** True while a right- or middle-button drag is turning the camera. */
+  let orbiting = false
+  /** The horizontal pixel the orbit drag started from, so deltas are measured from it. */
+  let orbitOriginX = 0
 
   function pointerInCanvas(event: { clientX: number; clientY: number }): { px: number; py: number; rect: DOMRect } {
     const rect = options.canvas.getBoundingClientRect()
@@ -219,6 +245,10 @@ export function createCueController(options: CueControllerOptions): CueControlle
   }
 
   function handleMove(event: { clientX: number; clientY: number }): void {
+    // A visit that cannot be played has no aim to set: the balls may be mid-shot, the
+    // visit may be somebody else's. Holding the aim still is what keeps the angle the
+    // player last set intact for when their visit does come round.
+    if (!options.enabled()) return
     aim.angle = pointerAngle(event)
     if (dragging) {
       if (
@@ -255,8 +285,36 @@ export function createCueController(options: CueControllerOptions): CueControlle
     options.onChange({ ...aim })
   }
 
-  const onPointerMove = (event: PointerEvent) => handleMove(event)
+  const onPointerMove = (event: PointerEvent) => {
+    // The orbit drag comes first: while the camera gesture is live, every move is a
+    // look-around step and says nothing about the shot.
+    if (orbiting) {
+      options.onOrbit?.(event.clientX - orbitOriginX)
+      orbitOriginX = event.clientX
+      return
+    }
+    // The aim is the primary button's gesture. If a button is held and it is not the
+    // primary one — most importantly the right button — this move says nothing about
+    // the shot: the angle stays where the player left it rather than swinging with a
+    // button that is being held for the camera. No button held is a hover, which aims.
+    // `buttons` is a bitmask here, unlike `button` above: bit 0 is the primary button.
+    const buttons = event.buttons ?? PRIMARY_BUTTON
+    if (buttons !== 0 && (buttons & PRIMARY_BUTTON) === 0) return
+    handleMove(event)
+  }
   const onPointerDown = (event: PointerEvent) => {
+    // A right- or middle-button press anywhere on the canvas is the camera's gesture,
+    // and it never aims, charges or fires. The look-around is consumed as horizontal
+    // drag pixels by the caller; the browser's own menu on the same button is refused
+    // so the drag can run undisturbed.
+    if (event.button === BUTTON_RIGHT || event.button === BUTTON_MIDDLE) {
+      if (!options.onOrbit) return
+      event.preventDefault()
+      orbiting = true
+      orbitOriginX = event.clientX
+      options.canvas.setPointerCapture(event.pointerId)
+      return
+    }
     // A second gesture starting on the canvas while the slider is mid-drag would
     // stomp `aim.power` with its press default — and possibly fire a shot on release —
     // over the top of the value the player is setting on the rail. The canvas simply
@@ -276,6 +334,10 @@ export function createCueController(options: CueControllerOptions): CueControlle
     event.preventDefault()
   }
   const onPointerUp = (event: PointerEvent) => {
+    if (orbiting && (event.button === BUTTON_RIGHT || event.button === BUTTON_MIDDLE)) {
+      orbiting = false
+      return
+    }
     if (!dragging) return
     dragging = false
     stopCharging()
@@ -290,6 +352,7 @@ export function createCueController(options: CueControllerOptions): CueControlle
     options.onShoot({ aimAngle: aim.angle, power: aim.power, spin: { x: aim.spinX, y: aim.spinY } })
   }
   const onPointerCancel = (event: PointerEvent) => {
+    orbiting = false
     dragging = false
     stopCharging()
     event.preventDefault()
@@ -376,6 +439,13 @@ export function createCueController(options: CueControllerOptions): CueControlle
   options.canvas.addEventListener('pointerdown', onPointerDown)
   options.canvas.addEventListener('pointerup', onPointerUp)
   options.canvas.addEventListener('pointercancel', onPointerCancel)
+  // The right button drags the camera. The menu the browser would open on its release
+  // would swallow the gesture's own pointerup and leave the drag half-finished, so it
+  // is refused where it would appear.
+  const onContextMenu = (event: MouseEvent): void => {
+    if (options.onOrbit) event.preventDefault()
+  }
+  options.canvas.addEventListener('contextmenu', onContextMenu)
   options.canvas.addEventListener('wheel', onWheel, { passive: false })
   window.addEventListener('keydown', onKeyDown)
 
@@ -388,6 +458,7 @@ export function createCueController(options: CueControllerOptions): CueControlle
       options.canvas.removeEventListener('pointerdown', onPointerDown)
       options.canvas.removeEventListener('pointerup', onPointerUp)
       options.canvas.removeEventListener('pointercancel', onPointerCancel)
+      options.canvas.removeEventListener('contextmenu', onContextMenu)
       options.canvas.removeEventListener('wheel', onWheel)
       window.removeEventListener('keydown', onKeyDown)
     },
