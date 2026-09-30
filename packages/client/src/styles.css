@@ -317,6 +317,50 @@ button.small {
   color: var(--text);
 }
 
+/**
+ * The view toggle.
+ *
+ * A circle because the mark inside it is a lens, and a circle reads as a control you press
+ * rather than a label you read. It is a real button above the canvas rather than a canvas
+ * glyph so it keeps its focus ring and its place in the tab order, and it is held well clear
+ * of the left cushion: it sits over the rail, not over the table, so a thumb reaching for it
+ * cannot aim a shot by accident on the way.
+ */
+.camera-toggle {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: rgba(22, 27, 34, 0.86);
+  color: var(--muted);
+  cursor: pointer;
+  z-index: 4;
+  backdrop-filter: blur(3px);
+}
+
+.camera-toggle:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+/** Pressed means overhead, and the mark turns to what it would switch back to. */
+.camera-toggle[aria-pressed='true'] {
+  color: var(--turn);
+  border-color: var(--turn);
+}
+
+.camera-toggle:focus-visible {
+  outline: 2px solid var(--turn);
+  outline-offset: 2px;
+}
+
 .net-overlay {
   position: absolute;
   inset: 0;

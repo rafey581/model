@@ -48,6 +48,13 @@ let mySeat: number | undefined
 let frame: FrameSnapshotData | null = null
 let cueController: CueController | null = null
 let scene3d: Scene3D | null = null
+/**
+ * Which of the two views the player has asked for. The camera follows this rather than
+ * being told where to go, so the choice survives every shot: watching a shot put the camera
+ * on the balls, and when the balls stop it comes back to whatever was asked for here.
+ */
+let cameraMode: 'AIM' | 'TOP_DOWN' = 'AIM'
+let cameraToggleEl: HTMLButtonElement | null = null
 let myTurn = false
 /** Non-null while a streamed shot is replaying; drives what the table shows. */
 let shotPlayer: ShotPlayer | null = null
@@ -175,6 +182,68 @@ function header(): HTMLElement {
   }
   head.appendChild(right)
   return head
+}
+
+/**
+ * The two-view toggle.
+ *
+ * The glyph shows the view the button switches *to*, which is the more useful of the two
+ * readings while you are looking at the other one. The mark is a lens ring with a diagram
+ * inside it: from behind the cue ball, a ball on a horizon with the cue above it; from
+ * overhead, the table's own rectangle with its centre line.
+ */
+function cameraSvg(mode: 'AIM' | 'TOP_DOWN'): string {
+  const ink = 'currentColor'
+  const diagram =
+    mode === 'AIM'
+      ? '<circle cx="10" cy="11.9" r="2.1" fill="' +
+        ink +
+        '"/>' +
+        '<path d="M3.4 15.5h13.2" stroke="' +
+        ink +
+        '" stroke-width="1.3" stroke-linecap="round"/>' +
+        '<path d="M10 4.1v3.9" stroke="' +
+        ink +
+        '" stroke-width="1.3" stroke-linecap="round"/>'
+      : '<rect x="4.1" y="6.2" width="11.8" height="7.6" rx="1.5" fill="none" stroke="' +
+        ink +
+        '" stroke-width="1.3"/>' +
+        '<path d="M10 6.2v7.6" stroke="' +
+        ink +
+        '" stroke-width="1.3"/>' +
+        '<circle cx="7" cy="9.4" r="1.4" fill="' +
+        ink +
+        '"/>'
+  return (
+    '<svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">' +
+    '<circle cx="10" cy="10" r="8.4" fill="none" stroke="' +
+    ink +
+    '" stroke-width="1.3"/>' +
+    diagram +
+    '</svg>'
+  )
+}
+
+function buildCameraToggle(): HTMLButtonElement {
+  const btn = el('button', 'camera-toggle') as HTMLButtonElement
+  btn.type = 'button'
+  btn.onclick = () => {
+    setCameraMode(cameraMode === 'AIM' ? 'TOP_DOWN' : 'AIM')
+  }
+  setCameraMode(cameraMode)
+  cameraToggleEl = btn
+  return btn
+}
+
+function setCameraMode(mode: 'AIM' | 'TOP_DOWN'): void {
+  cameraMode = mode
+  const btn = cameraToggleEl
+  if (!btn) return
+  const switchingTo = mode === 'AIM' ? 'behind the cue ball' : 'overhead'
+  btn.innerHTML = cameraSvg(mode)
+  btn.title = `Camera: ${mode === 'AIM' ? 'behind the cue ball' : 'overhead'} — switch to ${switchingTo}`
+  btn.setAttribute('aria-label', btn.title)
+  btn.setAttribute('aria-pressed', mode === 'TOP_DOWN' ? 'true' : 'false')
 }
 
 function bellSvg(): string {
@@ -1350,6 +1419,9 @@ function renderGame(): void {
   tableFrame.appendChild(overlay)
   netOverlayEl = overlay
   updateNetOverlay()
+  // The view toggle sits on the frame rather than in the page flow, top left, clear of the
+  // power rail on the right and the score above.
+  tableFrame.appendChild(buildCameraToggle())
   const oppHolder = el('div')
   oppHolder.id = 'opp-holder'
   tableFrame.appendChild(oppHolder)
@@ -1803,9 +1875,17 @@ function loop(): void {
         canAim
       }
       if (scene3d) {
+        // The view the player picked, and whether the balls are moving. A shot overrides
+        // the view for as long as it lasts, then hands it back.
+        scene3d.setCameraMode(cameraMode)
+        scene3d.setTracking(shotPlayer !== null)
+        if (cameraToggleEl) cameraToggleEl.hidden = false
         scene3d.update(shown, renderOptions)
         scene3d.render()
       } else {
+        // The fallback renderer draws one fixed view, so there is nothing to switch
+        // between and the button would be offering a choice that does not exist.
+        if (cameraToggleEl) cameraToggleEl.hidden = true
         drawTable(canvas, shown, renderOptions)
       }
     }
