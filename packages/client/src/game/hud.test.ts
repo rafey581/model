@@ -239,6 +239,19 @@ describe('top bar: prize and frames', () => {
     expect(state.frames).toBe('1 : 0')
   })
 
+  it('reads the frames score from this player outwards, like the readout above it', () => {
+    // The frames score is seat-keyed and it sits directly under the score readout, so it
+    // has to run in the same order or the two lines disagree about who is who.
+    const seat0 = deriveHudState(input({ mySeat: 0, framesWon: [1, 2] }))
+    const seat1 = deriveHudState(input({ mySeat: 1, framesWon: [1, 2] }))
+    expect(seat0.frames).toBe('1 : 2')
+    expect(seat1.frames).toBe('2 : 1')
+  })
+
+  it('leaves the frames score in seat order before the seat is known', () => {
+    expect(deriveHudState(input({ mySeat: undefined, framesWon: [1, 2] })).frames).toBe('1 : 2')
+  })
+
   it('shows neither in practice against the robot', () => {
     const state = deriveHudState(input({ practice: true, framesWon: [2, 1] }))
     expect(state.prize).toBeNull()
@@ -273,6 +286,43 @@ describe('top bar: prize and frames', () => {
     const state = deriveHudState(input({ snapshot: null }))
     expect(state.you.points).toBeNull()
     expect(state.opponent.points).toBeNull()
+  })
+})
+
+describe('the score readout', () => {
+  it('reads both numbers off the frame, following it as it moves', () => {
+    // The readout adds nothing of its own: every number on it is the frame's own score,
+    // so a change of snapshot is all it takes for the scoreline to change.
+    const before = deriveHudState(input({ snapshot: fullTable({ scores: { player0: 34, player1: 12 } }) }))
+    expect([before.you.points, before.opponent.points]).toEqual([34, 12])
+
+    const after = deriveHudState(input({ snapshot: fullTable({ scores: { player0: 41, player1: 12 } }) }))
+    expect([after.you.points, after.opponent.points]).toEqual([41, 12])
+  })
+
+  it('puts each score beside the player it belongs to, whichever seat is yours', () => {
+    // The readout is laid out avatar-points-sep-points-avatar, so a swap of the two
+    // points is exactly the slip that would be invisible on the page. Both seats are
+    // checked so neither ordering can pass.
+    for (const seat of [0, 1]) {
+      const state = deriveHudState(input({ mySeat: seat, snapshot: fullTable({ scores: { player0: 34, player1: 12 } }) }))
+      expect([state.you.points, state.opponent.points]).toEqual(seat === 0 ? [34, 12] : [12, 34])
+    }
+  })
+
+  it('does not carry a number across from the previous snapshot', () => {
+    // A potted ball's points belong to whoever is at the table, and a foul's penalty to
+    // the other one. Both directions are exercised so a score cannot be read off the
+    // wrong side of the readout.
+    const potted = deriveHudState(
+      input({ mySeat: 1, snapshot: fullTable({ scores: { player0: 0, player1: 7 }, breakScore: 7 }) })
+    )
+    expect([potted.you.points, potted.opponent.points]).toEqual([7, 0])
+
+    const penalised = deriveHudState(
+      input({ mySeat: 1, snapshot: fullTable({ scores: { player0: 4, player1: 7 }, breakScore: 0 }) })
+    )
+    expect([penalised.you.points, penalised.opponent.points]).toEqual([7, 4])
   })
 })
 

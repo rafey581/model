@@ -170,12 +170,24 @@ function colourOn(ballOn: string | undefined): number | null {
 export function deriveHudState(input: HudInput): HudState {
   const snapshot = input.snapshot
   const seat = input.mySeat
-  const points = (index: number): number | null =>
-    seat === undefined || !snapshot ? null : index === 0 ? snapshot.scores.player0 : snapshot.scores.player1
+  /*
+   * Every score in a snapshot is keyed by seat, the same way `turnIndex` is: seat 0's
+   * points are `scores.player0`, whoever happens to be sitting there. So the scores are
+   * read by seat and the sides are decided by where this client is sitting, rather than
+   * the other way round — otherwise a client in seat 1 is shown the other player's score
+   * under their own name, and the score readout exists to make exactly that impossible.
+   */
+  const pointsForSeat = (s: number): number | null => (s === 0 ? snapshot?.scores.player0 : snapshot?.scores.player1) ?? null
+  const points = (side: 'you' | 'opponent'): number | null =>
+    seat === undefined || !snapshot ? null : pointsForSeat(side === 'you' ? seat : 1 - seat)
   const turn: 'you' | 'opponent' | null =
     snapshot && seat !== undefined ? (snapshot.turnIndex === seat ? 'you' : 'opponent') : null
 
   const showResult = SHOW_MATCH_RESULT_IN_HUD && input.showMatchResult && !input.practice
+  // The frames score is seat-keyed for the same reason, and it sits directly under the
+  // readout, so it reads left to right in the same order: this player, then the other.
+  const framesWon =
+    seat === undefined ? input.framesWon : seat === 0 ? input.framesWon : [input.framesWon[1], input.framesWon[0]]
 
   const pottedRed = new Set<number>()
   for (const ball of snapshot?.balls ?? []) {
@@ -204,18 +216,18 @@ export function deriveHudState(input: HudInput): HudState {
       name: input.you.name,
       isBot: input.you.isBot,
       avatarUrl: input.you.avatarUrl ?? null,
-      points: showResult ? points(0) : null,
+      points: showResult ? points('you') : null,
       active: turn === 'you'
     },
     opponent: {
       name: input.opponent.name,
       isBot: input.opponent.isBot,
       avatarUrl: input.opponent.avatarUrl ?? null,
-      points: showResult ? points(1) : null,
+      points: showResult ? points('opponent') : null,
       active: turn === 'opponent'
     },
     prize: showResult && input.prizeCredits > 0 ? formatCredits(input.prizeCredits) : null,
-    frames: showResult ? `${input.framesWon[0]} : ${input.framesWon[1]}` : null,
+    frames: showResult ? `${framesWon[0]} : ${framesWon[1]}` : null,
     frameLabel: input.practice
       ? `Practice · frame ${input.frameIndex}`
       : `Frame ${input.frameIndex} · ${input.format}`,
@@ -417,9 +429,27 @@ export function createHud(): Hud {
   const oppNames = sideNodes('hud-opp', 'hud-points-opp')
 
   const left = el('div', 'hud-side hud-left')
-  left.append(youAvatar.frame, youNames.name, youNames.points)
+  left.append(youNames.name)
   const right = el('div', 'hud-side hud-right')
-  right.append(oppNames.name, oppNames.points, oppAvatar.frame)
+  right.append(oppNames.name)
+
+  /**
+   * The score readout, in the centre of the bar.
+   *
+   * Avatar, that player's frame points, a rule, the other player's frame points, their
+   * avatar — the shape of a scoreline rather than a pair of numbers in opposite corners.
+   * The avatars sit inside it rather than at the ends of the bar because the points they
+   * belong to are what is being read, and a number next to a face is a scoreline. The
+   * turn highlight rides on the avatar frame, so whoever is at the table is still found
+   * by the same class on the same element, and the shot clock still hangs inside it.
+   */
+  const score = el('div', 'hud-score')
+  score.id = 'hud-score'
+  const sep = el('span', 'hud-score-sep')
+  // Decoration: the two numbers are already separated by being on either side of it,
+  // so a screen reader is not told about a rule that carries no meaning.
+  sep.setAttribute('aria-hidden', 'true')
+  score.append(youAvatar.frame, youNames.points, sep, oppNames.points, oppAvatar.frame)
 
   const centre = el('div', 'hud-centre')
   const prize = el('div', 'hud-prize')
@@ -431,7 +461,7 @@ export function createHud(): Hud {
   const inHand = el('div', 'hud-inhand')
   inHand.id = 'hud-inhand'
   inHand.hidden = true
-  centre.append(prize, frames, frameLabel, inHand)
+  centre.append(score, prize, frames, frameLabel, inHand)
 
   top.append(left, centre, right)
 

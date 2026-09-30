@@ -813,6 +813,38 @@ button.small {
   min-width: 0;
 }
 
+/*
+ * The score readout: the centre of the bar, and the largest thing on it.
+ *
+ * The frame's own points either side of a rule, with the players' avatars on the ends.
+ * It is the number a player comes back to between shots, so it is set large and bold
+ * while the rest of the bar stays quiet. The points keep the ids they have always had,
+ * because the two elements were built for the ends of the bar and only moved.
+ */
+.hud-score {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hud-score .hud-points {
+  font-size: clamp(19px, 2.8vh, 25px);
+  font-weight: 800;
+  line-height: 1;
+  color: var(--text);
+  min-width: 1.2ch;
+  text-align: center;
+}
+
+/* The rule between the two scores: tall enough to separate the numbers, faint enough
+   that the numbers are the thing being read. */
+.hud-score-sep {
+  width: 1px;
+  align-self: stretch;
+  min-height: 18px;
+  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.28), transparent);
+}
+
 .hud-points {
   font-size: 12px;
   color: var(--muted);
@@ -870,13 +902,17 @@ button.small {
 /**
  * The balls strip: fifteen reds, the ball on, and the six colours in value order.
  *
+ * This is now the secondary row — the frame's score is the bar above it — so it is drawn
+ * a step quieter: smaller dots, tighter padding, and muted text. Nothing here is less
+ * available for it, only less loud.
+ *
  * The three groups are centred as one cluster, and that is load-bearing rather than
- * decorative. The strip spans the full width of the HUD, and the top bar above it puts
- * the opponent's avatar hard against the right edge. With the groups spread edge to
- * edge, the six colours sat directly under that avatar and read as the other player's
- * balls, which is precisely the 8-ball mistake the strip exists to avoid: in snooker
- * every ball on the table belongs to both players. Centring leaves equal empty space
- * on both sides, so the colours are as far from the right-hand avatar as from the left.
+ * decorative. The strip spans the full width of the HUD, so with the groups spread edge
+ * to edge the six colours would sit under whichever player the bar puts at that end and
+ * read as that player's balls — which is precisely the 8-ball mistake the strip exists to
+ * avoid: in snooker every ball on the table belongs to both players. Centring leaves
+ * equal empty space on both sides, so the colours are as far from one player's end as
+ * from the other's.
  */
 .hud-balls {
   display: flex;
@@ -886,9 +922,10 @@ button.small {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 5px 10px;
-  font-size: 11px;
+  padding: 4px 10px;
+  font-size: 10px;
   color: var(--muted);
+  opacity: 0.86;
   min-width: 0;
 }
 
