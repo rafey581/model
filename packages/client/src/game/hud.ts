@@ -23,6 +23,21 @@ import { POWER_FINE_STEP } from './power.js'
 export const SHOW_MATCH_RESULT_IN_HUD = true
 
 /**
+ * Whether the points in the frame in progress are on the bar.
+ *
+ * Deliberately a second switch rather than a corollary of the one above. The prize is
+ * what the match is worth and the frames score is its result; a practice session has
+ * neither, and showing either there would be a lie about what the session is. The points
+ * in the frame are a third thing: the game being played. Hiding them from the one mode
+ * where somebody is most likely to be working out how a frame scores is hiding the
+ * number they came to watch.
+ *
+ * So the two decisions are made separately. This constant is the one to flip for a mode
+ * that wants a scoreless bar.
+ */
+export const SHOW_FRAME_SCORES_IN_HUD = true
+
+/**
  * The class on the avatar frame of whoever is at the table.
  *
  * Phase H2's turn timer draws into this same frame, so it is exported as a named
@@ -184,6 +199,14 @@ export function deriveHudState(input: HudInput): HudState {
     snapshot && seat !== undefined ? (snapshot.turnIndex === seat ? 'you' : 'opponent') : null
 
   const showResult = SHOW_MATCH_RESULT_IN_HUD && input.showMatchResult && !input.practice
+  /*
+   * The points are not gated on the money. They ride the second switch and nothing else,
+   * so what a player can see in practice is what they can see in a staked match: the
+   * frame's own score. Whether there is a snapshot to read and a seat to read it against
+   * is already handled by `points`, which is what keeps the bar from showing a blank
+   * before the table has said anything.
+   */
+  const showScores = SHOW_FRAME_SCORES_IN_HUD
   // The frames score is seat-keyed for the same reason, and it sits directly under the
   // readout, so it reads left to right in the same order: this player, then the other.
   const framesWon =
@@ -216,14 +239,14 @@ export function deriveHudState(input: HudInput): HudState {
       name: input.you.name,
       isBot: input.you.isBot,
       avatarUrl: input.you.avatarUrl ?? null,
-      points: showResult ? points('you') : null,
+      points: showScores ? points('you') : null,
       active: turn === 'you'
     },
     opponent: {
       name: input.opponent.name,
       isBot: input.opponent.isBot,
       avatarUrl: input.opponent.avatarUrl ?? null,
-      points: showResult ? points('opponent') : null,
+      points: showScores ? points('opponent') : null,
       active: turn === 'opponent'
     },
     prize: showResult && input.prizeCredits > 0 ? formatCredits(input.prizeCredits) : null,

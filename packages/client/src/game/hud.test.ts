@@ -275,15 +275,37 @@ describe('top bar: prize and frames', () => {
     expect(state.opponent.points).toBe(12)
   })
 
-  it('withholds the frame points in practice', () => {
+  it('shows the frame points in practice too, even with no prize and no frames score', () => {
+    // Practice has no money and no result to report, but it is still a frame of snooker,
+    // and the points are the frame being played. A player learning the game should not be
+    // the one player who cannot see the score.
     const snapshot = fullTable({ scores: { player0: 34, player1: 12 } })
-    const state = deriveHudState(input({ snapshot, practice: true }))
-    expect(state.you.points).toBeNull()
-    expect(state.opponent.points).toBeNull()
+    const state = deriveHudState(input({ snapshot, practice: true, framesWon: [0, 0] }))
+    expect(state.prize).toBeNull()
+    expect(state.frames).toBeNull()
+    expect(state.you.points).toBe(34)
+    expect(state.opponent.points).toBe(12)
+  })
+
+  it('shows the frame points when the caller says the match is not a staked one', () => {
+    // The stake decides what the match is worth and nothing about what it is playing.
+    const snapshot = fullTable({ scores: { player0: 34, player1: 12 } })
+    const state = deriveHudState(input({ snapshot, showMatchResult: false }))
+    expect(state.prize).toBeNull()
+    expect(state.frames).toBeNull()
+    expect(state.you.points).toBe(34)
+    expect(state.opponent.points).toBe(12)
   })
 
   it('withholds the frame points until a snapshot has arrived', () => {
     const state = deriveHudState(input({ snapshot: null }))
+    expect(state.you.points).toBeNull()
+    expect(state.opponent.points).toBeNull()
+  })
+
+  it('withholds the frame points until the server has said which seat this is', () => {
+    // A score read without knowing the seat would be read off the wrong player.
+    const state = deriveHudState(input({ mySeat: undefined, snapshot: fullTable({ scores: { player0: 34, player1: 12 } }) }))
     expect(state.you.points).toBeNull()
     expect(state.opponent.points).toBeNull()
   })
