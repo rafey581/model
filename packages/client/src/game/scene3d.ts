@@ -466,6 +466,12 @@ export class Scene3D {
   private latch: HeadingLatch = initialHeadingLatch()
   /** Ring + baulk line segment marking the D during break-off placement. Built once, shown on demand. */
   private dZoneRing!: THREE.Mesh
+  /**
+   * The felt's texture, kept for the artifact guards in `selfCheck`: the banding
+   * regression this scene once had was a texture configured without mipmaps, and
+   * a one-line check at build time is cheaper than ever rediscovering it by eye.
+   */
+  private feltTex: THREE.CanvasTexture | null = null
   /** Translucent disc shading the legal D area during break-off placement. */
   private dZoneFill!: THREE.Mesh
   /** Ghost cue ball the player moves while placing; hidden when not placing. */
@@ -529,6 +535,36 @@ export class Scene3D {
     // The one and only shadow bake, over the finished static set: cushions, pockets,
     // floor, lamp shade. Every later frame reuses this map at zero shadow cost.
     this.renderer.shadowMap.needsUpdate = true
+
+    this.selfCheck()
+  }
+
+  /**
+   * Build-time guards on the three mechanisms behind the old top-down banding.
+   *
+   * Each invariant here is the fix for one diagnosed cause of stripe/banding
+   * artifacts on the cloth: a shadow frustum too deep for the map to resolve
+   * (the horizontal bands near the cushions), a felt texture sampled without
+   * mipmaps (moire from overhead), and markings as coplanar geometry (z-fighting
+   * against the bed). The markings are baked into the felt texture, so there are
+   * no marking meshes to check — their absence is the invariant. A violation
+   * means somebody reintroduced a bug that took real diagnosis to find, so it is
+   * announced rather than suffered silently.
+   */
+  private selfCheck(): void {
+    const problems: string[] = []
+    const cam = this.lamp.shadow.camera
+    if (cam.far - cam.near > 2000) problems.push('shadow frustum too deep for stable cloth shading')
+    const tex = this.feltTex
+    if (tex) {
+      if (!tex.generateMipmaps) problems.push('felt texture is missing mipmaps')
+      if (tex.minFilter !== THREE.LinearMipmapLinearFilter) problems.push('felt texture is not trilinearly filtered')
+      if (tex.anisotropy <= 0) problems.push('felt texture has no anisotropic filtering')
+    }
+    if (problems.length) {
+      // Console, not a throw: a cosmetic guard must never take the table down.
+      console.warn('[scene3d] rendering artifact guards failed:', problems.join('; '))
+    }
   }
 
   private buildLighting(): void {
@@ -567,17 +603,22 @@ export class Scene3D {
     // The arena has to read as a lit venue, not a void: an ambient base over the
     // whole scene, the warm hemisphere for the room, and two balanced directionals
     // so walls, floor and hoardings all carry colour from more than one side.
-    const ambient = new THREE.AmbientLight(0xdfe8ff, 0.55)
+    // Balanced for "evenly lit, no pitch-black corners, no blown-out patches":
+    // the ambient lifts the shadows off pure black, the hemisphere keeps the room
+    // warm from above and dark at the floor, and the two directionals put colour
+    // on every wall from more than one side. Intensities sit well under the lamp's
+    // contribution so the cloth keeps a soft gradient rather than a hot centre.
+    const ambient = new THREE.AmbientLight(0xdfe8ff, 0.5)
     this.scene.add(ambient)
 
-    const hemi = new THREE.HemisphereLight(0xffe2b8, 0x2e2419, 0.55)
+    const hemi = new THREE.HemisphereLight(0xffe2b8, 0x2e2419, 0.5)
     this.scene.add(hemi)
 
-    const fill = new THREE.DirectionalLight(0x9fc0e8, 0.5)
+    const fill = new THREE.DirectionalLight(0x9fc0e8, 0.45)
     fill.position.set(2200, 1200, -1100)
     this.scene.add(fill)
 
-    const warm = new THREE.DirectionalLight(0xffd9a8, 0.35)
+    const warm = new THREE.DirectionalLight(0xffd9a8, 0.3)
     warm.position.set(-2200, 1400, 1600)
     this.scene.add(warm)
   }
@@ -591,7 +632,7 @@ export class Scene3D {
       // baked markings; mipmapping on that texture is what keeps this surface calm
       // from the low cue angle.
       new THREE.MeshStandardMaterial({
-        map: feltTexture(),
+        map: (this.feltTex = feltTexture()),
         color: 0xffffff,
         roughness: 0.88,
         metalness: 0.02
@@ -646,9 +687,12 @@ export class Scene3D {
       }
     }
 
-    // Cushions match the bright baize so cloth and rubber read as one surface.
-    const cushionMat = new THREE.MeshStandardMaterial({ color: 0x17943a, roughness: 0.6, side: THREE.DoubleSide })
-    const noseMat = new THREE.MeshStandardMaterial({ color: 0x1fae4a, roughness: 0.5, side: THREE.DoubleSide })
+    // Cushions read as the same family of baize but a step darker and slightly
+    // glossier than the bed: real cushion rubber is cloth-covered but catches the
+    // light along its nose, and the tone step is what keeps the raised edge from
+    // melting into the playing surface.
+    const cushionMat = new THREE.MeshStandardMaterial({ color: 0x157a33, roughness: 0.52, side: THREE.DoubleSide })
+    const noseMat = new THREE.MeshStandardMaterial({ color: 0x1d9e43, roughness: 0.45, side: THREE.DoubleSide })
     const gapHalf = POCKET_RADIUS_CORNER
     const midGapHalf = POCKET_RADIUS_MIDDLE
     const longSegments: Array<[number, number]> = [
