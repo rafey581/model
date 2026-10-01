@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import type { Prisma } from '@prisma/client'
 import { prisma } from '../db/index.js'
-import { requireRole } from '../auth/guards.js'
+import { requireAdminSession } from './auth.js'
 import { runInTransaction, ledger } from '../wallet/service.js'
 import { invalidateSettingsCache } from '../settings/index.js'
 import { listFraudFlags, checkLedgerInvariance } from '../fraud/index.js'
@@ -25,9 +25,18 @@ const settingsPatchSchema = z.object({
 })
 
 export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
-  const adminGuard = requireRole(app, ['ADMIN', 'SUPERADMIN'])
+  /**
+   * Every admin route is `public` at the *hook* level and gated by this guard.
+   *
+   * Marking them public does not mean unauthenticated - it means the global
+   * player-token preHandler steps aside so that `requireAdminSession` is the only
+   * thing deciding access. That matters because the two credentials are different:
+   * a player JWT must not be able to present itself to the admin API, and an admin
+   * session must be revocable independently of any token's expiry.
+   */
+  const adminGuard = requireAdminSession
 
-  app.get('/api/admin/stats', { preHandler: adminGuard }, async (_request, reply) => {
+  app.get('/api/admin/stats', { config: { public: true }, preHandler: adminGuard }, async (_request, reply) => {
     const [users, matches, completed, deposits, withdrawals] = await Promise.all([
       prisma.user.count(),
       prisma.match.count({ where: { status: { in: ['MATCH_STARTED', 'MATCH_IN_PROGRESS'] } } }),
@@ -52,7 +61,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     })
   })
 
-  app.get('/api/admin/users', { preHandler: adminGuard }, async (_request, reply) => {
+  app.get('/api/admin/users', { config: { public: true }, preHandler: adminGuard }, async (_request, reply) => {
     const users = await prisma.user.findMany({
       select: {
         id: true,
@@ -69,7 +78,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ ok: true, data: users })
   })
 
-  app.patch('/api/admin/users', { preHandler: adminGuard }, async (request, reply) => {
+  app.patch('/api/admin/users', { config: { public: true }, preHandler: adminGuard }, async (request, reply) => {
     const parsed = userPatchSchema.safeParse(request.body)
     if (!parsed.success) return reply.code(400).send({ ok: false, error: 'invalid input' })
     const user = await prisma.user.update({
@@ -91,7 +100,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ ok: true, data: { id: user.id, status: user.status, role: user.role } })
   })
 
-  app.post('/api/admin/wallet/adjust', { preHandler: adminGuard }, async (request, reply) => {
+  app.post('/api/admin/wallet/adjust', { config: { public: true }, preHandler: adminGuard }, async (request, reply) => {
     const parsed = adjustSchema.safeParse(request.body)
     if (!parsed.success) return reply.code(400).send({ ok: false, error: 'invalid input' })
     const result = await runInTransaction(async (tx) => {
@@ -115,7 +124,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ ok: true, data: result })
   })
 
-  app.get('/api/admin/matches', { preHandler: adminGuard }, async (_request, reply) => {
+  app.get('/api/admin/matches', { config: { public: true }, preHandler: adminGuard }, async (_request, reply) => {
     const matches = await prisma.match.findMany({
       include: { players: { include: { user: { select: { id: true, username: true } } } } },
       orderBy: { createdAt: 'desc' },
@@ -124,7 +133,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ ok: true, data: matches })
   })
 
-  app.get('/api/admin/matches/:id/events', { preHandler: adminGuard }, async (request, reply) => {
+  app.get('/api/admin/matches/:id/events', { config: { public: true }, preHandler: adminGuard }, async (request, reply) => {
     const events = await prisma.gameEvent.findMany({
       where: { matchId: (request.params as { id: string }).id },
       orderBy: { seq: 'asc' },
@@ -133,12 +142,12 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ ok: true, data: events })
   })
 
-  app.get('/api/admin/settings', { preHandler: adminGuard }, async (_request, reply) => {
+  app.get('/api/admin/settings', { config: { public: true }, preHandler: adminGuard }, async (_request, reply) => {
     const settings = await prisma.appSetting.findMany()
     return reply.send({ ok: true, data: Object.fromEntries(settings.map((s) => [s.key, s.value])) })
   })
 
-  app.patch('/api/admin/settings', { preHandler: adminGuard }, async (request, reply) => {
+  app.patch('/api/admin/settings', { config: { public: true }, preHandler: adminGuard }, async (request, reply) => {
     const parsed = settingsPatchSchema.safeParse(request.body)
     if (!parsed.success) return reply.code(400).send({ ok: false, error: 'invalid input' })
     await prisma.appSetting.upsert({
@@ -159,17 +168,17 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ ok: true })
   })
 
-  app.get('/api/admin/fraud', { preHandler: adminGuard }, async (_request, reply) => {
+  app.get('/api/admin/fraud', { config: { public: true }, preHandler: adminGuard }, async (_request, reply) => {
     const flags = await listFraudFlags()
     return reply.send({ ok: true, data: flags })
   })
 
-  app.get('/api/admin/ledger/invariance', { preHandler: adminGuard }, async (_request, reply) => {
+  app.get('/api/admin/ledger/invariance', { config: { public: true }, preHandler: adminGuard }, async (_request, reply) => {
     const result = await checkLedgerInvariance()
     return reply.send({ ok: true, data: result })
   })
 
-  app.get('/api/admin/actions', { preHandler: adminGuard }, async (_request, reply) => {
+  app.get('/api/admin/actions', { config: { public: true }, preHandler: adminGuard }, async (_request, reply) => {
     const [actions, admins] = await Promise.all([
       prisma.adminAction.findMany({ orderBy: { createdAt: 'desc' }, take: 200 }),
       prisma.user.findMany({ select: { id: true, username: true } })

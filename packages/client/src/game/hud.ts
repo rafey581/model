@@ -1,4 +1,4 @@
-import { BALL_IDS, COLOR_NAMES, COLOR_ORDER, COLOR_VALUES, TOTAL_REDS } from '@snooker/shared'
+﻿import { BALL_IDS, COLOR_NAMES, COLOR_ORDER, COLOR_VALUES, TOTAL_REDS } from '@snooker/shared'
 import { ballColorHex } from './palette.js'
 import {
   clampPowerLoose,
@@ -198,7 +198,7 @@ export function deriveHudState(input: HudInput): HudState {
    * Every score in a snapshot is keyed by seat, the same way `turnIndex` is: seat 0's
    * points are `scores.player0`, whoever happens to be sitting there. So the scores are
    * read by seat and the sides are decided by where this client is sitting, rather than
-   * the other way round — otherwise a client in seat 1 is shown the other player's score
+   * the other way round ΓÇö otherwise a client in seat 1 is shown the other player's score
    * under their own name, and the score readout exists to make exactly that impossible.
    */
   const pointsForSeat = (s: number): number | null => (s === 0 ? snapshot?.scores.player0 : snapshot?.scores.player1) ?? null
@@ -261,8 +261,8 @@ export function deriveHudState(input: HudInput): HudState {
     prize: showResult && input.prizeCredits > 0 ? formatCredits(input.prizeCredits) : null,
     frames: showResult ? `${framesWon[0]} : ${framesWon[1]}` : null,
     frameLabel: input.practice
-      ? `Practice · frame ${input.frameIndex}`
-      : `Frame ${input.frameIndex} · ${input.format}`,
+      ? `Practice ┬╖ frame ${input.frameIndex}`
+      : `Frame ${input.frameIndex} ┬╖ ${input.format}`,
     breakLabel: snapshot && snapshot.breakScore > 0 ? `Break ${snapshot.breakScore}` : null,
     ballOnLabel: describeBallOn(snapshot?.ballOn),
     ballOnValue: onColour !== null ? (COLOR_VALUES[onColour] ?? null) : (snapshot?.ballOn ?? 'RED') === 'RED' ? 1 : null,
@@ -297,6 +297,26 @@ function setText(node: HTMLElement, value: string): void {
 
 function setFlag(node: HTMLElement, className: string, on: boolean): void {
   if (node.classList.contains(className) !== on) node.classList.toggle(className, on)
+}
+
+/**
+ * Writes a score and flashes it when the number actually moved.
+ *
+ * Built on setText so an unchanged score costs nothing, and so the flash is driven
+ * by the change rather than by the update ΓÇö a score that is re-sent every frame
+ * because the opponent is thinking must not strobe once a second. The class has to
+ * be removed and re-added to restart the keyframe, hence the reflow-forcing read.
+ */
+function setScore(node: HTMLElement, value: string): void {
+  if (node.textContent === value) return
+  node.textContent = value
+  // Clearing the score is not a scoring event ΓÇö the node is about to be hidden
+  // anyway, and flashing an empty box reads as a glitch rather than an achievement.
+  if (value === '') return
+  node.classList.remove('tick-up')
+  // Reading layout is what makes the browser treat the re-add as a fresh animation.
+  void node.offsetWidth
+  node.classList.add('tick-up')
 }
 
 /** Hides an element without taking it out of the document, so it can come back. */
@@ -457,7 +477,7 @@ function sideNodes(nameId: string, pointsId: string): { name: HTMLElement; point
  *
  * It is HTML laid over the canvas rather than anything drawn into it, which is what
  * makes the 3D scene and the 2D fallback show the same match: neither renderer knows
- * this component exists. It is also why it must not be rebuilt on a frame — the
+ * this component exists. It is also why it must not be rebuilt on a frame ΓÇö the
  * nodes are created once here and every later write is diffed against what is
  * already there.
  */
@@ -482,7 +502,7 @@ export function createHud(): Hud {
    * The score readout, in the centre of the bar.
    *
    * Avatar, that player's frame points, a rule, the other player's frame points, their
-   * avatar — the shape of a scoreline rather than a pair of numbers in opposite corners.
+   * avatar ΓÇö the shape of a scoreline rather than a pair of numbers in opposite corners.
    * The avatars sit inside it rather than at the ends of the bar because the points they
    * belong to are what is being read, and a number next to a face is a scoreline. The
    * turn highlight rides on the avatar frame, so whoever is at the table is still found
@@ -552,7 +572,7 @@ export function createHud(): Hud {
     const chip = el('span', 'hud-ball')
     chip.dataset.ball = String(id)
     chip.style.setProperty('--ball', ballColorHex(id))
-    chip.title = `${COLOR_NAMES[id] ?? 'colour'} — ${COLOR_VALUES[id] ?? 0}`
+    chip.title = `${COLOR_NAMES[id] ?? 'colour'} ΓÇö ${COLOR_VALUES[id] ?? 0}`
     colours.appendChild(chip)
   }
 
@@ -582,7 +602,7 @@ export function createHud(): Hud {
    * The visible rail is aria-hidden, so the semantics live on this element: it takes
    * focus, speaks the range, and answers the keyboard. It precedes the track in the
    * DOM so the stylesheet can draw the focus ring on the track behind it, and it
-   * ignores the pointer — the track below is the hit target — so a click and a key
+   * ignores the pointer ΓÇö the track below is the hit target ΓÇö so a click and a key
    * press are two ways into the same value rather than two controls.
    */
   const slider = el('div', 'power-slider')
@@ -632,8 +652,8 @@ export function createHud(): Hud {
   /**
    * Registers where the slider hands its value.
    *
-   * The HUD cannot import the cue controller — the dependency points the other way,
-   * controller → HUD for display — so the caller connects the two here at mount.
+   * The HUD cannot import the cue controller ΓÇö the dependency points the other way,
+   * controller ΓåÆ HUD for display ΓÇö so the caller connects the two here at mount.
    */
   function setPowerSink(sink: (power: number) => void): void {
     aimPowerSetter = sink
@@ -664,7 +684,7 @@ export function createHud(): Hud {
     stopSliderReset()
     // Capture is locked at pointerdown on the track itself, so every later move and
     // the release arrive here even when the cursor swings off the rail across the
-    // table — the handle follows the pointer one-to-one with no jumping. The drag
+    // table ΓÇö the handle follows the pointer one-to-one with no jumping. The drag
     // also locks the cue controller's power writes for the gesture (via the caller),
     // so nothing can decay the value underneath the finger.
     railTrack.setPointerCapture(event.pointerId)
@@ -693,7 +713,7 @@ export function createHud(): Hud {
   railTrack.addEventListener('pointercancel', onRailPointerUp)
   // Safety net for a lost or failed capture: with capture working, the track handler
   // has already ended the drag and this returns early; without it, a release outside
-  // the track would never be seen here and the drag — and with it the power lock —
+  // the track would never be seen here and the drag ΓÇö and with it the power lock ΓÇö
   // would stick on until the next turn.
   window.addEventListener('pointerup', endRailDrag)
   window.addEventListener('pointercancel', endRailDrag)
@@ -702,13 +722,13 @@ export function createHud(): Hud {
    * The spin dial: a cue ball face-on in the bottom-left of the table frame, the
    * power rail's opposite side. One circle, one crosshair, one dot; the dot's
    * distance from centre is the strike offset, its direction the spin's blend of
-   * follow/draw and side. It is a view of — and a second way into — the same spin
+   * follow/draw and side. It is a view of ΓÇö and a second way into ΓÇö the same spin
    * value the arrow keys already set, never a second value.
    */
   const spinDial = el('div', 'spin-dial')
   spinDial.id = 'spin-dial'
   spinDial.setAttribute('role', 'application')
-  spinDial.setAttribute('aria-label', 'Spin control — drag the dot off centre; up topspin, down backspin, left and right side')
+  spinDial.setAttribute('aria-label', 'Spin control ΓÇö drag the dot off centre; up topspin, down backspin, left and right side')
   spinDial.tabIndex = 0
 
   const dialBall = el('div', 'spin-dial-ball')
@@ -860,8 +880,8 @@ export function createHud(): Hud {
       updateAvatar(oppAvatar, state.opponent)
       setText(youNames.name, state.you.name)
       setText(oppNames.name, state.opponent.name)
-      setText(youNames.points, state.you.points === null ? '' : String(state.you.points))
-      setText(oppNames.points, state.opponent.points === null ? '' : String(state.opponent.points))
+      setScore(youNames.points, state.you.points === null ? '' : String(state.you.points))
+      setScore(oppNames.points, state.opponent.points === null ? '' : String(state.opponent.points))
       setHidden(youNames.points, state.you.points === null)
       setHidden(oppNames.points, state.opponent.points === null)
 
@@ -871,7 +891,7 @@ export function createHud(): Hud {
       setHidden(frames, state.frames === null)
       setText(frameLabel, state.frameLabel)
       setHidden(inHand, !state.cueInHand)
-      setText(inHand, state.cueInHandInD ? 'Ball in hand — place the cue in the D' : 'Ball in hand — place the cue anywhere on the table')
+      setText(inHand, state.cueInHandInD ? 'Ball in hand ΓÇö place the cue in the D' : 'Ball in hand ΓÇö place the cue anywhere on the table')
       setText(ballOnText, state.ballOnLabel)
       setText(brk, state.breakLabel ?? '')
       setHidden(brk, state.breakLabel === null)
@@ -925,8 +945,8 @@ export function createHud(): Hud {
       setFlag(rail, 'is-disabled', !enabled)
       slider.setAttribute('aria-disabled', enabled ? 'false' : 'true')
       if (!enabled) {
-        // A turn ending or a shot firing mid-drag has to end the gesture outright —
-        // including handing power writes back to the controller — or the lock would
+        // A turn ending or a shot firing mid-drag has to end the gesture outright ΓÇö
+        // including handing power writes back to the controller ΓÇö or the lock would
         // outlive the drag and leave the cue stuck on a number nobody is setting.
         railDragging = false
         sliderDriving = false

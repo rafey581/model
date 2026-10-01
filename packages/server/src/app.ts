@@ -12,6 +12,9 @@ import { registerWalletRoutes } from './wallet/routes.js'
 import { registerMatchRoutes } from './matches/routes.js'
 import { registerTournamentRoutes } from './tournaments/routes.js'
 import { registerAdminRoutes } from './admin/routes.js'
+import { registerAdminAuthRoutes } from './admin/auth-routes.js'
+import { purgeExpiredSessions } from './admin/auth.js'
+import { providerConfigWarnings } from './auth/providers.js'
 import { registerCryptoRoutes } from './crypto/index.js'
 import { createGameServer, recoverMatchValidity } from './game/index.js'
 import { getPlatformUserId, getBotUserId } from './matches/service.js'
@@ -61,6 +64,7 @@ export async function buildApp() {
   await registerMatchRoutes(app)
   await registerTournamentRoutes(app)
   await registerCryptoRoutes(app)
+  await registerAdminAuthRoutes(app)
   await registerAdminRoutes(app)
 
   app.get('/api/health', { config: { public: true } }, async (request) => {
@@ -104,6 +108,15 @@ export async function buildApp() {
   await ensureSeedSettings()
   await getPlatformUserId()
   await getBotUserId()
+
+  // Expired admin sessions are deleted rather than left to be rejected on every
+  // request, so the table reflects only live access.
+  const purged = await purgeExpiredSessions()
+  if (purged > 0) app.log.info({ count: purged }, 'purged expired admin sessions')
+
+  for (const warning of providerConfigWarnings()) {
+    app.log.warn(warning)
+  }
 
   return app
 }

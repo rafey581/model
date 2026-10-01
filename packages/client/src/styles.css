@@ -1,25 +1,55 @@
-:root {
-  --bg: #0d1117;
-  --panel: #161b22;
-  --panel-2: #1c2129;
-  --text: #e6edf3;
-  --muted: #8b949e;
-  --accent: #238636;
-  --accent-2: #2ea043;
-  --ok: #2ea043;
-  --danger: #da3633;
-  --border: #30363d;
-  --felt: #0a6e3e;
-  --wood: #3c2415;
-  --turn: #2ea043;
-  /*
-   * The three states of the shot clock. The same three hues as the power rail's
-   * gradient, and named here, so the ring and the power bar read as one idea: a
-   * player learns green-means-fine once and it holds for both.
-   */
-  --timer-ok: #2ea043;
+﻿:root {
+  /* Arena Night theme */
+  --bg: #0a0a0f;
+  --bg-gradient: radial-gradient(ellipse at 50% 0%, #1a1a2e 0%, #0a0a0f 70%);
+  --panel: rgba(18, 18, 26, 0.85);
+  --panel-2: rgba(26, 26, 36, 0.9);
+  --text: #f0ece4;
+  --muted: #8a8a9a;
+  --border: rgba(201, 168, 76, 0.15);
+
+  /* Gold accent system */
+  --accent: #c9a84c;
+  --accent-2: #e8c872;
+  --gold: #c9a84c;
+  --gold-light: #e8c872;
+  --gold-dark: #a08030;
+  --gold-glow: rgba(201, 168, 76, 0.3);
+
+  /* Felt & wood */
+  --felt: #0d5c36;
+  --felt-dark: #094a2a;
+  --wood: #2a1810;
+  --wood-light: #4a2c1a;
+
+  /* Status colors.
+     `--danger` is the lighter tint used for text and icons on dark panels; it is
+     NOT usable as a background behind white text (2.9:1). `--danger-solid` is the
+     darkened variant that is, and is what any filled danger surface must use. */
+  --ok: #27ae60;
+  --danger: #e74c3c;
+  --danger-solid: #c9302b;
+  --turn: #c9a84c;
+
+  /* Shot clock */
+  --timer-ok: #27ae60;
   --timer-warn: #d29922;
-  --timer-urgent: #da3633;
+  --timer-urgent: #e74c3c;
+
+  /* Typography */
+  --font-display: 'Playfair Display', Georgia, serif;
+  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-score: 'Oswald', 'Arial Narrow', sans-serif;
+
+  /* Effects */
+  --shadow-gold: 0 0 20px rgba(201, 168, 76, 0.15);
+  --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.4);
+  --shadow-elevated: 0 12px 40px rgba(0, 0, 0, 0.5);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-lg: 16px;
+
+  /* Spacing */
   --hud-gap: 8px;
 }
 
@@ -30,10 +60,13 @@
 }
 
 body {
-  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-family: var(--font-body);
   background: var(--bg);
+  background-image: var(--bg-gradient);
   color: var(--text);
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 /**
@@ -118,27 +151,138 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 12px 0;
   border-bottom: 1px solid var(--border);
   margin-bottom: 16px;
 }
 
-header h1 {
-  font-size: 22px;
-  color: var(--accent-2);
+/**
+ * Sticky, but only on the pages that scroll.
+ *
+ * The game screen is exactly one viewport tall and already sets `overflow: hidden`
+ * on the body, so sticking buys nothing there ΓÇö and the negative margin that lets
+ * the blurred bar span the full width would push it outside the tighter padding the
+ * game shell uses, clipping the brand against the edge.
+ */
+#app:not(.app-game) header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  margin-inline: -16px;
+  padding-inline: 16px;
 }
 
+/**
+ * The brand is a link so it is reachable and announced, but it deliberately goes
+ * nowhere ΓÇö the app is a single page and the logo is not a route.
+ */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: inherit;
+  min-width: 0;
+}
+
+.brand-logo {
+  display: inline-flex;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 8px var(--gold-glow));
+}
+
+.brand-name {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  background: linear-gradient(135deg, var(--gold-light) 0%, var(--gold) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.header-actions {
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+/* The chip groups who you are with whether the socket is up, so a reconnect is
+   visible without hunting for a separate badge. */
 .user-chip {
-  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
   font-size: 14px;
+}
+
+.user-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+  color: #0a0a0f;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.user-name {
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+.wallet-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--panel);
+  border: 1px solid rgba(201, 168, 76, 0.25);
+  border-radius: 999px;
+  font-family: var(--font-score);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--gold-light);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wallet-coin {
+  color: var(--gold);
+  font-size: 13px;
 }
 
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 16px;
+  border-radius: var(--radius);
+  padding: 20px;
   margin-bottom: 16px;
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-card);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-elevated);
+  border-color: rgba(201, 168, 76, 0.3);
 }
 
 .row {
@@ -155,13 +299,73 @@ header h1 {
 }
 
 button {
-  background: var(--accent);
-  color: #fff;
+  background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+  color: #0a0a0f;
   border: 0;
-  border-radius: 6px;
-  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  padding: 10px 18px;
   cursor: pointer;
   font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+button::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.5s ease;
+}
+
+button:hover::after {
+  left: 100%;
+}
+
+button:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-gold);
+  filter: brightness(1.1);
+}
+
+button:active {
+  transform: translateY(0);
+}
+
+/**
+ * A disabled button must not still run its hover shine or lift ΓÇö it reads as broken
+ * rather than unavailable, and the sweep is the loudest hint that it is clickable.
+ */
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  filter: saturate(0.6);
+  box-shadow: none;
+  transform: none;
+}
+
+button:disabled::after {
+  display: none;
+}
+
+button:disabled:hover {
+  transform: none;
+  box-shadow: none;
+  filter: saturate(0.6);
+}
+
+/* A gold focus ring on every interactive control, for keyboard users only, so a
+ * mouse click does not leave a ring sitting on the page. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 button.ghost {
@@ -170,18 +374,41 @@ button.ghost {
   color: var(--text);
 }
 
+button.ghost:hover {
+  border-color: var(--gold);
+  color: var(--gold-light);
+  box-shadow: none;
+}
+
 button.danger {
-  background: var(--danger);
+  /* Both stops are checked against white text; the old lighter stop was 3.8:1. */
+  background: linear-gradient(135deg, var(--danger-solid) 0%, #a02722 100%);
+  color: #fff;
 }
 
 input,
 select {
-  background: var(--panel-2);
+  background: rgba(10, 10, 15, 0.6);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 6px;
-  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
   font-size: 14px;
+  transition: all 0.2s ease;
+}
+
+input:focus,
+select:focus {
+  /* No `outline: none` here: the gold :focus-visible ring in the button block is
+     what a keyboard user navigates by, and killing the outline would leave only the
+     soft box-shadow to notice. */
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(201, 168, 76, 0.15);
+}
+
+input::placeholder {
+  color: var(--muted);
+  opacity: 0.6;
 }
 
 label {
@@ -364,7 +591,7 @@ button.small {
 /**
  * Placement guidance, under the table. Same quiet one-liner style as the controls
  * hint: muted text that appears while a placement is being rejected and says why,
- * then disappears. Not a toast — this is continuous state, not an event.
+ * then disappears. Not a toast ΓÇö this is continuous state, not an event.
  */
 .placement-hint {
   text-align: center;
@@ -480,7 +707,9 @@ button.small {
 .tier-chip.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  /* Dark ink on gold, not white: white on this gold was 2.3:1. Matches the primary
+     button, which is the same gold fill. */
+  color: #0a0a0f;
 }
 
 .tier-section {
@@ -525,7 +754,7 @@ button.small {
 /*
  * Glassmorphism top bar.
  *
- * A translucent dark gradient with a backdrop blur — the score sits on the table
+ * A translucent dark gradient with a backdrop blur ΓÇö the score sits on the table
  * like a pane over it rather than a panel above it. The blur is the whole effect:
  * the cloth and the balls moving behind the bar show through as soft colour, and
  * the fine top border catches the light so the pane reads as glass.
@@ -579,7 +808,7 @@ button.small {
 /*
  * Centre-screen event banners.
  *
- * Key moments — fouls, pots, ball in hand — announce themselves once, big, in the
+ * Key moments ΓÇö fouls, pots, ball in hand ΓÇö announce themselves once, big, in the
  * middle of the table, then get out of the way. Enter and exit are the same keyframe
  * played forwards and backwards: scale up with a fade and a slight upward drift.
  * The blur pass behind each banner is the motion-blur overlay.
@@ -783,8 +1012,12 @@ button.small {
   min-width: 17px;
   padding: 0 3px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--timer) 88%, black);
-  color: #fff;
+  background: var(--timer);
+  /* Dark ink on the state colour, not white. The previous combination darkened the
+     fill 12% and kept white text, which put the "ok" and "warn" states at 3.6:1 and
+     3.2:1 on a 10px number. This reads at 5.2:1 or better in every state, and the
+     fill stays the vivid colour that tells you which state you are in at a glance. */
+  color: #0a0a0f;
   font-size: 10px;
   font-weight: 700;
   line-height: 15px;
@@ -825,7 +1058,9 @@ button.small {
 
 .hud-frame.is-turn {
   border-color: var(--turn);
-  box-shadow: 0 0 0 2px rgba(46, 160, 67, 0.35);
+  /* Gold to match the border. This ring was still the old GitHub green, so the active
+     player was outlined in a colour the arena theme does not use anywhere else. */
+  box-shadow: 0 0 0 2px rgba(201, 168, 76, 0.35);
 }
 
 .hud-avatar-img {
@@ -865,8 +1100,9 @@ button.small {
 }
 
 .hud-name {
-  font-size: 13px;
-  font-weight: 700;
+  font-family: var(--font-display);
+  font-size: clamp(12px, 1.9vh, 15px);
+  font-weight: 600;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -878,9 +1114,11 @@ button.small {
  * The score readout: the centre of the bar, and the largest thing on it.
  *
  * The frame's own points either side of a rule, with the players' avatars on the ends.
- * It is the number a player comes back to between shots, so it is set large and bold
- * while the rest of the bar stays quiet. The points keep the ids they have always had,
- * because the two elements were built for the ends of the bar and only moved.
+ * It is the one number a player checks constantly, so it gets the condensed score face
+ * and the gold, sized in viewport units to match the rest of the HUD (see `.hud`). It is
+ * the element `tick-up` flashes on a change, which is why the rule is allowed to be
+ * larger than the name beside it. The points keep the ids they have always had, because
+ * the two elements were built for the ends of the bar and only moved.
  */
 .hud-score {
   display: flex;
@@ -905,11 +1143,14 @@ button.small {
   min-height: 18px;
   background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.28), transparent);
 }
-
 .hud-points {
-  font-size: 12px;
-  color: var(--muted);
+  font-family: var(--font-score);
+  font-size: clamp(15px, 2.6vh, 21px);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--gold-light);
   font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 10px var(--gold-glow);
 }
 
 .hud-points[hidden] {
@@ -963,14 +1204,14 @@ button.small {
 /**
  * The balls strip: fifteen reds, the ball on, and the six colours in value order.
  *
- * This is now the secondary row — the frame's score is the bar above it — so it is drawn
+ * This is now the secondary row ΓÇö the frame's score is the bar above it ΓÇö so it is drawn
  * a step quieter: smaller dots, tighter padding, and muted text. Nothing here is less
  * available for it, only less loud.
  *
  * The three groups are centred as one cluster, and that is load-bearing rather than
  * decorative. The strip spans the full width of the HUD, so with the groups spread edge
  * to edge the six colours would sit under whichever player the bar puts at that end and
- * read as that player's balls — which is precisely the 8-ball mistake the strip exists to
+ * read as that player's balls ΓÇö which is precisely the 8-ball mistake the strip exists to
  * avoid: in snooker every ball on the table belongs to both players. Centring leaves
  * equal empty space on both sides, so the colours are as far from one player's end as
  * from the other's.
@@ -1148,7 +1389,7 @@ button.small {
  *
  * A cue ball face-on: white disc, faint crosshair marking the dead-centre strike,
  * and a dot the player drags off centre. Up is topspin, down backspin, the sides
- * are english, and diagonals blend the two — the dot's rim distance is exactly the
+ * are english, and diagonals blend the two ΓÇö the dot's rim distance is exactly the
  * engine's maximum legal spin, because the mapping is one linear scale with no
  * safety margin of its own. Same glass-and-border language as the camera toggle.
  */
@@ -1236,7 +1477,7 @@ button.small {
  * The accessible slider itself.
  *
  * It covers the track and is the focus target; the visuals stay on the rail below.
- * Zero own painting — just a focus ring so keyboard players can find it — and the
+ * Zero own painting ΓÇö just a focus ring so keyboard players can find it ΓÇö and the
  * pointer events pass through to the track, which is the hit target for the drag.
  */
 .power-slider {
@@ -1269,7 +1510,7 @@ button.small {
 }
 
 .power-rail.is-disabled .power-rail-handle {
-  background: #8b949e;
+  background: var(--muted);
 }
 
 .power-rail-value {
@@ -1302,7 +1543,17 @@ button.small {
   /* Short and eased: continuous charging already arrives every frame, so this only
      smooths the discrete steps from the wheel, the keys and a fresh press. */
   transition: transform 90ms ease-out;
-  background: linear-gradient(to top, #2ea043 0%, #7ec35a 28%, #d29922 62%, #e0752f 80%, #da3633 100%);
+  /* A heat ramp, not a status colour: green means "soft", red means "everything".
+     The endpoints come from the theme tokens so the rail shares the arena palette;
+     the middle stops are literal ramp steps and carry no meaning of their own. */
+  background: linear-gradient(
+    to top,
+    var(--ok) 0%,
+    #7ec35a 28%,
+    var(--timer-warn) 62%,
+    #e0752f 80%,
+    var(--danger-solid) 100%
+  );
   border-radius: 999px;
 }
 
@@ -1314,19 +1565,23 @@ button.small {
 }
 
 .chip-ok {
-  color: var(--accent-2);
+  color: var(--ok);
   font-size: 13px;
-  border: 1px solid var(--accent);
+  font-weight: 500;
+  border: 1px solid rgba(39, 174, 96, 0.4);
   border-radius: 999px;
-  padding: 2px 10px;
+  padding: 3px 10px;
+  background: rgba(39, 174, 96, 0.08);
 }
 
 .chip-bad {
   color: var(--danger);
   font-size: 13px;
-  border: 1px solid var(--danger);
+  font-weight: 500;
+  border: 1px solid rgba(231, 76, 60, 0.4);
   border-radius: 999px;
-  padding: 2px 10px;
+  padding: 3px 10px;
+  background: rgba(231, 76, 60, 0.08);
 }
 
 .bell-wrap {
@@ -1358,7 +1613,7 @@ button.small {
   position: absolute;
   top: -6px;
   right: -6px;
-  background: var(--danger);
+  background: var(--danger-solid);
   color: #fff;
   font-size: 11px;
   line-height: 1;
@@ -1426,7 +1681,9 @@ button.small {
 
 .notif-item.unread {
   border-color: var(--accent);
-  background: rgba(46, 160, 67, 0.08);
+  /* Gold wash, not the old GitHub green: unread is signalled by the gold accent
+     everywhere else, and a green tint here read as "success" rather than "new". */
+  background: rgba(201, 168, 76, 0.08);
 }
 
 .notif-item-title {
@@ -1941,4 +2198,923 @@ button.mini {
 .flag-confidence {
   font-family: ui-monospace, 'Cascadia Code', monospace;
   font-size: 12px;
+}
+
+/* ============================================
+   AUTH SCREEN ΓÇö "Welcome to the Arena"
+   ============================================ */
+
+.auth-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  position: relative;
+}
+
+.auth-screen::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background:
+    radial-gradient(ellipse at 50% 30%, rgba(201, 168, 76, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 70%, rgba(13, 92, 54, 0.1) 0%, transparent 40%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.auth-card {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 420px;
+  background: rgba(18, 18, 26, 0.9);
+  border: 1px solid rgba(201, 168, 76, 0.2);
+  border-radius: var(--radius-lg);
+  padding: 40px 36px;
+  backdrop-filter: blur(20px);
+  box-shadow: var(--shadow-elevated), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  animation: authCardIn 0.5s ease-out;
+}
+
+@keyframes authCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.auth-brand {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.auth-logo {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 16px;
+  background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-gold);
+}
+
+.auth-logo svg {
+  width: 36px;
+  height: 36px;
+}
+
+.auth-title {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--gold-light) 0%, var(--gold) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin: 0;
+}
+
+.auth-subtitle {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 4px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auth-tabs {
+  display: flex;
+  gap: 4px;
+  background: rgba(10, 10, 15, 0.6);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  margin-bottom: 24px;
+}
+
+.auth-tab {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.auth-tab.active {
+  background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+  color: #0a0a0f;
+  font-weight: 600;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.auth-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.auth-input-group label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0;
+}
+
+.auth-input-group input {
+  background: rgba(10, 10, 15, 0.6);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  font-size: 14px;
+  transition: all 0.2s ease;
+}
+
+.auth-input-group input:focus {
+  /* Same reasoning as the global input rule: the gold focus ring is the affordance. */
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(201, 168, 76, 0.15);
+}
+
+.auth-input-group input::placeholder {
+  color: var(--muted);
+  opacity: 0.5;
+}
+
+.auth-submit {
+  width: 100%;
+  background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+  color: #0a0a0f;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-top: 8px;
+  position: relative;
+  overflow: hidden;
+}
+
+.auth-submit::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+  transition: left 0.5s ease;
+}
+
+.auth-submit:hover::after {
+  left: 100%;
+}
+
+.auth-submit:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-gold);
+  filter: brightness(1.1);
+}
+
+.auth-submit:active {
+  transform: translateY(0);
+}
+
+.auth-footer {
+  text-align: center;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.auth-footer p {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+}
+
+.auth-footer a {
+  color: var(--gold);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.auth-footer a:hover {
+  text-decoration: underline;
+}
+
+.auth-error {
+  background: rgba(231, 76, 60, 0.1);
+  border: 1px solid rgba(231, 76, 60, 0.3);
+  color: #e74c3c;
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: 13px;
+  margin-bottom: 16px;
+  display: none;
+}
+
+.auth-error.visible {
+  display: block;
+  animation: errorShake 0.4s ease;
+}
+
+/* --- Provider sign-in ---------------------------------------------------- */
+
+.auth-providers {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.auth-provider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 18px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+
+.auth-provider:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--gold);
+}
+
+.auth-provider:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.auth-provider:active {
+  transform: translateY(1px);
+}
+
+.auth-provider-mark {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+}
+
+.auth-provider-mark svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* The button plus what it discloses, as one unit. The gap is larger than the
+   buttons' internal gap so the disclosure reads as belonging to the button above
+   it rather than as another control. */
+.auth-provider-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.auth-provider-wrap:has(button:disabled) {
+  opacity: 0.6;
+}
+
+.auth-provider-wrap .auth-provider:disabled {
+  cursor: progress;
+}
+
+/*
+ * Stated in full, not behind a link. A disclosure most players never click is not
+ * consent, and the point of naming what a provider shares is that they can decide
+ * before they connect rather than after.
+ */
+.auth-provider-disclosure {
+  margin: 0;
+  padding: 0 4px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+/* The Phantom mark is monochrome, so it takes the button's text colour rather than
+   a brand colour - otherwise it disappears on a dark card. */
+.auth-provider-phantom .auth-provider-mark {
+  color: var(--text);
+}
+
+.auth-empty {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+  text-align: center;
+}
+
+.auth-empty strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+
+.auth-empty p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.auth-hint {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.auth-field-status {
+  min-height: 16px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.auth-field-status.good {
+  color: #4ade80;
+}
+
+.auth-field-status.bad {
+  color: #e74c3c;
+}
+
+.auth-notice {
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  background: rgba(201, 168, 76, 0.08);
+  border: 1px solid rgba(201, 168, 76, 0.25);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.auth-link {
+  display: block;
+  margin-top: 14px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  font-family: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.auth-link:hover {
+  color: var(--gold);
+  text-decoration: underline;
+}
+
+.auth-secret {
+  padding: 14px;
+  margin-bottom: 12px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+.auth-secret-label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+.auth-secret-value {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  color: var(--gold);
+  word-break: break-all;
+  user-select: all;
+}
+
+.auth-screen-wide {
+  padding: 24px;
+}
+
+.admin-mode .auth-screen {
+  min-height: 100vh;
+}
+
+@keyframes errorShake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
+/* ============================================
+   LOBBY ΓÇö "The Venue"
+   ============================================ */
+
+.lobby-hero {
+  background: linear-gradient(135deg, rgba(201, 168, 76, 0.1) 0%, rgba(13, 92, 54, 0.05) 100%);
+  border: 1px solid rgba(201, 168, 76, 0.2);
+  border-radius: var(--radius);
+  padding: 24px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.lobby-hero-content h2 {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--gold-light);
+  margin: 0 0 4px;
+}
+
+.lobby-hero-content p {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0;
+}
+
+.lobby-hero-action {
+  flex-shrink: 0;
+}
+
+.lobby-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.lobby-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-card);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.lobby-card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-elevated);
+  border-color: rgba(201, 168, 76, 0.3);
+}
+
+.lobby-card-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, rgba(201, 168, 76, 0.15) 0%, rgba(201, 168, 76, 0.05) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+  font-size: 24px;
+}
+
+.lobby-card h3 {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 4px;
+}
+
+.lobby-card p {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.lobby-section {
+  margin-bottom: 20px;
+}
+
+.lobby-section-title {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--gold);
+  margin: 0 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.live-tables {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+/* The strip is also where the empty state and the error message land. Those are one
+   line of text in a row of cards, and without this they would be squeezed to the
+   width of their own content and the message would wrap into a column. */
+.live-tables > .muted {
+  flex: 1 0 100%;
+}
+
+/* A skeleton stands in for a card, so it is sized like one. */
+.live-tables .skeleton {
+  flex: 0 0 200px;
+}
+
+.live-table-card {
+  flex: 0 0 200px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  backdrop-filter: blur(12px);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* The action sits at the bottom of the card so a row of them lines up, whatever
+   length the name and the stake above them happen to be. */
+.live-table-card > button,
+.live-table-card > .badge {
+  margin-top: auto;
+  align-self: flex-start;
+}
+
+.live-table-card .table-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 8px;
+}
+
+.live-table-card .table-players {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.live-table-card .table-score {
+  font-family: var(--font-score);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--gold-light);
+}
+
+.stat-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.stat-tile {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  text-align: center;
+  backdrop-filter: blur(12px);
+}
+
+.stat-value {
+  font-family: var(--font-score);
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--gold-light);
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 6px;
+}
+
+/* ============================================
+   SCORE TICK ΓÇö a changed number is a changed number
+   ============================================ */
+
+/**
+ * Broadcasts flash the number that moved. Doing it here with a class the writer
+ * toggles, rather than a keyframe on the element, means an unchanged score never
+ * re-animates: the flash is tied to the update, not to the render.
+ *
+ * Only the scale and the glow are animated. Animating `color` toward `inherit`
+ * would resolve against the *parent's* colour and land on the wrong value, so the
+ * element keeps its own colour throughout and the motion alone carries the change.
+ */
+.tick-up {
+  animation: tickFlash 0.5s ease;
+}
+
+@keyframes tickFlash {
+  0% {
+    transform: scale(1.2);
+    text-shadow: 0 0 18px var(--gold-glow);
+  }
+  100% {
+    transform: scale(1);
+    text-shadow: 0 0 10px var(--gold-glow);
+  }
+}
+
+/* The number itself is the thing that scales, so it needs its own box to scale in. */
+.tick-up {
+  display: inline-block;
+}
+
+/* ============================================
+   SKELETON ΓÇö shown while a lobby section is still fetching
+   ============================================ */
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  min-height: 14px;
+}
+
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  animation: skeletonSweep 1.4s infinite;
+}
+
+@keyframes skeletonSweep {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.skeleton-line {
+  height: 12px;
+  margin-bottom: 10px;
+  width: 85%;
+}
+
+.skeleton-line.short {
+  width: 60%;
+}
+
+.skeleton-line.tiny {
+  width: 35%;
+  height: 10px;
+}
+
+/* ============================================
+   PAGE TRANSITION
+   ============================================ */
+
+/**
+ * Entering a screen fades and lifts it in.
+ *
+ * The animation is attached to the page container rather than to individual cards,
+ * so the whole screen arrives as one movement instead of N cards drifting in at
+ * slightly different times, which reads as jank rather than polish.
+ */
+.page-enter {
+  animation: pageEnter 0.3s ease-out both;
+}
+
+@keyframes pageEnter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ============================================
+   REDUCED MOTION ΓÇö honoured globally, not per-widget
+   ============================================ */
+
+/**
+ * The HUD already had its own reduced-motion block. This is the global one: it
+ * neutralises every decorative animation in one place, so a new effect added later
+ * does not have to remember to opt out on its own.
+ *
+ * Durations are floored near-zero rather than zero because a 0s transition on some
+ * properties still fires transitionend, which the game code waits on.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* These two carry the meaning rather than the decoration, so they are held
+     steady instead of being scrubbed away with everything else. */
+  .power-rail-fill,
+  .shot-timer-arc {
+    transition-duration: 0.2s !important;
+  }
+
+  /* Hover lift is movement, and is the first thing to go. */
+  .card:hover,
+  .lobby-card:hover,
+  button:hover {
+    transform: none;
+  }
+}
+
+/* ============================================
+   RESPONSIVE
+   ============================================ */
+
+/**
+ * Tablet.
+ *
+ * The lobby grid and the stat tiles are both auto-fit, so they reflow on their own.
+ * What needs handling here is the chrome: the header is the first thing to break,
+ * because the brand competes with the wallet, the bell and two buttons for one line.
+ */
+@media (max-width: 768px) {
+  #app {
+    padding: 12px;
+  }
+
+  header {
+    flex-wrap: wrap;
+    gap: 10px;
+    row-gap: 10px;
+  }
+
+  .brand-name {
+    font-size: 20px;
+  }
+
+  /* The right-hand cluster is the part that runs out of room, so it is allowed to
+     take the full second line rather than crushing the brand. */
+  header .row {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .auth-card {
+    padding: 28px 22px;
+  }
+
+  .lobby-hero {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  .lobby-hero-action,
+  .lobby-hero-action button {
+    width: 100%;
+  }
+
+  .stat-tiles {
+    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  }
+}
+
+/**
+ * Phone.
+ *
+ * Single column, thumb-sized targets, and the notification panel becomes full width
+ * because a 320px panel hanging off a 375px screen is not a panel, it is a sliver.
+ */
+@media (max-width: 480px) {
+  #app {
+    padding: 10px;
+  }
+
+  header {
+    padding: 10px 0;
+  }
+
+  .brand-name {
+    font-size: 18px;
+  }
+
+  /* 44px is the smallest reliably tappable control on a phone. */
+  button,
+  .bell {
+    min-height: 44px;
+  }
+
+  button {
+    padding: 12px 16px;
+  }
+
+  .card,
+  .lobby-card {
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+
+  .lobby-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .auth-screen {
+    padding: 16px 12px;
+  }
+
+  .auth-card {
+    padding: 24px 18px;
+  }
+
+  .auth-title {
+    font-size: 26px;
+  }
+
+  .auth-submit {
+    padding: 14px 18px;
+  }
+
+  /* The strip is a horizontal scroller by design; a card that fits the viewport
+     width means one card is visible at a time, which is the intent. */
+  .live-table-card,
+  .live-tables .skeleton {
+    flex: 0 0 168px;
+  }
+
+  .notif-panel {
+    width: calc(100vw - 24px);
+    right: 12px;
+  }
+
+  .stat-tiles {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .overlay .card {
+    padding: 18px;
+  }
+}
+
+/* Coarse pointers cannot hover, so the hover affordances are dead weight there and
+   the tap targets need the extra height instead. */
+@media (pointer: coarse) {
+  button:hover,
+  .card:hover,
+  .lobby-card:hover {
+    transform: none;
+  }
 }

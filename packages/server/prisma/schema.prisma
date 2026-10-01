@@ -8,10 +8,24 @@ datasource db {
 }
 
 model User {
-  id           String                 @id @default(cuid())
-  email        String                 @unique
+  id        String  @id @default(cuid())
+  // Nullable: a Google account always has an email, but a wallet-only provider
+  // (Phantom) has no concept of one, so the column cannot stay required.
+  email String? @unique
+  // Nullable for the same reason - an OAuth or wallet identity carries no password
+  // to hash.
+  passwordHash String?
+  // PASSWORD | GOOGLE | PHANTOM | BINANCE. How this identity proved itself.
+  authProvider String @default("PASSWORD")
+  // The provider's own stable user id: Google's `sub`, or a Solana address. Null for
+  // PASSWORD accounts. Pairing this with authProvider is what makes "link, don't
+  // duplicate" work - and it is deliberately never the email address, which the user
+  // can change.
+  providerAccountId String?
+  // TOTP second factor. Only ever populated for admin roles.
+  totpSecret String?
+  totpEnabled Boolean @default(false)
   username     String                 @unique
-  passwordHash String
   role         String                 @default("PLAYER")
   status       String                 @default("ACTIVE")
   jgCheck      Json?
@@ -25,6 +39,11 @@ model User {
   transactions WalletTransaction[]
   tournaments  TournamentPlayer[]
   notifications Notification[]
+
+  // One local user per provider identity. Postgres treats NULLs as distinct in a
+  // unique index, so the many PASSWORD accounts that all have a null
+  // providerAccountId do not collide here.
+  @@unique([authProvider, providerAccountId])
 }
 
 model Profile {
@@ -40,10 +59,18 @@ model Session {
   id        String   @id @default(cuid())
   userId    String
   tokenHash String   @unique
+  // USER | ADMIN. An admin session is a distinct, revocable server-side record so the
+  // admin panel never depends on a stateless JWT that outlives the login.
+  purpose   String   @default("USER")
   expiresAt DateTime
+  lastSeenAt DateTime @default(now())
+  createdAt DateTime @default(now())
   ip        String?
   userAgent String?
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
 }
 
 model Wallet {

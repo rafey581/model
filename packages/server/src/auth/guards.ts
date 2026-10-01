@@ -19,6 +19,12 @@ declare module 'fastify' {
   }
   interface FastifyContextConfig {
     public?: boolean
+    /**
+     * Documentation marker for routes that require an ADMIN session. It is not read
+     * by any code - the gate is `requireAdminSession` in the route's preHandler -
+     * but it makes an admin route identifiable at a glance in review.
+     */
+    admin?: boolean
   }
 }
 
