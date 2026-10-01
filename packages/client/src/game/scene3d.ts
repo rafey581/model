@@ -518,7 +518,9 @@ export class Scene3D {
 
     this.scene.background = new THREE.Color('#161d27')
 
-    this.camera = new THREE.PerspectiveCamera(50, width / height, 1, 20000)
+    // Near plane at 0.1: a camera pulled close to a cushion nose or over a pocket
+    // jaw must never have the geometry it is looking at clipped by the near plane.
+    this.camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 20000)
     this.rig = initialRigState(width / height)
     this.camera.position.set(0, 1400, 1750)
     this.camera.lookAt(0, 0, 0)
@@ -540,21 +542,27 @@ export class Scene3D {
   }
 
   /**
-   * Build-time guards on the three mechanisms behind the old top-down banding.
+   * Build-time guards on the mechanisms behind cloth banding artifacts.
    *
-   * Each invariant here is the fix for one diagnosed cause of stripe/banding
-   * artifacts on the cloth: a shadow frustum too deep for the map to resolve
-   * (the horizontal bands near the cushions), a felt texture sampled without
-   * mipmaps (moire from overhead), and markings as coplanar geometry (z-fighting
-   * against the bed). The markings are baked into the felt texture, so there are
-   * no marking meshes to check — their absence is the invariant. A violation
+   * The first guard is the one that actually killed the stripes: the bed never
+   * samples the depth map, so no shadow-map artifact of any bias, frustum depth
+   * or camera angle can land on it. The texture guards keep the felt's own
+   * sampling calm (moire without mipmaps, shimmer without aniso). A violation
    * means somebody reintroduced a bug that took real diagnosis to find, so it is
    * announced rather than suffered silently.
    */
   private selfCheck(): void {
     const problems: string[] = []
-    const cam = this.lamp.shadow.camera
-    if (cam.far - cam.near > 2000) problems.push('shadow frustum too deep for stable cloth shading')
+    // The invariant that matters most is structural: find the cloth by its texture
+    // and assert it never became a shadow receiver again.
+    let clothReceives = false
+    this.scene.traverse((o) => {
+      const mesh = o as THREE.Mesh
+      if (mesh.isMesh && (mesh.material as THREE.MeshStandardMaterial)?.map === this.feltTex && mesh.receiveShadow) {
+        clothReceives = true
+      }
+    })
+    if (clothReceives) problems.push('cloth is receiving depth-map shadows (shadow acne will return)')
     const tex = this.feltTex
     if (tex) {
       if (!tex.generateMipmaps) problems.push('felt texture is missing mipmaps')
@@ -639,7 +647,12 @@ export class Scene3D {
       })
     )
     cloth.rotation.x = -Math.PI / 2
-    cloth.receiveShadow = true
+    // The bed never samples the depth map. A coplanar-ish plane lit from above is
+    // the textbook generator of shadow acne: every texel of a 2048² map stretched
+    // across the bed self-shadows in bands, and the artifacts move with the camera
+    // angle. The lamp washes the cloth directly, the baked AO lives in the texture,
+    // and grounding is sold by the ball contact blobs — no depth reception needed.
+    cloth.receiveShadow = false
     this.scene.add(cloth)
 
     const apron = new THREE.Mesh(

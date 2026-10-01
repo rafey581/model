@@ -58,12 +58,6 @@ let scene3d: Scene3D | null = null
  */
 let cameraMode: 'AIM' | 'TOP_DOWN' = 'AIM'
 let cameraToggleEl: HTMLButtonElement | null = null
-/**
- * The view the player chose themselves, remembered while ball-in-hand placement
- * holds the camera overhead. When the placement ends the toggle is restored to
- * this, so an automatic detour never steals the player's setting.
- */
-let prePlacementCamera: 'AIM' | 'TOP_DOWN' | null = null
 /** True on the previous loop pass while a placement was live, so the end of one is detectable. */
 let placementWasActive = false
 /** Where the pointer last sat on the cloth during placement, in table millimetres. */
@@ -1951,47 +1945,34 @@ function isPlacing(): boolean {
 }
 
 /**
- * Runs the ball-in-hand placement experience for one frame: the automatic
- * overhead camera, the D-only or whole-table indication, the ghost cue ball and
- * the click-to-place commit.
+ * Runs the ball-in-hand placement experience for one frame: the D-only or
+ * whole-table indication, the ghost cue ball and the click-to-place commit.
  *
- * The camera rule is the one piece of opinion here: entering placement forces
- * TOP_DOWN (full-table visibility for choosing a spot), and when placement ends —
- * the server's snapshot showing the cue ball down — the camera eases back to
- * whatever the player had before. The player's own toggle still works during
- * placement: it rewrites `cameraMode`, which this override remembers and honours
- * the moment the placement clears.
+ * The camera is deliberately NOT touched here. Placement happens in whatever
+ * 3D perspective view the player is in — orbit and look-around stay live, and
+ * the view toggle remains theirs alone to press. The ghost cue ball and the
+ * ghost's legality tint carry the placement in the perspective view, which is
+ * what keeps the scene from snapping into a flat overhead card on every foul.
  */
 function stepPlacement(canvas: HTMLCanvasElement): void {
   const placing = isPlacing()
   const inD = frame?.cueInHandInD === true
 
   if (placing && !placementWasActive) {
-    // Entering placement: take the camera overhead automatically, remembering
-    // what the player had chosen so it can be handed back afterwards.
-    prePlacementCamera = cameraMode
-    setCameraMode('TOP_DOWN')
+    // Entering placement: overlays on, in the current view. A placement already
+    // sent (a fast double-click, say) is not forgotten; the in-flight flag is
+    // only cleared by the server showing the ball placed.
     placementTarget = null
     placementLegal = false
     placementPendingCommit = null
-    // A placement that was already sent (a fast double-click, say) must not be
-    // forgotten just because the placement state flickered; the in-flight flag
-    // is only cleared by the server showing the ball placed.
-    if (!placementCommitInFlight) {
-      scene3d?.setPlacementMode(true, inD)
-    } else {
-      scene3d?.setPlacementMode(false, false)
-    }
+    scene3d?.setPlacementMode(!placementCommitInFlight, inD)
   } else if (placing && placementWasActive) {
     // Staying in placement: the D flag can change between frames (a snapshot
     // arriving late), so the overlays follow it live.
     if (!placementCommitInFlight) scene3d?.setPlacementMode(true, inD)
   } else if (!placing && placementWasActive) {
-    // Placement over: the cue ball is down (or the visit moved on). Ease the
-    // camera back to the player's own choice — the normal post-shot return.
+    // Placement over: the cue ball is down (or the visit moved on).
     scene3d?.setPlacementMode(false, false)
-    setCameraMode(prePlacementCamera ?? 'AIM')
-    prePlacementCamera = null
     placementTarget = null
     placementPendingCommit = null
     placementCommitInFlight = false

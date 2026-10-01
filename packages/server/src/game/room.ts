@@ -357,11 +357,6 @@ export class GameRoom {
     if (this.awaitingPlayback) return
     const frame = this.match.currentFrame
     if (!frame || frame.phase === 'FRAME_END') return
-    // BALL_IN_HAND_PLACEMENT: the striker is putting the cue ball down. That is not a
-    // turn being spent, so no clock runs across it and no timeout can fire. The clock
-    // re-arms from full the moment the placement is committed with its stroke and the
-    // replay has been watched.
-    if (frame.cueInHand) return
     const seat = frame.turnIndex
     // The clock is armed on the robot's visit too. The ring is a shared view of whose
     // visit it is, so it must attach to whichever avatar is at the table; what a
@@ -409,10 +404,14 @@ export class GameRoom {
 
   private onTurnTimeout(): void {
     if (this.stopped) return
-    // The timeout is a foul for an aiming turn that was never used. Any other
-    // execution state — balls moving, a replay being watched, the cue ball being
-    // placed — is not that, so the existing rule check is simply never reached.
-    if (this.executionState() !== 'PLAYER_AIMING') return
+    // The timeout is a foul for an aiming turn that was never used. Balls moving or
+    // a replay being watched are not that; the clock is stopped for both of them
+    // anyway. Ball-in-hand placement IS the striker's turn being used — placing is
+    // part of aiming — so a placement that outlasts its deadline is fouled like any
+    // other unused turn, which also guarantees a frame can never stall on a player
+    // who never places. The ring follows the clock in every state.
+    const state = this.executionState()
+    if (state === 'PHYSICS_SIMULATION' || state === 'RULE_EVALUATION' || state === 'TURN_TRANSITION') return
     const frame = this.match.currentFrame
     if (!frame) return
     const seat = frame.turnIndex

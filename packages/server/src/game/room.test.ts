@@ -439,10 +439,9 @@ describe('turn clock', () => {
   /**
    * Plays and watches the break-off, so the frame is past its opening ball-in-hand.
    *
-   * The execution state machine keeps the clock stopped while the striker is placing
-   * the cue ball, and a fresh frame opens in hand, so any test that wants a running
-   * clock has to get through the break first. The stroke places the cue on its layout
-   * spot, which is a legal D placement, and the acknowledgement hands the visit on.
+   * The clock runs from the moment the frame starts — placing is part of aiming —
+   * so the stroke here both places the cue (on its layout spot, a legal D
+   * placement) and spends the opening turn. The acknowledgement hands the visit on.
    */
   function playBreak(room: GameRoom, cbs: ReturnType<typeof callbacks>): void {
     const frame = room.match.currentFrame
@@ -455,19 +454,35 @@ describe('turn clock', () => {
     room.noteShotPlayed('user-a', lastToken(cbs), 'sock-a')
   }
 
-  it('pauses the clock for the opening ball in hand, and runs once the break is watched', () => {
+  it('runs from the opening ball in hand, and keeps running after the break is watched', () => {
     const { room, cbs } = startedRoom()
-    // BALL_IN_HAND_PLACEMENT: the striker has not put the cue ball down yet, so no
-    // turn is being spent and no deadline exists to draw.
-    expect(room.turnTiming().turnDeadlineAt).toBeNull()
+    // BALL_IN_HAND_PLACEMENT is the striker's turn being used: placing is part of
+    // aiming, so the clock is live from frame start. A break-off a player never
+    // completes must time out like any other unused turn, not stall the frame.
+    const opening = room.turnTiming()
+    expect(opening.turnDeadlineAt).not.toBeNull()
+    expect(opening.turnDeadlineAt! - opening.serverNow).toBe(30_000)
+    expect(opening.turnDurationMs).toBe(30_000)
     playBreak(room, cbs)
-    // The break has been watched, the cue is on the cloth, and the next visit is
-    // genuinely aiming: from here the clock runs a full turn.
+    // The break has been watched and the next visit is genuinely aiming: a fresh
+    // full turn, announced to the clients as always.
     const timing = room.turnTiming()
     expect(timing.turnDeadlineAt).not.toBeNull()
-    // The deadline is an absolute instant on the server clock, a full turn ahead of it.
     expect(timing.turnDeadlineAt! - timing.serverNow).toBe(30_000)
     expect(timing.turnDurationMs).toBe(30_000)
+  })
+
+  it('fouls a break-off the striker never completes, instead of stalling the frame', () => {
+    // The regression this pins: a frame opens in hand, and a clock that refused to
+    // run across placement could never fire — the frame hung forever on a player
+    // who placed nothing. The timeout has to reach a placement turn.
+    const { room, cbs } = startedRoom({ timeoutSec: 1 })
+    expect(room.executionState()).toBe('BALL_IN_HAND_PLACEMENT')
+    vi.advanceTimersByTime(1_500)
+    const foul = cbs.broadcasts.some(
+      (b) => b.event === 'game:update' && b.payload?.events?.some((e: any) => e.type === 'FOUL' && e.data?.reason === 'turn timeout')
+    )
+    expect(foul).toBe(true)
   })
 
   it('reports a duration of zero and no deadline when the clock is switched off', () => {

@@ -1145,6 +1145,11 @@ async function main(): Promise<void> {
   const ttStart = await ttS1
   await ttS2
   check('timeout match started', ttStart.frameIndex === 1 && ttStart.snapshot.balls.length === 22, ttStart)
+  // A fresh frame opens with the cue in hand, and placing is part of the striker's
+  // turn — the clock runs across it. The timeout foul is expected for a placement
+  // that never happens, so no placement stroke is played here: the 2s deadline
+  // expires on the opening ball-in-hand and the foul lands exactly as it would for
+  // any other turn spent doing nothing.
   const firstSeat = ttStart.snapshot.turnIndex as number
   const oppSeat = firstSeat === 0 ? 1 : 0
   const tUp1 = waitFor<any>(stt1, 'game:update', 10000)
@@ -1160,9 +1165,11 @@ async function main(): Promise<void> {
   check('opponent awarded 4 points', tScores ? (oppSeat === 0 ? tScores.player0 : tScores.player1) === 4 : false, tScores)
   stt1.disconnect()
   stt2.disconnect()
-
-  res = await api('/api/admin/settings', { method: 'PATCH', token: adminToken, body: { key: 'turnTimeoutSec', value: 600 } })
-  check('turn timeout raised to 600s', res.status === 200 && res.json?.ok, res.json)
+  // The clock's default is restored before the hardening match is created, so its
+  // room does not inherit the 2s deadline (a 2s turn would time out mid-flood and
+  // pollute the throttle checks with timeout fouls).
+  res = await api('/api/admin/settings', { method: 'PATCH', token: adminToken, body: { key: 'turnTimeoutSec', value: DEFAULT_TURN_TIMEOUT_SEC } })
+  check('turn timeout restored to default', res.status === 200 && res.json?.ok, res.json)
 
   const tt3 = await register(s17, 'tt3')
   const tt4 = await register(s17, 'tt4')
@@ -1249,7 +1256,7 @@ async function main(): Promise<void> {
 
   console.log('== 18. audit: fraud flags, ledger invariance, replay data ==')
 
-  res = await api('/api/admin/settings', { method: 'PATCH', token: adminToken, body: { key: 'turnTimeoutSec', value: 600 } })
+  res = await api('/api/admin/settings', { method: 'PATCH', token: adminToken, body: { key: 'turnTimeoutSec', value: DEFAULT_TURN_TIMEOUT_SEC } })
   check('single-turn timeout ok', res.status === 200 && res.json?.ok, res.json)
 
   const auAb = await register(suffix, '1')
