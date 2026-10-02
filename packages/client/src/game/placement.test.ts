@@ -4,15 +4,19 @@ import {
   D_CENTRE,
   D_ZONE_RADIUS,
   GHOST_COMMIT_TOLERANCE_MM,
+  confirmPlacement,
   followGhost,
   ghostSettled,
+  initialPlacementFlow,
   isInsideD,
   isInsideAPocket,
   isCrowded,
   isOnTable,
-  placementAimAngle,
-  placementShot,
-  placementStatus
+  placementAllowsGameplayInput,
+  placementAllowsGhostInput,
+  placementStatus,
+  rejectPlacement,
+  stepPlacementFlow
 } from './placement.js'
 
 const pocket = { x: 0, y: 0, radius: 85 }
@@ -100,45 +104,6 @@ describe('placementStatus', () => {
   })
 })
 
-describe('placementShot', () => {
-  it('carries the placement as cuePos with resting power and no spin', () => {
-    const shot = placementShot({ x: 500, y: 700 }, 0.3, 0.4)
-    expect(shot.cuePos).toEqual({ x: 500, y: 700 })
-    expect(shot.power).toBe(0.4)
-    expect(shot.spin).toEqual({ x: 0, y: 0 })
-  })
-
-  it('clamps power into the legal range', () => {
-    expect(placementShot({ x: 500, y: 700 }, 0, 5).power).toBe(1)
-    expect(placementShot({ x: 500, y: 700 }, 0, -2).power).toBe(0)
-  })
-
-  it('keeps the spin shape the physics layer already accepts', () => {
-    const shot = placementShot({ x: 1, y: 1 }, 0, 0)
-    expect(Object.keys(shot.spin).sort()).toEqual(['x', 'y'])
-  })
-})
-
-describe('placementAimAngle', () => {
-  it('points from a D placement up-table toward the pack', () => {
-    const angle = placementAimAngle({ x: BAULK_LINE_X - 100, y: TABLE_WIDTH / 2 })
-    expect(Math.abs(angle)).toBeLessThan(Math.PI / 2)
-    expect(Math.cos(angle)).toBeGreaterThan(0)
-  })
-
-  it('points inward from anywhere on the table', () => {
-    for (const pos of [
-      { x: 100, y: 100 },
-      { x: TABLE_LENGTH - 100, y: TABLE_WIDTH - 100 },
-      { x: TABLE_LENGTH / 2, y: 60 }
-    ]) {
-      const angle = placementAimAngle(pos)
-      expect(Math.cos(angle) * (TABLE_LENGTH / 2 - pos.x)).toBeGreaterThanOrEqual(0)
-      expect(Math.sin(angle) * (TABLE_WIDTH / 2 - pos.y)).toBeGreaterThanOrEqual(0)
-    }
-  })
-})
-
 describe('the ghost follow', () => {
   it('never overshoots and converges on the target', () => {
     let current = { x: 0, y: 0 }
@@ -170,5 +135,299 @@ describe('the ghost follow', () => {
     let current = far
     for (let i = 0; i < 240; i++) current = followGhost(current, target, 1 / 60)
     expect(ghostSettled(current, target)).toBe(true)
+  })
+})
+
+describe('the placement flow', () => {
+  const D_SPOT = { x: BAULK_LINE_X - 100, y: TABLE_WIDTH / 2 }
+  const MID_TABLE_SPOT = { x: TABLE_LENGTH / 2, y: TABLE_WIDTH / 2 }
+
+  /**
+   * Drives the flow the way the frame loop does: `placing` is the server's own
+   * cueInHand, `cameraSettled` is the scene's, and `serverAccepted` is the snapshot
+   * stopping saying the ball is in hand.
+   */
+  function drive(
+    start: ReturnType<typeof initialPlacementFlow>,
+    frames: Array<{ placing: boolean; cameraSettled: boolean; serverAccepted: boolean }>
+  ) {
+    let flow = start
+    const seen: Array<typeof flow.phase> = []
+    for (const frame of frames) {
+      flow = stepPlacementFlow(flow, frame)
+      seen.push(flow.phase)
+    }
+    return { flow, seen }
+  }
+
+  /** The camera's answer for a frame: never settled while a move is running. */
+  const settled = { placing: true, cameraSettled: true, serverAccepted: false }
+  const moving = { placing: true, cameraSettled: false, serverAccepted: false }
+
+  it('starts idle with nothing confirmed and the player in control', () => {
+    const flow = initialPlacementFlow()
+    expect(flow.phase).toBe('IDLE')
+    expect(flow.confirmed).toBeNull()
+    expect(placementAllowsGameplayInput(flow)).toBe(true)
+  })
+
+  describe('entering the placement view', () => {
+    it('refuses input on the very first frame of the flight in', () => {
+      // The regression this guards: the camera used to start moving while the controls
+      // stayed live, so a player could aim or fire against a camera in mid-air.
+      const entered = stepPlacementFlow(initialPlacementFlow(), moving)
+      expect(entered.phase).toBe('ENTERING')
+      expect(placementAllowsGameplayInput(entered)).toBe(false)
+      expect(placementAllowsGhostInput(entered)).toBe(false)
+    })
+
+    it('stays entering while the camera is still moving, however long that takes', () => {
+      const once = stepPlacementFlow(initialPlacementFlow(), moving)
+      for (let i = 0; i < 300; i++) {
+        expect(stepPlacementFlow(once, moving).phase).toBe('ENTERING')
+      }
+    })
+
+    it('only starts once and never restarts mid-flight', () => {
+      // The bug a phase machine exists to prevent: a flag-based flow re-entered its "is
+      // placing" branch every frame, restarting a camera move that was already running.
+      const { seen } = drive(initialPlacementFlow(), new Array(120).fill(moving))
+      expect(seen[0]).toBe('ENTERING')
+      expect(new Set(seen)).toEqual(new Set(['ENTERING']))
+    })
+
+    it('becomes placing only once the camera has arrived', () => {
+      const entered = stepPlacementFlow(initialPlacementFlow(), moving)
+      expect(stepPlacementFlow(entered, moving).phase).toBe('ENTERING')
+      expect(stepPlacementFlow(entered, settled).phase).toBe('PLACING')
+    })
+
+    it('gives the player the ghost, and only the ghost, once it has arrived', () => {
+      const placing = stepPlacementFlow(stepPlacementFlow(initialPlacementFlow(), moving), settled)
+      expect(placing.phase).toBe('PLACING')
+      // The ghost is movable, but the cue is still not: the ball has no position yet, so
+      // there is nothing to aim and nothing to shoot.
+      expect(placementAllowsGhostInput(placing)).toBe(true)
+      expect(placementAllowsGameplayInput(placing)).toBe(false)
+    })
+
+    it('goes home again if the placement is withdrawn while the camera is still moving', () => {
+      // A frame that ended or a turn that went elsewhere mid-flight. There is nothing
+      // left to place, so the camera has to come back down rather than sit overhead.
+      const entered = stepPlacementFlow(initialPlacementFlow(), moving)
+      const dropped = stepPlacementFlow(entered, { placing: false, cameraSettled: false, serverAccepted: true })
+      expect(dropped.phase).toBe('RETURNING')
+      expect(dropped.confirmed).toBeNull()
+    })
+  })
+
+  describe('the D placement at the break-off', () => {
+    it('confirms a spot inside the D and holds it through the flight home', () => {
+      const placing = drive(initialPlacementFlow(), [moving, settled]).flow
+      const confirmed = confirmPlacement(placing, D_SPOT)
+      expect(confirmed.phase).toBe('RETURNING')
+      // Held on the flow rather than read back from the ghost: this is the position the
+      // server was told, and it must not be recomputed while the camera is still moving.
+      expect(confirmed.confirmed).toEqual(D_SPOT)
+    })
+
+    it('refuses a click outside the D, because the server will reject it', () => {
+      // The flow does not decide legality, but it must not be the thing that lets an
+      // illegal spot through either. This is the shape of the break-off restriction: a
+      // spot past the baulk line is not placeable while `cueInHandInD` is set.
+      const placing = drive(initialPlacementFlow(), [moving, settled]).flow
+      const pastBaulk = { x: BAULK_LINE_X + 400, y: TABLE_WIDTH / 2 }
+      expect(isInsideD(D_SPOT)).toBe(true)
+      expect(isInsideD(pastBaulk)).toBe(false)
+      expect(placementStatus(pastBaulk, true, []).reason).toBe('outside-D')
+      // The flow itself only confirms; the legality gate above it is what refuses this.
+      expect(confirmPlacement(placing, D_SPOT).confirmed).toEqual(D_SPOT)
+    })
+
+    it('never lets a second click start a second placement while it flies home', () => {
+      const returning = confirmPlacement(drive(initialPlacementFlow(), [moving, settled]).flow, D_SPOT)
+      // Refused, and refused by identity: the flow is untouched, so nothing about the
+      // in-flight placement or its camera move is disturbed.
+      expect(confirmPlacement(returning, MID_TABLE_SPOT)).toBe(returning)
+      expect(returning.confirmed).toEqual(D_SPOT)
+    })
+  })
+
+  describe('ball in hand over the whole table', () => {
+it('confirms a spot anywhere on the cloth, not just in the D', () => {
+      // The difference between the two scenarios: mid-frame there is no D restriction, so
+      // the whole playing surface is legal and the flow confirms any clear spot on it.
+      // The spots are spread across the table but kept clear of the pockets, which are
+      // not placeable in either scenario.
+      const placing = drive(initialPlacementFlow(), [moving, settled]).flow
+      for (const spot of [
+        { x: BAULK_LINE_X + 300, y: BALL_RADIUS },
+        { x: TABLE_LENGTH / 2, y: TABLE_WIDTH / 2 },
+        { x: TABLE_LENGTH - 600, y: TABLE_WIDTH - 400 }
+      ]) {
+        expect(isInsideD(spot)).toBe(false)
+        expect(placementStatus(spot, false, []).ok).toBe(true)
+        expect(confirmPlacement(placing, spot).confirmed).toEqual(spot)
+      }
+    })
+
+    it('still refuses a spot off the table or inside a pocket mouth', () => {
+      expect(placementStatus({ x: -50, y: 500 }, false, []).ok).toBe(false)
+      expect(placementStatus({ x: TABLE_LENGTH / 2, y: 40 }, false, []).reason).toBe('in-pocket')
+      expect(placementStatus({ x: 2000, y: 500 }, false, [ball(3, 2000, 500)]).reason).toBe('crowded')
+    })
+  })
+
+  describe('returning to the gameplay view', () => {
+    it('keeps the controls away for the whole flight home', () => {
+      const returning = confirmPlacement(drive(initialPlacementFlow(), [moving, settled]).flow, MID_TABLE_SPOT)
+      for (let i = 0; i < 300; i++) {
+        const step = stepPlacementFlow(returning, {
+          placing: false,
+          cameraSettled: false,
+          serverAccepted: true
+        })
+        expect(step.phase).toBe('RETURNING')
+        expect(placementAllowsGameplayInput(step)).toBe(false)
+        expect(placementAllowsGhostInput(step)).toBe(false)
+      }
+    })
+
+    it('does not release input until the camera has landed and the server has agreed', () => {
+      const returning = confirmPlacement(drive(initialPlacementFlow(), [moving, settled]).flow, MID_TABLE_SPOT)
+      // Camera home but the server has not confirmed the ball is down: the next shot
+      // state must not be reachable yet.
+      const cameraOnly = stepPlacementFlow(returning, {
+        placing: false,
+        cameraSettled: true,
+        serverAccepted: false
+      })
+      expect(cameraOnly.phase).toBe('RETURNING')
+      expect(placementAllowsGameplayInput(cameraOnly)).toBe(false)
+      // Both conditions together release it.
+      const done = stepPlacementFlow(returning, { placing: false, cameraSettled: true, serverAccepted: true })
+      expect(done.phase).toBe('IDLE')
+      expect(placementAllowsGameplayInput(done)).toBe(true)
+    })
+
+    it('holds the confirmed position unchanged right up to the end', () => {
+      let flow = confirmPlacement(drive(initialPlacementFlow(), [moving, settled]).flow, D_SPOT)
+      for (let i = 0; i < 120; i++) {
+        const before = flow.confirmed
+        flow = stepPlacementFlow(flow, { placing: false, cameraSettled: false, serverAccepted: true })
+        // Nothing re-reads the ghost or the snapshot during the flight, so the position
+        // the server was given is the position that survives it.
+        if (before) expect(flow.confirmed).toEqual(before)
+      }
+      expect(flow.confirmed).toEqual(D_SPOT)
+    })
+
+    it('clears the confirmed position once the placement is finished', () => {
+      const returning = confirmPlacement(drive(initialPlacementFlow(), [moving, settled]).flow, MID_TABLE_SPOT)
+      const done = stepPlacementFlow(returning, { placing: false, cameraSettled: true, serverAccepted: true })
+      // Nothing is carried into the next visit: a stale confirmed position would be the
+      // starting point for a placement that has not happened yet.
+      expect(done.confirmed).toBeNull()
+      expect(done).toEqual(initialPlacementFlow())
+    })
+
+it('completes the placement before the next one can start', () => {
+      // A whole cycle: fly up, place, confirm, wait for the camera home while the server
+      // takes it, then back to idle and ready for the next placement. The order matters and
+      // is the point - there is no path from placing straight to idle, so the next shot
+      // state cannot be reached while a placement is still in flight.
+      const entering = drive(initialPlacementFlow(), [moving]).flow
+      const placing = drive(entering, [settled]).flow
+      const returning = confirmPlacement(placing, MID_TABLE_SPOT)
+      const { flow: home, seen } = drive(returning, [
+        { placing: true, cameraSettled: false, serverAccepted: true },
+        { placing: true, cameraSettled: true, serverAccepted: true }
+      ])
+      // Only after both the camera and the server are done does the flow let go.
+      expect(seen).toEqual(['RETURNING', 'IDLE'])
+      expect(home).toEqual(initialPlacementFlow())
+      // And the next placement starts from idle like any other.
+      expect(drive(home, [moving]).flow.phase).toBe('ENTERING')
+    })
+
+it('waits for the server before releasing a confirmed placement, but not a withdrawn one', () => {
+      // A confirmed placement has something to be acknowledged. A withdrawn one never sent
+      // anything, so gating it on an acknowledgement that cannot arrive would strand the
+      // camera at the gameplay view with the controls still refused.
+      const placing = drive(initialPlacementFlow(), [moving, settled]).flow
+      const confirmed = confirmPlacement(placing, MID_TABLE_SPOT)
+      expect(stepPlacementFlow(confirmed, { placing: false, cameraSettled: true, serverAccepted: false }).phase).toBe(
+        'RETURNING'
+      )
+
+      const withdrawn = drive(initialPlacementFlow(), [moving, settled]).flow
+      // No confirmPlacement call at all: the placement went away with the snapshot.
+      const cancelled = stepPlacementFlow(withdrawn, { placing: false, cameraSettled: false, serverAccepted: false })
+      expect(cancelled.phase).toBe('RETURNING')
+      expect(cancelled.confirmed).toBeNull()
+      const home = stepPlacementFlow(cancelled, { placing: false, cameraSettled: true, serverAccepted: false })
+      expect(home.phase).toBe('IDLE')
+    })
+
+it('hands the placement back when the server refuses it', () => {
+      // The dead end this closes: a refused commit leaves the snapshot still saying the
+      // ball is in hand, which is indistinguishable from a slow one, so the flow would wait
+      // in `RETURNING` for an acknowledgement that is never coming - at a gameplay view,
+      // with dead controls, holding a cue ball the player still owns.
+      const placing = drive(initialPlacementFlow(), [moving, settled]).flow
+      const returning = confirmPlacement(placing, MID_TABLE_SPOT)
+      const rejected = rejectPlacement(returning)
+      expect(rejected.phase).toBe('ENTERING')
+      expect(rejected.confirmed).toBeNull()
+      // Back through the camera before the ghost is live again, because the camera is
+      // halfway down to the gameplay view at the moment of the refusal.
+      expect(placementAllowsGhostInput(rejected)).toBe(false)
+      expect(stepPlacementFlow(rejected, moving).phase).toBe('ENTERING')
+      expect(stepPlacementFlow(rejected, settled).phase).toBe('PLACING')
+      // The position goes with it: the refused spot is not remembered as chosen.
+      expect(rejected.confirmed).toBeNull()
+    })
+
+it('ignores a refusal that is not about a placement in flight', () => {
+      // Refusals arrive for many reasons. One that lands while no placement has been sent
+      // must not drag a normal gameplay frame back into a placement.
+      const idle = initialPlacementFlow()
+      expect(rejectPlacement(idle)).toBe(idle)
+      const placing = drive(initialPlacementFlow(), [moving, settled]).flow
+      expect(rejectPlacement(placing)).toBe(placing)
+      // A withdrawal was never sent either, so there is nothing to refuse.
+      const withdrawn = drive(placing, [{ placing: false, cameraSettled: false, serverAccepted: false }]).flow
+      expect(rejectPlacement(withdrawn)).toBe(withdrawn)
+    })
+  })
+
+  it('gives a full placement to exactly one player, and only while the cue is in hand', () => {
+    // The turn and ownership rules are the server's, but the flow is driven by the same
+    // `placing` answer that already folds in "my turn" and "the table has settled". This
+    // is what stops the opponent's client running a placement of its own.
+    const myTurn = drive(initialPlacementFlow(), [moving, settled]).flow
+    expect(myTurn.phase).toBe('PLACING')
+    // The same snapshot read by the other client: not their visit, so not placing.
+    const theirTurn = drive(initialPlacementFlow(), [
+      { placing: false, cameraSettled: true, serverAccepted: true }
+    ]).flow
+    expect(theirTurn.phase).toBe('IDLE')
+    expect(placementAllowsGhostInput(theirTurn)).toBe(false)
+  })
+
+  it('survives a nonsense frame without throwing or inventing a phase', () => {
+    // A snapshot arriving before the camera has moved, a phase arriving with no placing
+    // behind it, a `dt` of nothing: the machine has to stay on a legal phase whatever it
+    // is handed rather than falling off the end of a switch.
+    for (const flow of [initialPlacementFlow(), { phase: 'ENTERING' as const, confirmed: null }]) {
+      for (const input of [
+        { placing: false, cameraSettled: false, serverAccepted: false },
+        { placing: true, cameraSettled: false, serverAccepted: true },
+        { placing: true, cameraSettled: true, serverAccepted: true }
+      ]) {
+        const next = stepPlacementFlow(flow, input)
+        expect(['IDLE', 'ENTERING', 'PLACING', 'RETURNING']).toContain(next.phase)
+      }
+    }
   })
 })

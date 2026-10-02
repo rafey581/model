@@ -137,6 +137,82 @@ function isInsideD(pos: { x: number; y: number }): boolean {
   return pos.x <= BAULK_LINE_X && dx * dx + dy * dy <= D_RADIUS * D_RADIUS
 }
 
+/** Why a placement was refused, in the words the client can act on. */
+export type CuePlacementRefusal = 'not-in-hand' | 'off-table' | 'in-pocket' | 'crowded' | 'outside-D' | 'bad-input'
+
+export interface CuePlacementOutcome {
+  ok: boolean
+  /** The spot as it was accepted, or null when it was refused. */
+  placed: Vec2 | null
+  reason: CuePlacementRefusal | null
+  /**
+   * True when the ball was already down and nothing had to be done.
+   *
+   * A placement confirmation that arrives twice - a retried socket message, a client
+   * that reloaded mid-flight - must land on the state the first one produced, not on a
+   * second placement that moves the ball again. Reporting that case separately lets the
+   * caller treat it as success without pretending it placed something.
+   */
+  alreadyPlaced: boolean
+}
+
+/**
+ * Puts the cue ball down where the striker chose, and stops there.
+ *
+ * Placing a ball is not a stroke. It used to be carried on the back of one - the client
+ * sent the spot as the `cuePos` of a shot and the server placed the ball and then
+ * simulated the stroke as well - which quietly made every placement a shot the player
+ * never aimed. Because the placement path sends no power, that stroke moved nothing,
+ * made no contact, and the rules layer resolved it exactly as it resolves a striker who
+ * failed to hit anything: a foul, the penalty added to the opponent, and the visit handed
+ * away. The player had done everything asked of them and still lost four points and the
+ * turn, and the next thing they saw was the opponent playing.
+ *
+ * So this places the ball and changes nothing else. No simulation, no `resolveStroke`,
+ * no foul, no points, no turn change, no playback: the visit is still the striker's and
+ * the shot they take next is the one they actually aim. Every rule about *where* the ball
+ * may go is unchanged and still comes from {@link resolveCuePlacement}, so this widens
+ * nothing and relaxes nothing.
+ *
+ * Idempotent, because a confirmation that arrives twice has to land on the same table.
+ */
+export function applyCuePlacement(frame: FrameState, cuePos: { x: number; y: number }): CuePlacementOutcome {
+  const fail = (reason: CuePlacementRefusal): CuePlacementOutcome => ({
+    ok: false,
+    placed: null,
+    reason,
+    alreadyPlaced: false
+  })
+  if (!frame.cueInHand) {
+    // The ball is already down. Nothing to do, and nothing that could move it again.
+    return { ok: true, placed: null, reason: null, alreadyPlaced: true }
+  }
+  const cue = frame.balls.find((b) => b.isCue)
+  if (!cue) return fail('not-in-hand')
+  if (!Number.isFinite(cuePos?.x) || !Number.isFinite(cuePos?.y)) return fail('bad-input')
+
+  const pos = resolveCuePlacement(frame, cuePos)
+  if (!pos) {
+    if (frame.cueInHandInD && !isInsideD(cuePos)) return fail('outside-D')
+    if (!isOnTable(cuePos)) return fail('off-table')
+    if (isInsideAPocket(cuePos)) return fail('in-pocket')
+    if (isCrowded(frame, cuePos)) return fail('crowded')
+    return fail('bad-input')
+  }
+
+  cue.pos.x = pos.x
+  cue.pos.y = pos.y
+  cue.vel = { x: 0, y: 0 }
+  cue.spin = { x: 0, y: 0 }
+  frame.cueInHand = false
+  // The D restriction belongs to the break-off alone, and it is spent either way: a ball
+  // that has been placed at the break and potted again is a mid-frame in-off, and real
+  // snooker lets that one go anywhere on the table. Same rule, and the same reason, as
+  // the clearing that `applyStroke` does after a stroke has been played.
+  frame.cueInHandInD = false
+  return { ok: true, placed: { x: pos.x, y: pos.y }, reason: null, alreadyPlaced: false }
+}
+
 /** The cue ball has to be wholly on the cloth, not centred on the cushion line. */
 function isOnTable(pos: { x: number; y: number }): boolean {
   return (

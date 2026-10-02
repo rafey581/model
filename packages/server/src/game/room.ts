@@ -4,6 +4,7 @@ import {
   createFrame,
   newFrameForMatch,
   applyStroke,
+  applyCuePlacement,
   applyFrameWinner,
   applyTimeoutFoul,
   maybeEndFrame,
@@ -23,6 +24,16 @@ import { config } from '../config.js'
  * (about 18KB gzipped) sent once per shot.
  */
 const SHOT_KEYFRAME_RATE = 30
+
+/**
+ * How long a placement hold may last before the room releases it by itself.
+ *
+ * Comfortably longer than finding a legal spot ever takes, and short enough that a
+ * placement left open cannot hold a match up. This is a safety net, not a time limit on
+ * the player: letting it expire costs nothing but the pause itself, so it cannot be
+ * turned into a timeout by accident.
+ */
+const PLACEMENT_HOLD_MS = 120_000
 
 export interface GameUpdateEvent {
   matchId: string
@@ -77,6 +88,43 @@ export class GameRoom {
   private simulating = false
   private botTimer: NodeJS.Timeout | null = null
   private turnTimer: NodeJS.Timeout | null = null
+  /**
+   * The seat that has declared it is placing its cue ball right now, or null when
+   * nobody is.
+   *
+   * The clock is held for exactly this long as long as it is set. Placement is not a
+   * shot and not part of aiming: it is the striker arranging the table before they take
+   * one, so time spent flying the camera in, hunting for a legal spot and flying it back
+   * is not time spent not shooting. Counting it spent the strike clock while the player
+   * was still doing the thing the game had just asked them to do, and the frame ended in
+   * a timeout foul the player had no way to avoid.
+   *
+   * Stored rather than inferred from `frame.cueInHand` because the ball-in-hand flag
+   * outlives the placement: it stays true until the ball is actually put down. The clock
+   * may only be held while a placement is genuinely in progress.
+   */
+  private placementSeat: number | null = null
+  /**
+   * How much of the strike clock was left when placement began.
+   *
+   * The hold stops the clock; it must not reset it. Arming a fresh 30 seconds on
+   * resume would quietly hand every placing player an extra half minute of time they had
+   * not earned, so the remainder is carried across the hold and the clock is restarted
+   * from exactly where it stopped.
+   */
+  private placementRemainingMs: number | null = null
+  /**
+   * The backstop that makes a hold impossible to leave on forever.
+   *
+   * A player who starts a placement and then closes their laptop would otherwise hold
+   * the room's clock for good, and the frame would sit there forever. This is the
+   * promise that the hold ends one way or another: if no confirmation arrives within the
+   * window, the hold is released and the strike clock resumes on its own. It deliberately
+   * does NOT foul the player for standing still. No time out during a legal placement is
+   * the whole point of the hold, so the backstop cannot be a cheaper version of the thing
+   * the hold was added to stop.
+   */
+  private placementGuardTimer: NodeJS.Timeout | null = null
   /**
    * Set while a streamed shot is animating on the players' screens, and cleared
    * when a client reports that the animation has finished.
@@ -224,6 +272,10 @@ export class GameRoom {
       clearTimeout(this.turnTimer)
       this.turnTimer = null
     }
+    // A hold has to go with the clock it was holding. Left standing it would block
+    // every later arming in the room, and the striker who came back would find their
+    // clock permanently held by a placement that is no longer in progress.
+    this.abandonPlacementHold()
     this.turnDeadlineAt = null
   }
 
@@ -281,6 +333,7 @@ export class GameRoom {
     // pipeline between it and the next visit, and no new decision may be made
     // until every client has seen it.
     if (this.awaitingPlayback) return 'RULE_EVALUATION'
+    if (this.placementSeat !== null) return 'BALL_IN_HAND_PLACEMENT'
     if (frame.cueInHand) return 'BALL_IN_HAND_PLACEMENT'
     return 'PLAYER_AIMING'
   }
@@ -345,11 +398,17 @@ export class GameRoom {
     return seat !== 1
   }
 
-  private armTurnTimer(): void {
+  private armTurnTimer(remainingMs?: number): void {
     if (this.turnTimer) {
       clearTimeout(this.turnTimer)
       this.turnTimer = null
     }
+    // A placement hold is checked before the deadline is cleared, and deliberately.
+    // The deadline a client is holding in place is the deadline the room resumes from,
+    // so wiping it here would blank the player's ring for the whole placement and leave
+    // the resume counting from a value nobody was ever shown. The arming request is
+    // dropped, the held deadline stays.
+    if (this.placementSeat !== null) return
     // The deadline is cleared with the timeout, so every early return below leaves the
     // room with no clock running rather than a stale one from the previous visit.
     this.turnDeadlineAt = null
@@ -363,11 +422,18 @@ export class GameRoom {
     // timeout must never do is foul the robot, and `onTurnTimeout` still refuses that.
     if (this.isSeatDisconnected(seat)) return
     if (this.turnTimeoutSec <= 0) return
-    this.turnDeadlineAt = Date.now() + this.turnTimeoutSec * 1000
+    // `remainingMs` is how the clock is restarted after a placement hold: from the time
+    // that was left when the hold began, not from a fresh full visit. It is clamped so a
+    // caller cannot hand out a longer clock than the configuration allows.
+    const duration = Math.max(
+      1,
+      Math.min(remainingMs ?? this.turnTimeoutSec * 1000, this.turnTimeoutSec * 1000)
+    )
+    this.turnDeadlineAt = Date.now() + duration
     this.turnTimer = setTimeout(() => {
       this.turnTimer = null
       this.onTurnTimeout()
-    }, this.turnTimeoutSec * 1000)
+    }, duration)
   }
 
   /**
@@ -380,12 +446,18 @@ export class GameRoom {
    *
    * A zero duration means the turn clock is switched off; a null deadline means no
    * clock is running at all. Neither is a licence for the client to invent a deadline.
+   *
+   * `paused` is the one state that must not be read as "no clock": the deadline is
+   * still reported, and it is still the deadline the room will resume from. A client
+   * that treated a paused clock as absent would draw an empty ring for the whole
+   * placement, hiding the seconds the player still has.
    */
-  turnTiming(): { turnDeadlineAt: number | null; turnDurationMs: number; serverNow: number } {
+  turnTiming(): { turnDeadlineAt: number | null; turnDurationMs: number; serverNow: number; paused: boolean } {
     return {
       turnDeadlineAt: this.turnDeadlineAt,
       turnDurationMs: this.turnTimeoutSec > 0 ? this.turnTimeoutSec * 1000 : 0,
-      serverNow: Date.now()
+      serverNow: Date.now(),
+      paused: this.placementSeat !== null
     }
   }
 
@@ -406,10 +478,10 @@ export class GameRoom {
     if (this.stopped) return
     // The timeout is a foul for an aiming turn that was never used. Balls moving or
     // a replay being watched are not that; the clock is stopped for both of them
-    // anyway. Ball-in-hand placement IS the striker's turn being used — placing is
-    // part of aiming — so a placement that outlasts its deadline is fouled like any
-    // other unused turn, which also guarantees a frame can never stall on a player
-    // who never places. The ring follows the clock in every state.
+    // anyway. A placement in progress is not that either: the clock is held for the
+    // whole of it, so this timer cannot be sitting here waiting to expire. The room
+    // cannot stall on a player who never places, but that is now the backstop's job,
+    // and the backstop releases the hold rather than punishing the player for it.
     const state = this.executionState()
     if (state === 'PHYSICS_SIMULATION' || state === 'RULE_EVALUATION' || state === 'TURN_TRANSITION') return
     const frame = this.match.currentFrame
@@ -458,7 +530,191 @@ export class GameRoom {
     // animation partway through.
     if (this.awaitingPlayback) return { accepted: false, error: 'wait for the table to settle' }
     if (this.isBotTurn()) return { accepted: false, error: 'robot is thinking' }
+// A shot may not be played through the back of a placement. The ball has to be
+      // down first, or `applyStroke` would be handed no `cuePos` with the ball still in
+      // hand and place it wherever the rules layer happens to start from.
+      if (frame.cueInHand) return { accepted: false, error: 'place the cue ball first' }
+      // A placement hold means the camera is still flying home. The player cannot shoot
+      // until `placement:done` releases the hold.
+      if (this.placementSeat === seat) return { accepted: false, error: 'placement in progress' }
     return this.executeShot(seat, shot)
+  }
+
+  /**
+   * The striker declares that it is placing its cue ball, and the clock is held for it.
+   *
+   * Separate from `handleShot` because placing is not shooting. It was previously
+   * carried as a shot with a position and no power, which is a thing the rules layer
+   * cannot tell apart from a striker who swung at nothing, and answered accordingly.
+   * Separating the two is what lets this method exist at all: there is now a moment,
+   * before the ball is down, at which the room knows the player is still arranging the
+   * table and can stop the strike clock without touching a single rule.
+   *
+   * Idempotent, and deliberately forgiving about a second call. A client that re-sends
+   * `placement:begin` after a reconnect, or one that has simply been holding its own
+   * state for a while, must land on the hold that is already running rather than
+   * starting a second one, and must never be handed the remainder as a fresh clock.
+   */
+  handlePlacementBegin(userId: string): { accepted: boolean; error?: string } {
+    const frame = this.match.currentFrame
+    if (!frame) return { accepted: false, error: 'frame not running' }
+    const seat = this.seatOfUser.get(userId)
+    if (seat === undefined) return { accepted: false, error: 'not in match' }
+    if (seat !== frame.turnIndex) return { accepted: false, error: 'not your turn' }
+    if (this.isBotTurn()) return { accepted: false, error: 'robot is thinking' }
+    if (this.simulating || this.awaitingPlayback) return { accepted: false, error: 'wait for the table to settle' }
+    if (!frame.cueInHand) return { accepted: false, error: 'cue ball is not in hand' }
+    // Already held for this seat: nothing to do. Re-announcing is harmless, and the
+    // clock is not re-held and the backstop is not restarted, so a chatty client cannot
+    // stretch the window out indefinitely by saying this repeatedly.
+    if (this.placementSeat === seat) return { accepted: true }
+
+    const remaining = this.turnDeadlineAt === null ? null : Math.max(0, this.turnDeadlineAt - Date.now())
+    if (this.turnTimer) {
+      clearTimeout(this.turnTimer)
+      this.turnTimer = null
+    }
+    this.placementSeat = seat
+    this.placementRemainingMs = remaining
+    if (this.placementGuardTimer) clearTimeout(this.placementGuardTimer)
+    this.placementGuardTimer = setTimeout(() => {
+      this.placementGuardTimer = null
+      this.releasePlacementHold('backstop')
+    }, PLACEMENT_HOLD_MS)
+    // The deadline is left exactly where it was: it is the deadline the player is still
+    // shown, and the one the resume counts from.
+    this.broadcastTurnClock()
+    this.callbacks.log(`placement hold for seat ${seat} on ${this.matchId}`)
+    return { accepted: true }
+  }
+
+  /**
+   * Puts the cue ball down where the striker chose, and lets the clock run again.
+   *
+   * The placement itself is {@link applyCuePlacement}, which changes nothing but the
+   * ball's position. There is deliberately no `applyStroke` here and no `SHOT` event:
+   * nothing was struck, so there is no shot to announce, nothing to resolve against the
+   * rules, no foul to raise, no penalty to add and no turn to hand over. The visit is
+   * still the striker's, and the shot they take next is the first thing anyone has hit.
+   *
+   * Idempotent by way of `applyCuePlacement`: a confirmation that arrives twice finds
+   * the ball already down, reports `alreadyPlaced`, and lands on the same table without
+   * moving anything.
+   */
+  handlePlacementConfirm(
+    userId: string,
+    cuePos: { x: number; y: number }
+  ): { accepted: boolean; error?: string; alreadyPlaced?: boolean } {
+    const frame = this.match.currentFrame
+    if (!frame) return { accepted: false, error: 'frame not running' }
+    const seat = this.seatOfUser.get(userId)
+    if (seat === undefined) return { accepted: false, error: 'not in match' }
+    if (seat !== frame.turnIndex) return { accepted: false, error: 'not your turn' }
+    if (this.simulating) return { accepted: false, error: 'balls still moving' }
+    if (this.awaitingPlayback) return { accepted: false, error: 'wait for the table to settle' }
+
+    const outcome = applyCuePlacement(frame, cuePos)
+    if (!outcome.ok) {
+      // Refused on the rules, so the hold stays up and the player can try again. The
+      // refusal is returned rather than broadcast: nothing about the table changed, and
+      // a frame update would imply that something had.
+      return { accepted: false, error: outcome.reason ?? 'illegal placement' }
+    }
+
+// A placement that put the ball down is table state, so it goes out as a
+      // `game:update`: every client needs the snapshot, and the log needs the fact that
+      // this visit began with the ball in hand. There are no gameplay events attached -
+      // a placement is not a pot, a foul or a turn change, and inventing an event for it
+      // would be claiming on the log that something happened to the game that did not.
+//
+// The hold is *not* lifted here. The camera is still flying back from the placement, and
+// the player is not aiming yet, so the clock waits for the `placement:done` that says the
+// flight landed. `commit` arms as it always does, which is a no-op under a hold, so the
+// broadcast goes out carrying the held clock and the placed ball together.
+this.commit([], frame, false, null)
+return { accepted: true, alreadyPlaced: outcome.alreadyPlaced }
+}
+
+/**
+   * The second half of a placement: the client reports that the camera has landed back at
+   * the gameplay view, and the clock resumes from the time the hold preserved.
+   *
+   * Separate from the confirmation because that is the instant the player is actually able
+   * to shoot. Lifting the hold on the confirmation instead would start the clock while the
+   * camera was still in the air, so the first seconds of every placement were spent
+   * watching a transition the player could not do anything about.
+   */
+handlePlacementDone(userId: string): { accepted: boolean; error?: string } {
+const frame = this.match.currentFrame
+if (!frame) return { accepted: false, error: 'frame not running' }
+const seat = this.seatOfUser.get(userId)
+if (seat === undefined) return { accepted: false, error: 'not in match' }
+if (seat !== frame.turnIndex) return { accepted: false, error: 'not your turn' }
+if (this.simulating) return { accepted: false, error: 'balls still moving' }
+// The ball has to be down. A `done` for a placement that never landed would otherwise
+// resume the clock with the ball still in hand, which is the state this whole flow exists
+// to avoid.
+if (frame.cueInHand) return { accepted: false, error: 'cue ball not placed' }
+// Nothing to lift is not a failure. The client sends this on the way out of *any*
+// placement flow, including one that never declared a hold, and a duplicate is the
+// normal case for a client that retries after a reconnect.
+if (this.placementSeat === null || this.placementSeat !== seat) return { accepted: true }
+this.releasePlacementHold('confirmed')
+return { accepted: true }
+}
+
+  /**
+   * Lifts a placement hold and restarts the strike clock from the time it had left.
+   *
+   * `from` changes only what the clock is restarted from. Both callers mean the same thing
+   * about the game: the hold is over and the player has whatever they had left.
+   *
+   * This is deliberately separate from putting the ball down. A placement ends in two
+   * steps, because the player experiences it in two steps: the ball goes down, and then the
+   * camera comes home. The confirmation publishes the placed ball and leaves the hold up,
+   * so the clock is still the held value while the camera flies back, and this lifts it
+   * only once the client reports that flight has landed. Resuming at confirmation instead
+   * would count the player's own camera transition against their shot clock.
+   */
+  private releasePlacementHold(from: 'confirmed' | 'backstop'): void {
+    if (this.placementGuardTimer) {
+      clearTimeout(this.placementGuardTimer)
+      this.placementGuardTimer = null
+    }
+    if (this.placementSeat === null) return
+    this.placementSeat = null
+    const remaining = this.placementRemainingMs
+    this.placementRemainingMs = null
+    // The backstop releases the hold without the player having placed anything, so the
+    // ball is still in hand and the clock must not be resumed from a remainder that was
+    // measured before a flight the player may still be sitting through. A full visit is
+    // re-armed there, and the ordinary timeout applies from then on as it always did.
+    const armWith = from === 'backstop' ? undefined : remaining ?? undefined
+    this.armTurnTimer(armWith)
+    this.broadcastTurnClock()
+    this.scheduleBotIfNeeded()
+    this.callbacks.log(`placement hold released (${from}) on ${this.matchId}`)
+  }
+
+  /**
+   * Drops a placement hold without resuming anything, for when the visit is over for a
+   * reason that has its own handling — the striker disconnected, the frame ended, the
+   * room is closing. Leaving the hold in place across any of those would have the next
+   * visit inherit it, and leaving the carried remainder would hand that visit a clock
+   * measured from a placement that no longer happened.
+   */
+  private abandonPlacementHold(): void {
+    if (this.placementGuardTimer) {
+      clearTimeout(this.placementGuardTimer)
+      this.placementGuardTimer = null
+    }
+    this.placementSeat = null
+    this.placementRemainingMs = null
+  }
+
+  placementStateFor(userId: string): { placing: boolean; seat: number | null } {
+    const seat = this.seatOfUser.get(userId)
+    return { placing: this.placementSeat !== null && this.placementSeat === seat, seat: this.placementSeat }
   }
 
   private executeShot(seat: number, shot: ShotInputDto): { accepted: boolean; error?: string } {
@@ -607,6 +863,12 @@ export class GameRoom {
       this.botTimer = null
       const frame = this.match.currentFrame
       if (!frame || frame.turnIndex !== 1 || this.simulating || this.awaitingPlayback) return
+      // A placement hold is a human's, and `handlePlacementBegin` refuses the robot
+      // outright, so this cannot normally be set here. It is checked anyway: the one
+      // thing that must never happen is the bot walking onto the table to play while a
+      // player is still in the middle of the placement flow, and a guard that is only
+      // correct because of a rule three files away is not a guard.
+      if (this.placementSeat !== null) return
       // Strict execution-state gate. The bot fires only with a settled table under its
       // control: PLAYER_AIMING, or BALL_IN_HAND_PLACEMENT, where the stroke it is about
       // to commit carries the cue ball's own legal placement (computeBotShot returns a
@@ -754,6 +1016,7 @@ export class GameRoom {
     this.botTimer = null
     if (this.turnTimer) clearTimeout(this.turnTimer)
     this.turnTimer = null
+    this.abandonPlacementHold()
     this.turnDeadlineAt = null
     this.stopped = true
   }

@@ -1,4 +1,4 @@
-import { TURN_URGENT_MS, clockOffsetMs, displayedSeconds, remainingMs, ringProgress, timerTone } from './shotTimer.js'
+import { TURN_URGENT_MS, clockOffsetMs, displayedSeconds, isPaused, remainingMs, ringProgress, timerTone } from './shotTimer.js'
 import type { TurnTiming } from './shotTimer.js'
 
 export interface ShotTimerOptions {
@@ -55,6 +55,18 @@ export function createShotTimer(options: ShotTimerOptions): ShotTimer {
   let timing: TurnTiming | null = null
   let offset = 0
   let frame = 0
+  /**
+   * The seconds the clock was showing when the server said it was holding it, or null
+   * while it is running.
+   *
+   * The deadline keeps sliding while a placement is in progress - it is an absolute
+   * instant, and time does not stop for the camera - so a client that simply stopped
+   * recomputing would freeze wherever it happened to be when the hold arrived, which is
+   * not the same as the figure the server is holding. Measuring it once, at the moment
+   * the hold is announced, is what puts the number on screen and the seconds the server
+   * will resume from in agreement.
+   */
+  let heldRemaining: number | null = null
   /** The frame the clock is currently drawn in, so it is moved only when it has to be. */
   let hosted: HTMLElement | null = null
   let lastArc = ''
@@ -105,7 +117,11 @@ export function createShotTimer(options: ShotTimerOptions): ShotTimer {
       return
     }
 
-    const remaining = remainingMs(timing, Date.now(), offset)
+    // Held for a placement. The ring and the seconds stand where the server left them,
+    // which is the point: the player can see what they still have, and the hold costs
+    // them none of it. The server resumes from that same figure and sends a new deadline,
+    // so nothing has to be reconciled here.
+    const remaining = heldRemaining ?? remainingMs(timing, Date.now(), offset)
     const progress = ringProgress(remaining, timing.turnDurationMs)
     // Two decimal places is below what a pixel can show, so this is a per-frame write
     // that never skips a visible change and never repeats one.
@@ -141,6 +157,7 @@ export function createShotTimer(options: ShotTimerOptions): ShotTimer {
       timing = next
       frozen = false
       if (!next) {
+        heldRemaining = null
         stop()
         detach()
         return
@@ -149,15 +166,22 @@ export function createShotTimer(options: ShotTimerOptions): ShotTimer {
       // was asleep and woke up — corrects itself from the next thing the server says
       // instead of counting from wherever it had got to.
       offset = clockOffsetMs(next, Date.now())
+      // Measured here, once, at the instant the hold is announced - which is the only
+      // instant at which the deadline on the wire still describes time the player has.
+      // A later pause message is measured the same way, so a client that missed the
+      // first one lands on a figure the server agrees with rather than on nothing.
+      heldRemaining = isPaused(next) ? Math.max(0, remainingMs(next, Date.now(), offset)) : null
       if (!frame) frame = requestAnimationFrame(step)
     },
     freeze: () => {
       if (!timing) return
       frozen = true
+      heldRemaining = remainingMs(timing, Date.now(), offset)
       if (!frame) frame = requestAnimationFrame(step)
     },
     destroy: () => {
       timing = null
+      heldRemaining = null
       stop()
       detach()
     }

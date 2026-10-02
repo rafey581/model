@@ -122,4 +122,4 @@ Send SIGINT/SIGTERM: server logs `shutting down`, closes HTTP + socket rooms, th
 - No CI (by design, M0), no Dockerfile for the app, no metrics endpoint/prometheus.
 - Postgres has no healthcheck/restart policy; Redis is provisioned but unused.
 - e2e (`pnpm e2e`) needs a running server and mutates the dev DB — never point it at
-  a shared environment.
+  a shared environment.=

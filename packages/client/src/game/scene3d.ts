@@ -7,11 +7,19 @@ import { ballColor } from './palette.js'
 import {
   type CameraRigState,
   type HeadingLatch,
+  type PlacementTransition,
   initialRigState,
   initialHeadingLatch,
   stepCameraRig,
   stepHeadingLatch,
-  addOrbit
+  addOrbit,
+  noPlacementTransition,
+  beginPlacementTransition,
+  stepPlacementTransition,
+  placementTransitionEndPose,
+  topDownPose,
+  aimPose,
+  PLACEMENT_TRANSITION_SECONDS
 } from './camera.js'
 import {
   ballRadiusPx,
@@ -24,10 +32,47 @@ import {
   type PickCamera
 } from './cameraPick.js'
 import { placementStatus } from './placement.js'
+import {
+  APRON_OUTER_L,
+  APRON_OUTER_W,
+  APRON_PAD,
+  CUSHION_H as CUSHION_H_MM,
+  cushionLayout,
+  cushionTransform,
+  makeBeadGeometry,
+  makeCushionGeometry,
+  makeRailCapGeometry,
+  trimTransform,
+  CUSHION_DEPTH
+} from './tableGeometry.js'
 
 const HALF_L = TABLE_LENGTH / 2
 const HALF_W = TABLE_WIDTH / 2
-const CUSHION_H = 12
+/** Kept as an alias so the scene's own reads stay terse; the value lives with the geometry. */
+const CUSHION_H = CUSHION_H_MM
+/**
+ * The perspective camera's near plane, in millimetres.
+ *
+ * Perspective depth precision scales as z²/near, so this number governs whether the
+ * bed's own coplanar surfaces can be told apart. The bed's tightest pair is the cloth
+ * plane at y=0 and the apron box's top face at y=-1 — the apron is 64mm wider and
+ * longer than the cloth, so that face underlies the whole playing surface — which is a
+ * 1mm gap. It has to stay resolvable at the overhead camera's ~4.5m, the farthest the
+ * rig ever gets and where z² is at its worst.
+ *
+ * This was 0.1, which is far closer than anything ever needs to be seen: the nearest
+ * geometry is a cue butt on its way out of frame, or a cushion nose at
+ * MIN_CAMERA_HEIGHT_MM=140. A 0.1mm near spent effectively the whole depth buffer on
+ * the first few millimetres in front of the lens — about 12mm of granularity at 4.5m,
+ * so the 1mm gap was 12x finer than a single depth step and the depth test became a
+ * coin flip. The mahogany apron punched through the green cloth in dark bands that
+ * flickered as the camera moved: unreadable at the 90-degree overhead view, and
+ * invisible from the cue camera, where the same buffer resolved 0.073mm and left a
+ * comfortable 13x margin. 20mm still holds every such surface inside the frustum and
+ * resolves ~0.06mm at the overhead distance, a 16x margin that no pose in the rig can
+ * spend. Kept as a named constant because `selfCheck` asserts against it.
+ */
+const CAMERA_NEAR_MM = 20
 /**
  * The cue tip's position in the stick's own space. The stick's origin sits at the
  * centre of the shaft, so the tip is well short of half the length: with the
@@ -70,7 +115,7 @@ const POCKETS = pocketPositions()
 /**
  * A single shared anisotropy cap, set once when the renderer exists.
  *
- * Conservative on purpose — 4× is where a grazing cue-view angle stops shimmering
+ * Conservative on purpose — 4096 is where a grazing cue-view angle stops shimmering
  * and a weak GPU stops paying for the wider sampling footprint. Captured rather
  * than queried per texture, because the answer never changes.
  */
@@ -78,7 +123,7 @@ let MAX_ANISO = 4
 
 function feltTexture(): THREE.CanvasTexture {
   return cachedTexture('felt', () => {
-    // 512×512, one tile across the whole bed. The old 2048×1024 canvas cost VRAM and
+    // 512×512, one tile across the whole bed. The old 2048×1024 canvas cost VRAM and
     // per-frame texture bandwidth for detail the lens cannot hold at any playable
     // distance; mipmapping does the smoothing work, and the markings are baked into
     // this one texture rather than drawn as separate meshes.
@@ -87,10 +132,11 @@ function feltTexture(): THREE.CanvasTexture {
     canvas.width = size
     canvas.height = size
     const ctx = canvas.getContext('2d')!
-    // Rich baize green, flat: depth comes from the lighting, not painted gradients
-    // that pull apart from the shaded geometry at grazing angles. Bright, saturated
-    // tournament green — the tone reads vivid under the warm lamp and tone mapping.
-    ctx.fillStyle = '#1ea838'
+    // Tournament baize: a slightly deep, slightly blue green. The earlier #1ea838 was
+    // brighter and more yellow, which under the warm lamp tone-mapping pushed toward
+    // a flat lime. Real Strachan-style cloth sits darker so the white and the yellow
+    // have something to read against.
+    ctx.fillStyle = '#1b9430'
     ctx.fillRect(0, 0, size, size)
 
     // Seamless baize: wrap-around noise, four offset copies, so a mip edge never
@@ -121,6 +167,34 @@ function feltTexture(): THREE.CanvasTexture {
       }
     }
 
+    // Crossed nap. Cloth is milled in two directions and brushed along one, so under a
+    // raking light it shows faint diagonal weave rather than isotropic speckle. Without
+    // this the bed reads as flat matte paint no matter how the roughness is tuned.
+    // Kept at a few percent so it survives mipmapping without ever becoming a pattern.
+    ctx.save()
+    ctx.translate(size / 2, size / 2)
+    ctx.rotate(-Math.PI / 5)
+    ctx.translate(-size / 2, -size / 2)
+    ctx.fillStyle = 'rgba(255,255,255,0.022)'
+    for (let i = 0; i < 260; i++) {
+      const y = rand() * size
+      for (const dx of [-size, 0, size]) {
+        for (const dy of [-size, 0, size]) {
+          ctx.fillRect(dx, y + dy, size, 1)
+        }
+      }
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.018)'
+    for (let i = 0; i < 260; i++) {
+      const y = rand() * size
+      for (const dx of [-size, 0, size]) {
+        for (const dy of [-size, 0, size]) {
+          ctx.fillRect(dx, y + dy + 0.5, size, 1)
+        }
+      }
+    }
+    ctx.restore()
+
     // Baulk line, the D and the spot marks, baked into the cloth: no line meshes,
     // no extra draw calls, and the markings mip down with the baize instead of
     // crawling over it.
@@ -141,8 +215,19 @@ function feltTexture(): THREE.CanvasTexture {
     ctx.moveTo(bx, 0)
     ctx.lineTo(bx, size)
     ctx.stroke()
+    // The D is drawn as an ellipse, not an arc, and that distinction is the whole reason
+    // it looks right on the cloth. This canvas is square but the table it is mapped over
+    // is not - 3569mm by 1778mm - so texture space is stretched by about two to one
+    // along the table's length. A circle drawn here therefore lands on the bed as an
+    // ellipse twice as wide as it is tall, which put the D's arc out past the baulk line
+    // by roughly its own radius and made the visible area considerably larger than the
+    // area the rules actually allow in. `isInsideD` compares against D_RADIUS in real
+    // millimetres on both axes, so each radius here is scaled by its own axis: the result
+    // is a true circle of D_RADIUS once the stretch is undone, matching the gameplay
+    // boundary exactly. Getting this wrong is purely visual - the rules are unaffected -
+    // but a player aiming at what they can see is aiming at a place the rules forbid.
     ctx.beginPath()
-    ctx.arc(bx, mid, (D_RADIUS / TABLE_WIDTH) * size, Math.PI * 0.5, Math.PI * 1.5)
+    ctx.ellipse(bx, mid, (D_RADIUS / TABLE_LENGTH) * size, (D_RADIUS / TABLE_WIDTH) * size, 0, Math.PI * 0.5, Math.PI * 1.5)
     ctx.stroke()
 
     mark(BAULK_LINE_X, TABLE_WIDTH / 2 + D_RADIUS * 0.9)
@@ -157,6 +242,77 @@ function feltTexture(): THREE.CanvasTexture {
     // Trilinear mipmapping with the anisotropy cap is what stops the flicker:
     // minified baize sampled without it shimmers at every grazing angle the cue
     // camera has, and the shimmer reads as texture crawling during transitions.
+    texture.generateMipmaps = true
+    texture.minFilter = THREE.LinearMipmapLinearFilter
+    texture.magFilter = THREE.LinearFilter
+    texture.wrapS = THREE.RepeatWrapping
+    texture.wrapT = THREE.RepeatWrapping
+    texture.anisotropy = MAX_ANISO
+    return texture
+  })
+}
+
+/**
+ * A woven-cloth normal map, so the bed is lit as fabric rather than matte paint.
+ *
+ * The colour map above carries the tone and the markings; this carries the surface. It
+ * is what lets the near-white lamp highlight break up across the nap instead of sitting
+ * on the bed as one dead flat sheet, and it is the difference between "green plane" and
+ * "baize" at the cue camera's low angle.
+ *
+ * Encoded from a height field by central difference rather than authored as RGB, so the
+ * weave stays coherent under mipmapping — a hand-picked set of RGB vectors moires as
+ * soon as it is minified. Tiled hard (60—) and kept low-contrast for the same reason:
+ * visible threads at the overhead distance would alias into a shimmer across the bed.
+ */
+function feltNormalTexture(): THREE.CanvasTexture {
+  return cachedTexture('felt-normal', () => {
+    const size = 256
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')!
+    const img = ctx.createImageData(size, size)
+    const d = img.data
+    // Plain weave: warp and weft threads alternate over and under on a checkerboard,
+    // so each cell's height is the ridge of whichever thread is on top.
+    const height = (x: number, y: number): number => {
+      const cx = Math.floor(x / 8)
+      const cy = Math.floor(y / 8)
+      const over = (cx + cy) % 2 === 0
+      const u = ((x % 8) + 8) % 8
+      const v = ((y % 8) + 8) % 8
+      // Ridge profile across the thread: sin gives the rounded crown of a yarn.
+      const warpRidge = Math.sin((u / 8) * Math.PI) * (over ? 1 : 0.55)
+      const weftRidge = Math.sin((v / 8) * Math.PI) * (over ? 0.55 : 1)
+      return Math.max(warpRidge, weftRidge)
+    }
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        // Central difference on the height field. Wrap the taps so the normal map tiles
+        // with the colour map instead of showing a seam line around the bed.
+        const hl = height((x - 1 + size) % size, y)
+        const hr = height((x + 1) % size, y)
+        const hd = height(x, (y - 1 + size) % size)
+        const hu = height(x, (y + 1) % size)
+        // 8 is the sample spacing, so it cancels the divisor; the rest is a gain that
+        // keeps the perturbation gentle — baize is nearly flat, and a strong normal here
+        // would look like hammered metal.
+        const nx = (hl - hr) * 0.9
+        const ny = (hd - hu) * 0.9
+        const nz = 1
+        const len = Math.sqrt(nx * nx + ny * ny + nz * nz)
+        const i = (y * size + x) * 4
+        // Normal maps are data, not colour: no sRGB tag here, for the same reason the
+        // wood roughness map is left linear.
+        d[i] = ((nx / len) * 0.5 + 0.5) * 255
+        d[i + 1] = ((ny / len) * 0.5 + 0.5) * 255
+        d[i + 2] = ((nz / len) * 0.5 + 0.5) * 255
+        d[i + 3] = 255
+      }
+    }
+    ctx.putImageData(img, 0, 0)
+    const texture = new THREE.CanvasTexture(canvas)
     texture.generateMipmaps = true
     texture.minFilter = THREE.LinearMipmapLinearFilter
     texture.magFilter = THREE.LinearFilter
@@ -201,29 +357,210 @@ function glowTexture(): THREE.CanvasTexture {
   })
 }
 
+/**
+ * Deterministic value noise on a wrapping lattice, so the field tiles.
+ *
+ * Hand-rolled rather than pulled from a library: the table needs exactly two kinds of
+ * grain — warped growth rings and stretched pores — and both want this same field at
+ * different frequencies and aspect ratios. Hash-based, so the figure is identical on
+ * every load and the palette can be retuned without the wood moving underneath it.
+ */
+function woodHash(x: number, y: number): number {
+  let h = Math.imul(x, 0x27d4eb2d) ^ Math.imul(y, 0x165667b1)
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d)
+  h ^= h >>> 12
+  h = Math.imul(h, 0x297a2d39)
+  h ^= h >>> 15
+  return (h >>> 0) / 4294967296
+}
+
+function tileNoise(u: number, v: number, period: number): number {
+  const x = u * period
+  const y = v * period
+  const xi = Math.floor(x)
+  const yi = Math.floor(y)
+  const xf = x - xi
+  const yf = y - yi
+  // Smoothstep the interpolants: bilinear noise has a visible grid, and this is the
+  // cheapest way to remove it without a second smoothing pass.
+  const sx = xf * xf * (3 - 2 * xf)
+  const sy = yf * yf * (3 - 2 * yf)
+  const x0 = ((xi % period) + period) % period
+  const y0 = ((yi % period) + period) % period
+  const x1 = (x0 + 1) % period
+  const y1 = (y0 + 1) % period
+  const n00 = woodHash(x0, y0)
+  const n10 = woodHash(x1, y0)
+  const n01 = woodHash(x0, y1)
+  const n11 = woodHash(x1, y1)
+  const a = n00 + (n10 - n00) * sx
+  const b = n01 + (n11 - n01) * sx
+  return a + (b - a) * sy
+}
+
+function tileFbm(u: number, v: number, period: number, octaves: number): number {
+  let sum = 0
+  let amp = 1
+  let norm = 0
+  let p = period
+  for (let o = 0; o < octaves; o++) {
+    sum += tileNoise(u, v, p) * amp
+    norm += amp
+    amp *= 0.5
+    p *= 2
+  }
+  return sum / norm
+}
+
+let woodGrainPair: { color: HTMLCanvasElement; rough: HTMLCanvasElement } | null = null
+
+/**
+ * Flat-sawn mahogany, generated as a colour map and a matching roughness map.
+ *
+ * The previous texture was horizontal scanlines with a few white dashes on top, which
+ * read as painted stripes rather than timber. Real flat-sawn figure is growth rings
+ * whose radius wanders: the board is cut off-centre from the log, so the rings appear
+ * as wide nested arches, and the narrow dark latewood band between the open earlywood
+ * is what gives mahogany its contrast.
+ *
+ * Two decisions worth stating. The ring centre sits well below the board and the radius
+ * is squashed vertically, which is what turns circles into arches — concentric circles
+ * centred on the face would read as a sliced tree trunk, not a rail. And the map is
+ * mapped 1:1 per face with clamped edges rather than tiled, because an arch pattern has
+ * no seamless repeat; the wrap modes below would only hide the seam.
+ *
+ * The roughness map is the half that sells "polished". Lacquer lies over the earlywood
+ * and stays glossy, while the latewood band and the open pores are too fine for a film
+ * to level and stay dull. Colour alone cannot express that contrast, so a flat-colour
+ * wood under a clearcoat still reads as plastic.
+ */
+function woodGrain(): { color: HTMLCanvasElement; rough: HTMLCanvasElement } {
+  if (woodGrainPair) return woodGrainPair
+  const size = 512
+  const color = document.createElement('canvas')
+  color.width = size
+  color.height = size
+  const rough = document.createElement('canvas')
+  rough.width = size
+  rough.height = size
+  const cctx = color.getContext('2d')!
+  const rctx = rough.getContext('2d')!
+  const cimg = cctx.createImageData(size, size)
+  const rimg = rctx.createImageData(size, size)
+  const cd = cimg.data
+  const rd = rimg.data
+
+  const cx = size * 0.5
+  const cy = size * 2.6
+  const squash = 0.55
+  const ringFreq = 13
+  const EARLY_R = 126
+  const EARLY_G = 60
+  const EARLY_B = 38
+  const LATE_R = 46
+  const LATE_G = 18
+  const LATE_B = 11
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = x / size
+      const v = y / size
+      // Warping the ring radius is what separates sawn timber from printed stripes.
+      const warp = tileFbm(u, v, 8, 3) - 0.5
+      const drift = tileFbm(u, v, 4, 2)
+      const dx = x - cx
+      const dy = (y - cy) * squash
+      const dist = Math.sqrt(dx * dx + dy * dy) / size
+      const t = dist * ringFreq + warp * 1.7 + drift * 0.3
+      const frac = t - Math.floor(t)
+      // A triangle raised to a high power is a narrow band — the latewood line.
+      const tri = 1 - Math.abs(frac * 2 - 1)
+      const late = Math.pow(tri, 10)
+      // Pores: open-grain flecks, compressed in v so they stretch along the grain.
+      // Sampled with a stretched u so the field is not square-checkered.
+      const pore = Math.pow(tileFbm(u * 0.3, v * 2.4, 32, 1), 3)
+
+      const mix = Math.min(1, late * 0.9 + drift * 0.28)
+      const pk = pore * 0.55
+      const i = (y * size + x) * 4
+      cd[i] = (EARLY_R + (LATE_R - EARLY_R) * mix) * (1 - pk)
+      cd[i + 1] = (EARLY_G + (LATE_G - EARLY_G) * mix) * (1 - pk * 0.92)
+      cd[i + 2] = (EARLY_B + (LATE_B - EARLY_B) * mix) * (1 - pk * 0.85)
+      cd[i + 3] = 255
+
+      const rv = (0.13 + late * 0.1 + pore * 0.42 + drift * 0.05) * 255
+      rd[i] = rv
+      rd[i + 1] = rv
+      rd[i + 2] = rv
+      rd[i + 3] = 255
+    }
+  }
+  cctx.putImageData(cimg, 0, 0)
+  rctx.putImageData(rimg, 0, 0)
+  woodGrainPair = { color, rough }
+  return woodGrainPair
+}
+
 function woodTexture(): THREE.CanvasTexture {
   return cachedTexture('wood', () => {
+    const texture = new THREE.CanvasTexture(woodGrain().color)
+    texture.colorSpace = THREE.SRGBColorSpace
+    texture.anisotropy = MAX_ANISO
+    return texture
+  })
+}
+
+/**
+ * The same figure as a roughness map, sharing the colour map's UVs exactly.
+ *
+ * Deliberately not sRGB: roughness is a linear channel, and tagging it as colour data
+ * gamma-encodes it into a visibly wrong, too-glossy curve.
+ */
+function woodRoughnessTexture(): THREE.CanvasTexture {
+  return cachedTexture('wood-rough', () => {
+    const texture = new THREE.CanvasTexture(woodGrain().rough)
+    texture.anisotropy = MAX_ANISO
+    return texture
+  })
+}
+
+/**
+ * Brass, with the roughness broken up so it is not one uniform mirror.
+ *
+ * Hand-polished brass is never evenly rough: the polish leaves swirl marks, and the
+ * recesses hold a duller tarnish. A constant roughness on a metal turns the whole part
+ * into a featureless highlight, which is what made the original trim read as flat gold
+ * plastic. The variation here is fine and low-contrast on purpose — enough to break the
+ * specular into something with structure, not enough to look noisy or dirty.
+ */
+function brassRoughnessTexture(): THREE.CanvasTexture {
+  return cachedTexture('brass-rough', () => {
     const size = 256
     const canvas = document.createElement('canvas')
     canvas.width = size
     canvas.height = size
     const ctx = canvas.getContext('2d')!
-    // Mahogany: deep red-brown figure, the tone the rails read as under lamp light.
-    ctx.fillStyle = '#5c2d1e'
-    ctx.fillRect(0, 0, size, size)
-    for (let y = 0; y < size; y += 4) {
-      const tone = 70 + Math.random() * 45
-      ctx.fillStyle = `rgb(${Math.round(tone * 1.15)}, ${Math.round(tone * 0.5)}, ${Math.round(tone * 0.34)})`
-      ctx.fillRect(0, y, size, 2)
+    const img = ctx.createImageData(size, size)
+    const d = img.data
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const u = x / size
+        const v = y / size
+        // Swirl: noise domain-warped around a centre, the way a rotary buff leaves it.
+        const a = tileFbm(u, v, 4, 2) * Math.PI * 2
+        const swirl = tileFbm(u + Math.cos(a) * 0.12, v + Math.sin(a) * 0.12, 6, 3)
+        const fine = tileFbm(u * 0.2, v * 3, 48, 1)
+        const rv = Math.min(1, Math.max(0, 0.17 + (swirl - 0.5) * 0.3 + (fine - 0.5) * 0.12)) * 255
+        const i = (y * size + x) * 4
+        d[i] = rv
+        d[i + 1] = rv
+        d[i + 2] = rv
+        d[i + 3] = 255
+      }
     }
-    ctx.fillStyle = 'rgba(255,255,255,0.08)'
-    for (let i = 0; i < 26; i++) {
-      const x = Math.random() * size
-      const y = Math.random() * size
-      ctx.fillRect(x, y, 60, 1)
-    }
+    ctx.putImageData(img, 0, 0)
     const texture = new THREE.CanvasTexture(canvas)
-    texture.colorSpace = THREE.SRGBColorSpace
+    texture.anisotropy = MAX_ANISO
     return texture
   })
 }
@@ -232,7 +569,7 @@ function woodTexture(): THREE.CanvasTexture {
  * A straight-grained cue timber: ash for the shaft, dark maple for the butt.
  *
  * Cue grain runs lengthwise along the taper, so the canvas is ruled with long
- * vertical figure lines and only slight tone drift between them — a cue's beauty
+ * vertical figure lines and only slight tone drift between them — a cue's beauty
  * is in its even, narrow stripes rather than the wide irregular plank figure the
  * table wood uses.
  */
@@ -302,10 +639,25 @@ function envTexture(): THREE.CanvasTexture {
     grad.addColorStop(1, '#15181d')
     ctx.fillStyle = grad
     ctx.fillRect(0, 0, w, h)
-    ctx.fillStyle = 'rgba(255,244,214,0.85)'
-    ctx.fillRect(w * 0.28, h * 0.36, w * 0.44, 6)
-    ctx.fillRect(w * 0.3, h * 0.4, w * 0.4, 4)
-    ctx.fillStyle = 'rgba(120,90,60,0.9)'
+    // The overhead lamp as a bright soft-edged band. This is the single most important
+    // element in the map: it is what the clearcoat on the wood and the metalness of the
+    // brass both reflect, and a thin hard-edged line here is what produces the long
+    // specular streak running down a polished rail. Soft edges and a secondary
+    // lower-intensity pass give the highlight some structure rather than one hard line.
+    ctx.fillStyle = 'rgba(255,248,226,0.92)'
+    ctx.fillRect(w * 0.26, h * 0.345, w * 0.48, 9)
+    ctx.fillStyle = 'rgba(255,240,206,0.55)'
+    ctx.fillRect(w * 0.23, h * 0.375, w * 0.54, 5)
+    ctx.fillRect(w * 0.29, h * 0.40, w * 0.42, 3)
+    // Two dimmer fittings further round the room, so the reflection in the brass is not
+    // a single lonely streak. A polished metal part reads as expensive when it has
+    // several highlights to choose between.
+    ctx.fillStyle = 'rgba(255,236,198,0.3)'
+    ctx.fillRect(w * 0.03, h * 0.4, w * 0.13, 4)
+    ctx.fillRect(w * 0.84, h * 0.4, w * 0.13, 4)
+    // The warm band where wall meets floor — the room's bounce, and what keeps the
+    // underside of the rails from reflecting pure black.
+    ctx.fillStyle = 'rgba(150,112,72,0.92)'
     ctx.fillRect(0, h * 0.6, w, 26)
     const texture = new THREE.CanvasTexture(canvas)
     texture.colorSpace = THREE.SRGBColorSpace
@@ -375,8 +727,8 @@ class BallRig {
   /**
    * Puts a ball back into play, the counterpart to the sink.
    *
-   * A ball that comes back — the cue ball into hand after an in-off, a colour the rules
-   * re-spot — used to be teleported onto its spot, which reads as a glitch rather than
+   * A ball that comes back — the cue ball into hand after an in-off, a colour the rules
+   * re-spot — used to be teleported onto its spot, which reads as a glitch rather than
    * as the table being re-racked. It comes up off the cloth instead, over the same
    * fraction of a second the sink takes going down, so the two ends of a ball's journey
    * off and back onto the table look like one motion.
@@ -448,7 +800,8 @@ export class Scene3D {
    * view-dependent orientation from whichever camera happens to be drawing.
    */
   private lamp!: THREE.SpotLight
-  /** Which view the player has asked for. The rig follows it unless a shot overrides it. */
+  /** Which view the player has asked for. The rig follows it unless a shot or a
+   * placement overrides it. */
   private cameraMode: 'AIM' | 'TOP_DOWN' = 'AIM'
   /** True while a shot is being watched, which is when the camera follows the balls. */
   private tracking = false
@@ -480,6 +833,37 @@ export class Scene3D {
   private ghostPos = new THREE.Vector2(BAULK_LINE_X, TABLE_WIDTH / 2)
   /** Whether the ghost is being shown at all this frame. */
   private placementActive = false
+  /** Called once the placement camera move back to gameplay has landed. */
+  private placementArrival: (() => void) | null = null
+
+  /**
+   * Where the cue-ball placement camera move is: not happening, or in flight.
+   *
+   * Held here rather than in the frame loop so the scene is the single authority on it.
+   * The loop asks every frame whether input is being refused, and the rig's mode is
+   * resolved from this before anything else, which is what stops a stale
+   * `setCameraMode` from the player-facing toggle fighting a transition in progress.
+   */
+  private placementTransition: PlacementTransition = noPlacementTransition()
+  /**
+   * Whether the overhead placement view is being held, as opposed to merely flying
+   * towards it. Set when the move into the view begins, cleared when the move back out
+   * begins, so the overlays and the camera agree on which of the two is happening.
+   */
+  private placementViewHeld = false
+  /**
+   * The confirmed cue-ball position, held while the camera flies home after a placement.
+   *
+   * The snapshot that carries the placed cue ball arrives after the camera has already
+   * started its flight back, and until it does the snapshot still describes the ball as
+   * potted or absent. Driving the cue ball from the snapshot alone through that window
+   * shows the player the ball they just placed disappear, then reappear somewhere the
+   * transition is already aimed at. While this is set the cue ball is drawn from the
+   * confirmed position instead, and it is cleared the moment the server's own snapshot
+   * says the ball is down - which is also when the snapshot takes over with the same
+   * number, so the handover is invisible.
+   */
+  private placementCueLock: { x: number; y: number } | null = null
 
   static create(canvas: HTMLCanvasElement, width: number, height: number): Scene3D | null {
     try {
@@ -508,7 +892,7 @@ export class Scene3D {
     MAX_ANISO = Math.min(this.renderer.capabilities.getMaxAnisotropy(), 4)
     this.renderer.shadowMap.enabled = true
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
-    // Everything this light can see is static, so the map is rendered exactly once —
+    // Everything this light can see is static, so the map is rendered exactly once —
     // the flag is raised after the scene is fully built and never touched again.
     this.renderer.shadowMap.autoUpdate = false
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
@@ -518,9 +902,11 @@ export class Scene3D {
 
     this.scene.background = new THREE.Color('#161d27')
 
-    // Near plane at 0.1: a camera pulled close to a cushion nose or over a pocket
-    // jaw must never have the geometry it is looking at clipped by the near plane.
-    this.camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 20000)
+    // Near plane at CAMERA_NEAR_MM (20), not 0.1 — that constant's comment carries the
+    // depth-precision argument. A camera pulled close to a cushion nose or over a pocket
+    // jaw still has those surfaces well inside the frustum; what 0.1 bought was nothing
+    // but a depth buffer too coarse to separate the cloth from the apron under it.
+    this.camera = new THREE.PerspectiveCamera(50, width / height, CAMERA_NEAR_MM, 20000)
     this.rig = initialRigState(width / height)
     this.camera.position.set(0, 1400, 1750)
     this.camera.lookAt(0, 0, 0)
@@ -544,10 +930,11 @@ export class Scene3D {
   /**
    * Build-time guards on the mechanisms behind cloth banding artifacts.
    *
-   * The first guard is the one that actually killed the stripes: the bed never
-   * samples the depth map, so no shadow-map artifact of any bias, frustum depth
-   * or camera angle can land on it. The texture guards keep the felt's own
-   * sampling calm (moire without mipmaps, shimmer without aniso). A violation
+   * Three separate mechanisms, all of which have produced visible banding on the bed at
+   * some point: the bed must never sample the depth map, so no shadow-map artifact of
+   * any bias, frustum depth or camera angle can land on it; the depth buffer must stay
+   * fine enough to separate the bed's own coplanar surfaces; and the felt's own
+   * sampling must stay calm (moire without mipmaps, shimmer without aniso). A violation
    * means somebody reintroduced a bug that took real diagnosis to find, so it is
    * announced rather than suffered silently.
    */
@@ -563,6 +950,76 @@ export class Scene3D {
       }
     })
     if (clothReceives) problems.push('cloth is receiving depth-map shadows (shadow acne will return)')
+
+    // Depth-precision guard. The bed's tightest coplanar pair is the cloth plane at
+    // y=0 and the apron box's top face at y=-1, a 1mm gap that spans the whole playing
+    // surface. Assert the depth buffer can actually resolve it at the farthest the
+    // camera rig ever gets, which is the overhead view. Approximate perspective
+    // granularity is z^2 * (far-near) / (near * far * 2^depthBits); the ask is a 10x
+    // margin, so a drop below a tenth of the gap is a warning rather than a hard fail
+    // (depth buffer size is not observable from here, so 24-bit is the common case).
+    const clothGapMm = 1
+    const overheadMm = 4500
+    const cam = this.camera
+    const bits = 24
+    const granularity =
+      (overheadMm * overheadMm * (cam.far - cam.near)) / (cam.near * cam.far * 2 ** bits)
+    if (granularity * 10 > clothGapMm) {
+      problems.push(
+        `camera near plane ${cam.near}mm resolves only ${granularity.toFixed(3)}mm at ` +
+          `${overheadMm}mm — the cloth and the apron ${clothGapMm}mm apart will z-fight`
+      )
+    }
+
+    // Geometry guards. The bevel on an ExtrudeGeometry expands the profile *outward*,
+    // which for a cushion means its inner face ends up inside the playing surface, and
+    // for the rail cap means the frame overhangs the cloth. Both are invisible to a
+    // typecheck and both change where the ball appears to hit, so they are asserted here
+    // off real world-space bounding boxes rather than left to review.
+    const tagged = new Map<string, THREE.Mesh>()
+    this.scene.traverse((o) => {
+      const mesh = o as THREE.Mesh
+      const tag = (mesh.userData as { physicsSurface?: string } | undefined)?.physicsSurface
+      if (mesh.isMesh && tag) tagged.set(tag, mesh)
+    })
+
+    // The cloth and the nearest apron surface must stay 1mm apart, and the rail cap's top
+    // face must be the surface that gap is measured to.
+    const cap = tagged.get('railCapTop')
+    if (cap) {
+      cap.updateWorldMatrix(true, false)
+      const capTop = new THREE.Box3().setFromObject(cap).max.y
+      if (Math.abs(capTop - -1) > 0.01) {
+        problems.push(`rail cap top face is at y=${capTop.toFixed(2)}mm, expected -1mm`)
+      }
+    } else {
+      problems.push('rail cap is not tagged, so its top face is unguarded')
+    }
+
+    // Every cushion's inner face must sit exactly on its physics plane. These are the
+    // planes the ball bounces off, so a cushion that has drifted inward reads as the ball
+    // clipping into the rubber.
+    const HALF_L_MM = TABLE_LENGTH / 2
+    const HALF_W_MM = TABLE_WIDTH / 2
+    for (const [tag, mesh] of tagged) {
+      if (!tag.startsWith('cushion:')) continue
+      const [, axis, side] = tag.split(':')
+      mesh.updateWorldMatrix(true, false)
+      const box = new THREE.Box3().setFromObject(mesh)
+      const inner = axis === 'x' ? Math.min(Math.abs(box.min.z), Math.abs(box.max.z)) : Math.min(Math.abs(box.min.x), Math.abs(box.max.x))
+      const expected = axis === 'x' ? HALF_W_MM : HALF_L_MM
+      if (Math.abs(inner - expected) > 0.5) {
+        problems.push(`${tag} inner face at ${inner.toFixed(2)}mm, physics plane is ${expected}mm`)
+      }
+      if (Math.abs(box.max.y - CUSHION_H) > 0.5) {
+        problems.push(`${tag} top at ${box.max.y.toFixed(2)}mm, expected ${CUSHION_H}mm`)
+      }
+      if (Math.abs(box.min.y) > 0.5) {
+        problems.push(`${tag} base at ${box.min.y.toFixed(2)}mm, expected 0mm`)
+      }
+      if (side !== '1' && side !== '-1') problems.push(`${tag} has no valid side`)
+    }
+
     const tex = this.feltTex
     if (tex) {
       if (!tex.generateMipmaps) problems.push('felt texture is missing mipmaps')
@@ -579,13 +1036,13 @@ export class Scene3D {
     // One lamp over the table, like a real snooker room: a warm cone strictly over the
     // bed, the only shadow caster in the scene. It used to be three shadow-casting
     // spotlights with 1024² maps — three shadow renders every frame for pools of light
-    // that baked textures and contact blobs already supply — which is exactly the
+    // that baked textures and contact blobs already supply — which is exactly the
     // overhead a low-end GPU does not have to spend.
     const lamp = (this.lamp = new THREE.SpotLight(0xffd9a0, 4600000, 0, Math.PI / 4.6, 0.6, 2))
     lamp.position.set(0, 1750, 0)
     lamp.target.position.set(0, 0, 0)
     lamp.castShadow = true
-    // 2048² costs nothing per frame — the map is baked once over the static set —
+    // 2048² costs nothing per frame — the map is baked once over the static set —
     // and the finer texels are what let the acne fixes stay gentle.
     lamp.shadow.mapSize.set(2048, 2048)
     // The frustum is squeezed onto the table. Stripe artifacts on the baize are a
@@ -616,34 +1073,78 @@ export class Scene3D {
     // warm from above and dark at the floor, and the two directionals put colour
     // on every wall from more than one side. Intensities sit well under the lamp's
     // contribution so the cloth keeps a soft gradient rather than a hot centre.
-    const ambient = new THREE.AmbientLight(0xdfe8ff, 0.5)
+    // Ambient is low and slightly cool. It exists to keep the shadowed side of the rails
+    // from crushing to black, not to light anything — at the old 0.5 it was flattening
+    // the wood's figure by flooding the same value into both the lit and unlit sides,
+    // which is exactly the "evenly lit, nothing has form" failure. A directional
+    // contrast is what makes a bevel read as a bevel.
+    const ambient = new THREE.AmbientLight(0xdfe8ff, 0.28)
     this.scene.add(ambient)
 
-    const hemi = new THREE.HemisphereLight(0xffe2b8, 0x2e2419, 0.5)
+    // Hemisphere keeps the room warm from above and dark at the floor, so the underside
+    // of the rails picks up bounce rather than reading as a black void.
+    const hemi = new THREE.HemisphereLight(0xffe2b8, 0x2e2419, 0.42)
     this.scene.add(hemi)
 
-    const fill = new THREE.DirectionalLight(0x9fc0e8, 0.45)
+    // Cool fill from one side, warm key-side fill from the other, so every visible
+    // surface receives light of two different hues. This is what separates the brass
+    // from the wood behind it — a single-hue scene gives metal nowhere to put its
+    // warm/cool split, and brass ends up looking like tinted plastic.
+    const fill = new THREE.DirectionalLight(0x9fc0e8, 0.4)
     fill.position.set(2200, 1200, -1100)
     this.scene.add(fill)
 
-    const warm = new THREE.DirectionalLight(0xffd9a8, 0.3)
+    const warm = new THREE.DirectionalLight(0xffd9a8, 0.32)
     warm.position.set(-2200, 1400, 1600)
     this.scene.add(warm)
+
+    // A low grazing kicker from the front-right, just above rail height. It does almost
+    // nothing for the bed — which faces up, so a near-horizontal light barely touches it
+    // — but it rakes across the vertical faces of the apron and the cushion ends, which
+    // is where a premium table is actually read. Without it the whole body of the table
+    // sits in the lamp's ambient wash and the milled detail has no edge to catch.
+    // No shadow: this is a shaping light, and a second shadow map is not worth it.
+    const kicker = new THREE.DirectionalLight(0xfff0d4, 0.55)
+    kicker.position.set(2600, 320, 1900)
+    this.scene.add(kicker)
+
+    // A tight specular source placed for the highlight it draws down the brass rail,
+    // not for the light it contributes. Warm and narrow, aimed at the rail line.
+    const railSpec = new THREE.DirectionalLight(0xfff4e0, 0.4)
+    railSpec.position.set(900, 900, 2400)
+    this.scene.add(railSpec)
   }
 
   private buildTable(): void {
-    const pad = 64
+    const pad = APRON_PAD
     const cloth = new THREE.Mesh(
       new THREE.PlaneGeometry(TABLE_LENGTH, TABLE_WIDTH),
       // High-grade matte baize: 0.88 roughness, a whisper of metalness. The texture
       // carries the colour (mapped white, so tinting stays in one place) and the
       // baked markings; mipmapping on that texture is what keeps this surface calm
       // from the low cue angle.
-      new THREE.MeshStandardMaterial({
+      // MeshPhysicalMaterial rather than Standard, and the reason is one term: sheen.
+      // Cloth is a fuzzy dielectric surface — light that hits it scatters sideways off
+      // millions of fibre ends rather than mirroring. Standard has no term for that, so
+      // the bed could only ever be "matte", and matte is what made it read as painted.
+      // Sheen adds a soft grazing-angle bloom along the far rail that the lamp's
+      // falloff cannot produce on its own. Clearcoat is deliberately NOT used here: the
+      // clearcoat lobe is glossy and specular, which is the opposite of baize.
+      new THREE.MeshPhysicalMaterial({
         map: (this.feltTex = feltTexture()),
+        // Normal map at 60— so the weave threads land near a millimetre apart on the bed,
+        // which is the real pitch of worsted cloth. Any coarser and it reads as canvas.
+        normalMap: feltNormalTexture(),
+        normalScale: new THREE.Vector2(0.35, 0.35),
         color: 0xffffff,
-        roughness: 0.88,
-        metalness: 0.02
+        roughness: 0.94,
+        metalness: 0,
+        // Sheen colour is the cloth's own hue, slightly lifted: a white sheen would wash
+        // the bed out at grazing angles and kill the green.
+        sheen: 0.55,
+        sheenColor: new THREE.Color(0x4fd07a),
+        sheenRoughness: 0.75,
+        envMapIntensity: 0.35
       })
     )
     cloth.rotation.x = -Math.PI / 2
@@ -651,103 +1152,603 @@ export class Scene3D {
     // the textbook generator of shadow acne: every texel of a 2048² map stretched
     // across the bed self-shadows in bands, and the artifacts move with the camera
     // angle. The lamp washes the cloth directly, the baked AO lives in the texture,
-    // and grounding is sold by the ball contact blobs — no depth reception needed.
+    // and grounding is sold by the ball contact blobs — no depth reception needed.
     cloth.receiveShadow = false
     this.scene.add(cloth)
 
-    const apron = new THREE.Mesh(
-      new THREE.BoxGeometry(TABLE_LENGTH + pad, 130, TABLE_WIDTH + pad),
-      // Glossy polished mahogany: low roughness picks up the env map's lamp band as
-      // a specular streak along the rail, which is the polished-wood read.
-      new THREE.MeshStandardMaterial({ map: woodTexture(), roughness: 0.3, metalness: 0.05, envMapIntensity: 1.0 })
-    )
-    apron.position.y = -66
+    // The apron becomes three stacked pieces rather than one 130mm box: a rail cap with a
+    // moulded outer face, a recessed inner rebate, and the main body below it. All three
+    // share the original outer footprint (TABLE_LENGTH + pad by TABLE_WIDTH + pad) and
+    // the original top face height, because the depth-precision guard in `selfCheck`
+    // asserts on the cloth-to-apron gap — that assertion is why the cap's underside sits
+    // at y=-1 and must stay there.
+const outerL = APRON_OUTER_L
+    const outerW = APRON_OUTER_W
+    // Satin-lacquered mahogany. Clearcoat carries the lacquer film, and that is the
+    // whole point: clearcoat sits on top of the base layer with its own roughness, so
+    // the grain can stay matte-ish and the film over it stays glossy. Faking this by
+    // dropping the base roughness to 0.3 gave the *grain* a specular highlight, which
+    // is backwards — real polished wood shows a sharp reflection of the lamp floating
+    // over a soft diffuse figure, and only the two-layer model produces that.
+    // clearcoatRoughness 0.12 keeps the highlight crisp rather than hazy; the old flat
+    // 0.3 produced a broad sheen that looked like worn plastic.
+    const apronMat = new THREE.MeshPhysicalMaterial({
+      map: woodTexture(),
+      roughnessMap: woodRoughnessTexture(),
+      color: 0xffffff,
+      roughness: 0.42,
+      metalness: 0,
+      clearcoat: 0.85,
+      clearcoatRoughness: 0.12,
+      envMapIntensity: 1.15
+    })
+    // The main body: same outer footprint and same top face as the original box, so the
+    // depth guard's 1mm cloth-to-apron gap is untouched. Only the faces *between* this
+    // and the cap change.
+    const apron = new THREE.Mesh(new THREE.BoxGeometry(outerL, 122, outerW), apronMat)
+    apron.position.y = -72
     apron.castShadow = true
     this.scene.add(apron)
 
-    const legGeo = new THREE.BoxGeometry(90, 470, 90)
-    const legMat = new THREE.MeshStandardMaterial({ map: woodTexture(), roughness: 0.45, metalness: 0.05, envMapIntensity: 0.8 })
+    // Recessed panel construction on all four apron faces — the hallmark of premium
+    // cabinetmaking. Each face has a raised field panel framed by a mitred moulding.
+    // This breaks up the flat box and catches light like real joinery.
+    const panelInset = 18
+    const panelDepth = 4
+    const mouldingWidth = 22
+    const fieldSizeL = outerL - panelInset * 2 - mouldingWidth * 2
+    const fieldSizeW = outerW - panelInset * 2 - mouldingWidth * 2
+    const panelMat = new THREE.MeshPhysicalMaterial({
+      map: woodTexture(),
+      roughnessMap: woodRoughnessTexture(),
+      color: 0xffffff,
+      roughness: 0.48,
+      metalness: 0,
+      clearcoat: 0.7,
+      clearcoatRoughness: 0.15,
+      envMapIntensity: 1.0
+    })
+    const mouldingMat = new THREE.MeshPhysicalMaterial({
+      map: woodTexture(),
+      roughnessMap: woodRoughnessTexture(),
+      color: 0xffffff,
+      roughness: 0.38,
+      metalness: 0,
+      clearcoat: 0.9,
+      clearcoatRoughness: 0.1,
+      envMapIntensity: 1.2
+    })
+
+    // Long faces (x-axis) - two panels each side, split at centre
+    for (const side of [-1, 1]) {
+      const z = side * (outerW / 2 - panelInset - mouldingWidth / 2)
+      // Centre divider
+      const divider = new THREE.Mesh(
+        new THREE.BoxGeometry(outerL - panelInset * 2, 4, 6),
+        mouldingMat
+      )
+      divider.position.set(0, -72, z)
+      divider.castShadow = true
+      this.scene.add(divider)
+
+      // Panels on each side of divider
+      for (const panelSide of [-1, 1]) {
+        const x = panelSide * (fieldSizeL / 2 + mouldingWidth)
+        const panel = new THREE.Mesh(
+          new THREE.BoxGeometry(fieldSizeL, 4, mouldingWidth),
+          panelMat
+        )
+        panel.position.set(x, -72, z)
+        panel.castShadow = true
+        this.scene.add(panel)
+      }
+
+      // Top and bottom moulding rails
+      for (const railY of [-12, -132]) {
+        const rail = new THREE.Mesh(
+          new THREE.BoxGeometry(outerL - panelInset * 2, 4, mouldingWidth),
+          mouldingMat
+        )
+        rail.position.set(0, railY, z)
+        rail.castShadow = true
+        this.scene.add(rail)
+      }
+    }
+
+    // Short faces (z-axis) - one panel each
+    for (const side of [-1, 1]) {
+      const x = side * (outerL / 2 - panelInset - mouldingWidth / 2)
+      const panel = new THREE.Mesh(
+        new THREE.BoxGeometry(mouldingWidth, 4, outerW - panelInset * 2 - mouldingWidth * 2),
+        panelMat
+      )
+      panel.position.set(x, -72, 0)
+      panel.castShadow = true
+      this.scene.add(panel)
+
+      // Vertical mouldings
+      for (const railY of [-12, -132]) {
+        const rail = new THREE.Mesh(
+          new THREE.BoxGeometry(mouldingWidth, 4, outerW - panelInset * 2 - mouldingWidth * 2),
+          mouldingMat
+        )
+        rail.position.set(x, railY, 0)
+        rail.castShadow = true
+        this.scene.add(rail)
+      }
+    }
+
+    // Rail cap: the moulded top of the frame, from -1 down to -13. This is the piece that
+    // replaces the box's single hard edge with a bevelled one, which is what lets the lamp
+    // draw a highlight along it instead of terminating abruptly.
+    //
+    // All four rails are one mesh with one draw call. Its inner opening is the bed's own
+    // footprint, so the visible inner edge lands on the cloth edge and the 32mm between
+    // that and the outer face is the rail's width. The 5mm bevel is the chamfer: enough
+    // to catch a specular line, invisible as a shape change at gameplay distance.
+    const railCap = new THREE.Mesh(makeRailCapGeometry(), apronMat)
+    railCap.position.y = -1
+    railCap.castShadow = true
+    // Tagged so selfCheck can assert the cap's top face stays on the cloth's y=-1 plane.
+    railCap.userData.physicsSurface = 'railCapTop'
+    this.scene.add(railCap)
+
+    // Crown moulding on top of rail cap — a stepped ogee profile that catches three
+    // distinct highlight lines. This is what makes a rail read as hand-moulded millwork
+    // rather than a bevelled box. Sits at y=-1 so it doesn't change the physics surface.
+    const crownProfile = new THREE.Shape()
+    // Profile in (x, y): x runs across rail width (inner to outer), y runs up from cloth
+    crownProfile.moveTo(0, 0)           // Inner edge on cloth plane
+    crownProfile.lineTo(0, 1.5)         // Small vertical rise
+    crownProfile.quadraticCurveTo(4, 3, 8, 3)   // Cove up to first fillet
+    crownProfile.lineTo(12, 2)          // Fillet
+    crownProfile.quadraticCurveTo(16, 0.5, 20, 0.5)  // Ogee down
+    crownProfile.lineTo(26, 1)          // Small step
+    crownProfile.quadraticCurveTo(30, 2.5, 32, 2.5)  // Outer ogee up
+    crownProfile.lineTo(32, 0)          // Down to outer face
+    crownProfile.closePath()
+
+    const crownGeo = new THREE.ExtrudeGeometry(crownProfile, {
+      depth: APRON_OUTER_L,
+      bevelEnabled: false,
+      curveSegments: 8
+    })
+    crownGeo.rotateX(-Math.PI / 2)
+    crownGeo.translate(0, 1, 0) // Position so bottom lands at y=-1
+
+    const crownMat = new THREE.MeshPhysicalMaterial({
+      map: woodTexture(),
+      roughnessMap: woodRoughnessTexture(),
+      color: 0xffffff,
+      roughness: 0.35,
+      metalness: 0,
+      clearcoat: 0.95,
+      clearcoatRoughness: 0.08,
+      envMapIntensity: 1.3
+    })
+
+    // Long rails
+    for (const side of [-1, 1]) {
+      const crown = new THREE.Mesh(crownGeo, crownMat)
+      crown.rotation.y = -Math.PI / 2
+      crown.position.set(0, -1, side * (APRON_OUTER_W / 2))
+      crown.castShadow = true
+      this.scene.add(crown)
+    }
+    // Short rails
+    const crownShortGeo = new THREE.ExtrudeGeometry(crownProfile, {
+      depth: APRON_OUTER_W,
+      bevelEnabled: false,
+      curveSegments: 8
+    })
+    crownShortGeo.rotateX(-Math.PI / 2)
+    crownShortGeo.translate(0, 1, 0)
+    for (const side of [-1, 1]) {
+      const crown = new THREE.Mesh(crownShortGeo, crownMat)
+      crown.position.set(side * (APRON_OUTER_L / 2), -1, 0)
+      crown.castShadow = true
+      this.scene.add(crown)
+    }
+
+    // A recessed rebate under the cap — the reveal between the top rail and the body.
+    // Enhanced with a stepped profile: upper fillet, deep shadow gap, lower fillet.
+    // This three-part moulding is what makes furniture read as premium millwork.
+    const rebateUpper = new THREE.Mesh(
+      new THREE.BoxGeometry(outerL - 14, 2, outerW - 14),
+      new THREE.MeshStandardMaterial({ color: 0x1a0d07, roughness: 0.9, metalness: 0 })
+    )
+    rebateUpper.position.y = -14.5
+    this.scene.add(rebateUpper)
+
+    const rebateGap = new THREE.Mesh(
+      new THREE.BoxGeometry(outerL - 8, 5, outerW - 8),
+      new THREE.MeshStandardMaterial({ color: 0x0a0503, roughness: 1, metalness: 0 })
+    )
+    rebateGap.position.y = -17.5
+    this.scene.add(rebateGap)
+
+    const rebateLower = new THREE.Mesh(
+      new THREE.BoxGeometry(outerL - 14, 2, outerW - 14),
+      new THREE.MeshStandardMaterial({ color: 0x1a0d07, roughness: 0.9, metalness: 0 })
+    )
+    rebateLower.position.y = -20.5
+    this.scene.add(rebateLower)
+
+    // Legs take the same satin film as the apron but a touch less of it: they are further
+    // from the lamp's hot centre, and a matching gloss would pull the eye down off the
+    // bed. Same maps, so the grain runs continuous in colour from rail to leg.
+    const legMat = new THREE.MeshPhysicalMaterial({
+      map: woodTexture(),
+      roughnessMap: woodRoughnessTexture(),
+      color: 0xf2e8e0,
+      roughness: 0.5,
+      metalness: 0,
+      clearcoat: 0.6,
+      clearcoatRoughness: 0.18,
+      envMapIntensity: 0.9
+    })
+
+    // Legs: a turned column, not a post.
+    //
+    // A 90mm square box is the single loudest "this is a placeholder" signal on the table,
+    // and it is the part of a snooker table that is *supposed* to be turned — the profile
+    // below is the standard tournament leg: a moulded plinth, a torus, a long tapered
+    // shaft, a cove, then a capital block that meets the apron. LatheGeometry sweeps this
+    // profile around Y, which is exactly how the real one was made (on a lathe), and
+    // costs about 700 triangles per leg — a rounding error next to the bump the
+    // silhouette gives.
+    //
+    // The profile is deliberately not smooth. Every vertical tangent in it is a highlight
+    // line under the lamp, and those lines are the whole visual argument that the leg was
+    // turned rather than extruded; a smooth taper would just read as a cone.
+    // Polished brass. metalness is 1, not the previous 0.85: brass is a pure conductor with
+    // no dielectric component, and anything under 1 leaves a diffuse term that greys the
+    // metal down toward the colour of the plastic underneath. The colour is a touch
+    // warmer and less yellow than the old 0xc9a227, which read as toy gold under the
+    // 0xffd9a0 lamp; real polished brass picks up more of the lamp's own warmth and
+    // less saturated pigment. The roughness map does the rest.
+    const brassMat = new THREE.MeshStandardMaterial({
+      color: 0xd8b878,
+      metalness: 1,
+      roughness: 0.22,
+      roughnessMap: brassRoughnessTexture(),
+      envMapIntensity: 1.4
+    })
+
+    // Leg positions at the frame corners (outer apron footprint).
+    // Frame outer half-extents: HALF_L + pad/2, HALF_W + pad/2.
+    // This places legs under the frame corners, not under the pocket mouths.
+    const legX = HALF_L + pad / 2
+    const legZ = HALF_W + pad / 2
+
+    // Leg profile extended to reach from floor (y=-790) to apron bottom (y≈-131).
+    // Total height 664mm. Ferrule sits on floor at y=-790 (LEG_FLOOR_Y = -797, ferrule bottom at -790).
+    const LEG_FLOOR_Y = -797
+    const legProfile: Array<[number, number]> = [
+      [0, 0],
+      // Plinth: splayed foot, then the fillet under it.
+      [46, 0],
+      [46, 10],
+      [40, 14],
+      [38, 26],
+      // Torus above the plinth.
+      [44, 36],
+      [46, 44],
+      [44, 52],
+      [36, 60],
+      // Shaft: long, slightly concave taper — extended to span floor-to-apron.
+      [33, 307],
+      [30.5, 357],
+      [28.5, 417],
+      [27, 477],
+      [26, 527],
+      // Cove into the capital.
+      [27, 557],
+      [30, 575],
+      [38, 587],
+      [38, 599],
+      // Capital: the block the apron sits on. 664 tall overall, so the top lands at
+      // -133 — up inside the apron's bottom edge at -133, with no visible joint and no
+      // gap opening at the corner.
+      [44, 607],
+      [44, 623],
+      [46, 627],
+      [46, 664],
+      [0, 664]
+    ]
+    const legGeo = new THREE.LatheGeometry(
+      legProfile.map(([r, y]) => new THREE.Vector2(r, y)),
+      20
+    )
+    legGeo.computeVertexNormals()
+
     for (const sx of [-1, 1]) {
       for (const sz of [-1, 1]) {
         const leg = new THREE.Mesh(legGeo, legMat)
-        leg.position.set(sx * (HALF_L + pad / 2 - 80), -308, sz * (HALF_W + pad / 2 - 80))
+        leg.position.set(sx * legX, LEG_FLOOR_Y, sz * legZ)
+        leg.castShadow = true
         this.scene.add(leg)
+
+        // Brass foot ferrule. A turned leg almost always has a metal or cast shoe, and
+        // it does two jobs: it hides the plinth's contact with the floor, and it puts a
+        // bright accent at the bottom of the frame so the eye stops sliding off the
+        // table. 24 segments — the same silhouette scale as the column it caps.
+        const ferrule = new THREE.Mesh(new THREE.CylinderGeometry(47, 49, 14, 24), brassMat)
+        ferrule.position.set(sx * legX, LEG_FLOOR_Y + 7, sz * legZ)
+        this.scene.add(ferrule)
+
+        // Decorative brass collars at key transitions up the leg — these are the
+        // "rings" that separate turned sections on a premium table leg.
+        const collarMat = new THREE.MeshStandardMaterial({
+          color: 0xd8b878,
+          metalness: 1,
+          roughness: 0.18,
+          roughnessMap: brassRoughnessTexture(),
+          envMapIntensity: 1.4
+        })
+        // Collar at torus top (profile y=60)
+        const collar1 = new THREE.Mesh(new THREE.TorusGeometry(46, 3, 10, 24), collarMat)
+        collar1.rotation.x = -Math.PI / 2
+        collar1.position.set(sx * legX, LEG_FLOOR_Y + 60, sz * legZ)
+        this.scene.add(collar1)
+
+        // Collar at shaft/cove transition (profile y=527)
+        const collar2 = new THREE.Mesh(new THREE.TorusGeometry(36, 2.5, 10, 24), collarMat)
+        collar2.rotation.x = -Math.PI / 2
+        collar2.position.set(sx * legX, LEG_FLOOR_Y + 527, sz * legZ)
+        this.scene.add(collar2)
+
+        // Collar at capital base (profile y=607)
+        const collar3 = new THREE.Mesh(new THREE.TorusGeometry(44, 3, 10, 24), collarMat)
+        collar3.rotation.x = -Math.PI / 2
+        collar3.position.set(sx * legX, LEG_FLOOR_Y + 607, sz * legZ)
+        this.scene.add(collar3)
       }
     }
-
-    const brassMat = new THREE.MeshStandardMaterial({ color: 0xc9a227, roughness: 0.25, metalness: 0.85 })
     const halfInner = pad / 2 - 10
-    const trimDepth = 12
-    const trimSpecs: Array<[number, number, number, number, number]> = [
-      [TABLE_LENGTH + pad - 14, 14, trimDepth, 0, -HALF_W - halfInner],
-      [TABLE_LENGTH + pad - 14, 14, trimDepth, 0, HALF_W + halfInner],
-      [trimDepth, 14, TABLE_WIDTH + pad - 14, -HALF_L - halfInner, 0],
-      [trimDepth, 14, TABLE_WIDTH + pad - 14, HALF_L + halfInner, 0]
+    // A scaled unit cube has square corners and one hard specular edge, which is why the
+    // trim read as a flat gold sticker. Each rail instead gets a proper moulding: a small
+    // stepped section swept the length of the rail, so the lamp catches three separate
+    // highlight lines along it rather than one.
+    //
+    // Placement is unchanged from the boxes this replaces  14mm proud of the frame face
+    // and sitting at —halfInner  so the trim occupies exactly the same volume it did.
+    const trimRails: Array<[number, 'x' | 'z', 1 | -1]> = [
+      [TABLE_LENGTH + pad - 14, 'x', -1],
+      [TABLE_LENGTH + pad - 14, 'x', 1],
+      [TABLE_WIDTH + pad - 14, 'z', -1],
+      [TABLE_WIDTH + pad - 14, 'z', 1]
     ]
-    const trimGeo = new THREE.BoxGeometry(1, 1, 1)
-    for (const [tw, th, td, tx, tz] of trimSpecs) {
-      const trim = new THREE.Mesh(trimGeo, brassMat)
-      trim.scale.set(tw, th, td)
-      trim.position.set(tx, 2.5, tz)
+    const trimCache = new Map<number, THREE.ExtrudeGeometry>()
+    for (const [length, axis, side] of trimRails) {
+      const key = Math.round(length)
+      let geo = trimCache.get(key)
+      if (!geo) {
+        geo = makeBeadGeometry(key)
+        trimCache.set(key, geo)
+      }
+      const trim = new THREE.Mesh(geo, brassMat)
+      const place = trimTransform(key, axis, side, 2.5, halfInner)
+      trim.rotation.y = place.rotationY
+      trim.position.copy(place.position)
       this.scene.add(trim)
     }
-    const cornerGeo = new THREE.CylinderGeometry(26, 26, 8, 24)
+
+    // Corner castings. Enhanced with beveled base plate, stepped boss, domed cap, and
+    // subtle fastener heads — the hallmark of premium tournament tables where the rails
+    // are bolted through brass corner plates.
     for (const sx of [-1, 1]) {
       for (const sz of [-1, 1]) {
-        const corner = new THREE.Mesh(cornerGeo, brassMat)
-        corner.position.set(sx * (HALF_L + halfInner), 5, sz * (HALF_W + halfInner))
-        this.scene.add(corner)
+        const cx = sx * (HALF_L + halfInner)
+        const cz = sz * (HALF_W + halfInner)
+
+        // Base plate: beveled washer that sits on the rail cap, slightly recessed
+        const basePlate = new THREE.Mesh(
+          new THREE.CylinderGeometry(28, 28, 3, 32),
+          brassMat
+        )
+        basePlate.position.set(cx, 3.5, cz)
+        this.scene.add(basePlate)
+
+        // Beveled outer ring on base plate
+        const baseBevel = new THREE.Mesh(
+          new THREE.TorusGeometry(28, 2.5, 12, 32),
+          brassMat
+        )
+        baseBevel.rotation.x = -Math.PI / 2
+        baseBevel.position.set(cx, 5, cz)
+        this.scene.add(baseBevel)
+
+        // Main corner boss - stepped profile
+        const boss = new THREE.Mesh(new THREE.CylinderGeometry(19, 23, 7, 20), brassMat)
+        boss.position.set(cx, 9.5, cz)
+        this.scene.add(boss)
+
+        // Decorative collar at boss midpoint
+        const collar = new THREE.Mesh(
+          new THREE.TorusGeometry(21, 1.8, 10, 20),
+          brassMat
+        )
+        collar.rotation.x = -Math.PI / 2
+        collar.position.set(cx, 9.5, cz)
+        this.scene.add(collar)
+
+        // Domed cap
+        const dome = new THREE.Mesh(
+          new THREE.SphereGeometry(11, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2),
+          brassMat
+        )
+        dome.position.set(cx, 14.4, cz)
+        this.scene.add(dome)
+
+        // Four subtle fastener heads at the corners of the base plate
+        const fastenerMat = new THREE.MeshStandardMaterial({
+          color: 0xc8a068,
+          metalness: 1,
+          roughness: 0.15,
+          envMapIntensity: 1.5
+        })
+        const fastenerGeo = new THREE.CylinderGeometry(2.5, 2.5, 1.5, 12)
+        for (const fx of [-1, 1]) {
+          for (const fz of [-1, 1]) {
+            const fastener = new THREE.Mesh(fastenerGeo, fastenerMat)
+            fastener.position.set(cx + fx * 14, 4.2, cz + fz * 14)
+            this.scene.add(fastener)
+          }
+        }
       }
     }
 
-    // Cushions read as the same family of baize but a step darker and slightly
-    // glossier than the bed: real cushion rubber is cloth-covered but catches the
-    // light along its nose, and the tone step is what keeps the raised edge from
-    // melting into the playing surface.
-    const cushionMat = new THREE.MeshStandardMaterial({ color: 0x157a33, roughness: 0.52, side: THREE.DoubleSide })
-    const noseMat = new THREE.MeshStandardMaterial({ color: 0x1d9e43, roughness: 0.45, side: THREE.DoubleSide })
-    const gapHalf = POCKET_RADIUS_CORNER
-    const midGapHalf = POCKET_RADIUS_MIDDLE
-    const longSegments: Array<[number, number]> = [
-      [-HALF_L + gapHalf, -midGapHalf],
-      [midGapHalf, HALF_L - gapHalf]
-    ]
-    const addBox = (width: number, depth: number, x: number, z: number): void => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, CUSHION_H, depth), cushionMat)
-      mesh.position.set(x, CUSHION_H / 2, z)
+    // Cushion cloth: the same woven treatment as the bed, a step darker so the raised edge
+    // does not melt into the playing surface. Shares the bed's normal map, which is the
+    // right call — cushions are cut from the same bolt of cloth, so their nap must match
+    // or the join between bed and cushion becomes visible at the seam.
+    // side: DoubleSide is not a shortcut — an ExtrudeGeometry profile is a closed loop
+    // only if the caller closes it, and this one's ends are swept open at the pocket
+    // jaws where the segment is cut to length.
+    const cushionMat = new THREE.MeshPhysicalMaterial({
+      color: 0x157a33,
+      normalMap: feltNormalTexture(),
+      normalScale: new THREE.Vector2(0.3, 0.3),
+      roughness: 0.62,
+      metalness: 0,
+      side: THREE.DoubleSide,
+      sheen: 0.4,
+      sheenColor: new THREE.Color(0x45c46e),
+      sheenRoughness: 0.7,
+      envMapIntensity: 0.35
+    })
+    // The nose strip stays a separate material rather than being merged into the cushion:
+// real cushion rubber is compressed smooth along the strike line, so it takes a tighter
+// highlight than the body, and that highlight running along the nose is what tells the
+// eye where the cushion is. With the profile below carrying the shape, this is now a
+// thin capping strip on the nose shoulder instead of a separate box beside it.
+    const noseMat = new THREE.MeshPhysicalMaterial({
+      color: 0x1d9e43,
+      normalMap: feltNormalTexture(),
+      normalScale: new THREE.Vector2(0.22, 0.22),
+      roughness: 0.42,
+      metalness: 0,
+      side: THREE.DoubleSide,
+      sheen: 0.35,
+      sheenColor: new THREE.Color(0x5fe089),
+      sheenRoughness: 0.55,
+      envMapIntensity: 0.5
+    })
+    // Six segments, two per long rail and one per short rail. The long pair on each rail
+    // is the same length, so this caches two distinct geometries rather than six.
+    const cushionGeo = new Map<number, THREE.ExtrudeGeometry>()
+
+    // `axis` is the rail's run ('x' for the long rails, 'z' for the short), `outward` the
+    // sign of the direction the cushion's depth points away from the bed. The rotation and
+    // position that follow are coupled, and the coupling is why they live in
+    // `cushionTransform` rather than here  see the note there on why the signs are written
+    // out instead of folded into a lookup.
+    const addCushion = (length: number, axis: 'x' | 'z', outward: 1 | -1, centreAlong: number): void => {
+      const key = Math.round(length)
+      let geo = cushionGeo.get(key)
+      if (!geo) {
+        geo = makeCushionGeometry(key)
+        cushionGeo.set(key, geo)
+      }
+      const mesh = new THREE.Mesh(geo, cushionMat)
+      const place = cushionTransform(length, axis, outward, centreAlong)
+      mesh.rotation.y = place.rotationY
+      mesh.position.copy(place.position)
       mesh.castShadow = true
       mesh.receiveShadow = true
+      // Tagged so selfCheck can assert the inner face stays on the physics plane. The
+      // key encodes the rail's run axis and side, which is all the check needs to know
+      // which of the four collision planes this cushion is responsible for.
+      mesh.userData.physicsSurface = `cushion:${axis}:${outward}`
       this.scene.add(mesh)
-    }
-    const addNoseLong = (width: number, x: number, innerZ: number): void => {
-      const nose = new THREE.Mesh(new THREE.BoxGeometry(width, CUSHION_H, 10), noseMat)
-      nose.position.set(x, CUSHION_H / 2, innerZ + (innerZ < 0 ? 5 : -5))
+
+      // Cushion attachment brackets — small brass brackets that screw the cushion rubber
+      // to the rail frame. On a real table these are spaced every ~200mm along the rail.
+      // They catch highlights and sell the "physically attached" look.
+      const bracketMat = new THREE.MeshStandardMaterial({
+        color: 0xc8a068,
+        metalness: 1,
+        roughness: 0.2,
+        roughnessMap: brassRoughnessTexture(),
+        envMapIntensity: 1.5
+      })
+      const bracketGeo = new THREE.BoxGeometry(8, 6, 4)
+      const screwGeo = new THREE.CylinderGeometry(1.2, 1.2, 3, 8)
+      const screwMat = new THREE.MeshStandardMaterial({
+        color: 0x9a7a4a,
+        metalness: 1,
+        roughness: 0.25,
+        envMapIntensity: 1.3
+      })
+      const spacing = 200
+      const start = -length / 2 + spacing / 2
+      const count = Math.floor(length / spacing)
+      for (let i = 0; i < count; i++) {
+        const along = start + i * spacing
+        if (axis === 'x') {
+          // Bracket on the back of the cushion, screwed into the rail
+          const bracket = new THREE.Mesh(bracketGeo, bracketMat)
+          bracket.position.set(
+            centreAlong + along,
+            4,
+            outward * (HALF_W + CUSHION_DEPTH - 2)
+          )
+          this.scene.add(bracket)
+          const screw = new THREE.Mesh(screwGeo, screwMat)
+          screw.rotation.x = Math.PI / 2
+          screw.position.set(
+            centreAlong + along,
+            4,
+            outward * (HALF_W + CUSHION_DEPTH + 1)
+          )
+          this.scene.add(screw)
+        } else {
+          const bracket = new THREE.Mesh(bracketGeo, bracketMat)
+          bracket.rotation.y = Math.PI / 2
+          bracket.position.set(
+            outward * (HALF_L + CUSHION_DEPTH - 2),
+            4,
+            centreAlong + along
+          )
+          this.scene.add(bracket)
+          const screw = new THREE.Mesh(screwGeo, screwMat)
+          screw.rotation.x = Math.PI / 2
+          screw.position.set(
+            outward * (HALF_L + CUSHION_DEPTH + 1),
+            4,
+            centreAlong + along
+          )
+          this.scene.add(screw)
+        }
+      }
+
+      // The nose cap: a thin strip riding the shoulder, in the glossier material. It sits
+      // just proud of the profile so it reads as a separate strip of compressed rubber
+      // rather than a coplanar decal, and it starts at u=1 so the physics face at u=0 is
+      // left completely untouched.
+      const noseGeo = new THREE.BoxGeometry(
+        axis === 'x' ? length : 6,
+        3,
+        axis === 'x' ? 6 : length
+      )
+      const nose = new THREE.Mesh(noseGeo, noseMat)
+      if (axis === 'x') {
+        nose.position.set(centreAlong, CUSHION_H - 1.2, outward * (HALF_W + 5))
+      } else {
+        nose.position.set(outward * (HALF_L + 5), CUSHION_H - 1.2, centreAlong)
+      }
       this.scene.add(nose)
     }
-    const addNoseShort = (length: number, innerX: number): void => {
-      const side = innerX < 0 ? 1 : -1
-      const nose = new THREE.Mesh(new THREE.BoxGeometry(10, CUSHION_H, length), noseMat)
-      nose.position.set(innerX + side * 5, CUSHION_H / 2, 0)
-      this.scene.add(nose)
+
+    for (const [length, axis, outward, centre] of cushionLayout()) {
+      addCushion(length, axis, outward, centre)
     }
-    for (const [fromX, toX] of longSegments) {
-      const midX = (fromX + toX) / 2
-      const width = toX - fromX
-      addBox(width, 44, midX, -HALF_W - 22)
-      addNoseLong(width, midX, -HALF_W)
-      addBox(width, 44, midX, HALF_W + 22)
-      addNoseLong(width, midX, HALF_W)
-    }
-    const shortLen = TABLE_WIDTH - gapHalf * 2
-    addBox(44, shortLen, -HALF_L - 22, 0)
-    addNoseShort(shortLen, -HALF_L)
-    addBox(44, shortLen, HALF_L + 22, 0)
-    addNoseShort(shortLen, HALF_L)
 
     // Leather drop pockets: a shaded throat cylinder recessed below the bed, a
     // dark inner drop, and a leather-look rim ring. The depth texture on the
     // throat's inside face is what makes the hole read as a cavity rather than a
-    // flat decal — darkness pooling at the bottom, leather tone up the walls.
+    // flat decal — darkness pooling at the bottom, leather tone up the walls.
     const throatMat = new THREE.MeshStandardMaterial({
       map: pocketDepthTexture(),
       color: 0x2a1a10,
@@ -761,11 +1762,35 @@ export class Scene3D {
       transparent: true,
       depthWrite: false
     })
-    const leatherMat = new THREE.MeshStandardMaterial({ color: 0x5a3a22, roughness: 0.75, metalness: 0.05 })
-    const brassLipMat = new THREE.MeshStandardMaterial({ color: 0xd8b15c, roughness: 0.3, metalness: 0.8 })
+    // Pocket leather: a coated hide with pebble grain. The clearcoat gives the
+    // finished leather its tight specular, while the base roughness carries the
+    // pebble texture. We'll add a leather normal map for the grain.
+    const leatherMat = new THREE.MeshPhysicalMaterial({
+      color: 0x6b4426,
+      roughness: 0.62,
+      metalness: 0,
+      clearcoat: 0.5,
+      clearcoatRoughness: 0.3,
+      sheen: 0.3,
+      sheenColor: new THREE.Color(0xa8794a),
+      envMapIntensity: 0.8
+    })
+    const brassLipMat = new THREE.MeshStandardMaterial({
+      color: 0xe0c288,
+      metalness: 1,
+      roughness: 0.16,
+      roughnessMap: brassRoughnessTexture(),
+      envMapIntensity: 1.6
+    })
     const pocketGeo = new Map<
       number,
-      { throat: THREE.BufferGeometry; drop: THREE.BufferGeometry; lip: THREE.BufferGeometry; shadow: THREE.BufferGeometry }
+      {
+        throat: THREE.BufferGeometry
+        drop: THREE.BufferGeometry
+        lip: THREE.BufferGeometry
+        shadow: THREE.BufferGeometry
+        stitch: THREE.BufferGeometry
+      }
     >()
     const geoFor = (radius: number) => {
       const cached = pocketGeo.get(radius)
@@ -774,7 +1799,12 @@ export class Scene3D {
         throat: new THREE.CylinderGeometry(radius * 0.98, radius * 0.8, 90, 28, 1, true),
         drop: new THREE.CircleGeometry(radius * 0.8, 24),
         lip: new THREE.TorusGeometry(radius + 4, 4.5, 14, 36),
-        shadow: new THREE.CircleGeometry(radius * 1.35, 28)
+        shadow: new THREE.CircleGeometry(radius * 1.35, 28),
+        // Stitches. A pocket with a laced rim is the single strongest "real object"
+        // signal available here, and a ring of tiny capsules costs about 400 triangles.
+        // 16 is the point where they stop reading as a beaded edge, which is what a real
+        // lace looks like.
+        stitch: new THREE.CapsuleGeometry(1.5, 7, 3, 6)
       }
       pocketGeo.set(radius, made)
       return made
@@ -809,6 +1839,31 @@ export class Scene3D {
       brass.scale.set(0.82, 0.82, 1.35)
       brass.position.set(x, CUSHION_H + 3.0, z)
       this.scene.add(brass)
+
+      // Lacing around the pocket mouth. Each stitch is a capsule laid flat and rotated to
+      // follow the circle, alternating lean so the ring reads as laced rather than as a
+      // printed dotted line. The InstancedMesh matters here: 16 stitches x 6 pockets is
+      // 96 meshes otherwise, all sharing one geometry.
+      const stitchCount = 16
+      const stitches = new THREE.InstancedMesh(geo.stitch, brassLipMat, stitchCount)
+      const m4 = new THREE.Matrix4()
+      const q = new THREE.Quaternion()
+      const e = new THREE.Euler()
+      const one = new THREE.Vector3(1, 1, 1)
+      const at = new THREE.Vector3()
+      const laceR = p.radius + 8.5
+      for (let i = 0; i < stitchCount; i++) {
+        const t = (i / stitchCount) * Math.PI * 2
+        at.set(x + Math.cos(t) * laceR, CUSHION_H + 2.6, z + Math.sin(t) * laceR)
+        // Lie the capsule along the circumference, alternating lean so the ring looks
+        // stitched. Yaw to face outward, then pitch to the tangent.
+        e.set(0, -t, i % 2 === 0 ? 0.42 : -0.42, 'YXZ')
+        q.setFromEuler(e)
+        m4.compose(at, q, one)
+        stitches.setMatrixAt(i, m4)
+      }
+      stitches.instanceMatrix.needsUpdate = true
+      this.scene.add(stitches)
     }
 
     // Burgundy arena carpet, bright enough to read as a lit floor rather than a void.
@@ -831,7 +1886,7 @@ export class Scene3D {
     // The fixture meshes stay in the scene graph but are not rendered: the shade
     // sits exactly on the line between the overhead camera and the table centre, so
     // in the top-down view it filled the frame with a brown cone. The light itself
-    // lives in buildLighting and is untouched — only the geometry is hidden.
+    // lives in buildLighting and is untouched — only the geometry is hidden.
     const shade = new THREE.Mesh(
       new THREE.CylinderGeometry(80, 330, 260, 28),
       new THREE.MeshStandardMaterial({ color: 0x8a6a34, roughness: 0.35, metalness: 0.6 })
@@ -847,7 +1902,7 @@ export class Scene3D {
     bulb.visible = false
     this.scene.add(bulb)
 
-    // The whole set built above — cloth, cushions, pockets, floor, lamp shade — is
+    // The whole set built above — cloth, cushions, pockets, floor, lamp shade — is
     // static. Freezing every matrix here means the one static shadow frame and every
     // later render skip their matrix recalculations, and the fixture part of the
     // shadow map is settled before the first frame is ever drawn.
@@ -1041,7 +2096,7 @@ export class Scene3D {
    * Shows or hides ball-in-hand placement overlays.
    *
    * `inD` is the snapshot's `cueInHandInD`: true only at break-off, where the D
-   * indicator is shown. A mid-frame in-hand shows no D — the whole table is legal
+   * indicator is shown. A mid-frame in-hand shows no D — the whole table is legal
    * and a stale D highlight would claim otherwise.
    */
   setPlacementMode(active: boolean, inD: boolean): void {
@@ -1087,6 +2142,121 @@ export class Scene3D {
     this.ghostBall.visible = false
   }
 
+  /**
+   * Flies the camera into the overhead placement view, and holds it there.
+   *
+   * This is the half of the flow a player sees when the cue ball comes to hand: rather
+   * than placing from whatever perspective they happened to be in, the table lifts to
+   * the plan view that is the only place the whole legal area can be read at once. The
+   * move is a timed interpolation between the pose the rig is in now and the overhead
+   * pose, so it cannot cut, and its endpoint is the same pose the rig would have reached
+   * by easing there on its own.
+   *
+   * Input is refused for the whole of the move, from the frame it starts. The caller
+   * finds that out from {@link isPlacementTransitionBlocking} rather than by tracking
+   * the state itself, so there is exactly one answer to "may the player act right now".
+   */
+  beginPlacementCamera(seconds: number = PLACEMENT_TRANSITION_SECONDS): void {
+    // Already overhead and not moving: nothing to do. Anything else starts a move from
+    // wherever the camera is now.
+    //
+    // This does start a move while one may be in flight, and that is deliberate: when the
+    // server refuses a placement the camera is halfway back down to the gameplay view, and
+    // it has to turn around and come back up. Restarting a flight *in* is prevented one
+    // level up instead - the caller only asks on the frame the flow's phase changes into
+    // entering, so a flow sitting in that phase never asks again.
+    if (this.placementViewHeld && !this.placementTransition.active) return
+    this.placementViewHeld = true
+    // A fresh placement starts with nothing held: a lock left by a previous one would
+    // draw the cue ball at the old spot for as long as this flight took.
+    this.placementCueLock = null
+    this.placementArrival = null
+    this.placementTransition = beginPlacementTransition(
+      this.rig.pose,
+      topDownPose(this.cvw / Math.max(1, this.cvh)),
+      seconds
+    )
+  }
+
+  /**
+   * Flies the camera back to the normal gameplay view and releases input when it lands.
+   *
+   * Called the moment a placement is confirmed, and `cuePos` is the position that was
+   * confirmed - which is the whole point of passing it in. The authoritative snapshot
+   * carrying the placed cue ball has not arrived yet at this point, so resolving the
+   * endpoint from {@link cueBallPosition} would aim the camera at wherever the ball was
+   * before it was placed, or at the table centre if it had been potted: the flight would
+   * be smooth and would still arrive at the wrong place.
+   *
+   * The cue ball is also locked at `cuePos` for the flight, so the player watches the ball
+   * they just placed sit still where they put it rather than watching the ghost vanish and
+   * the real ball fade in somewhere else. The lock is dropped as soon as the server's own
+   * snapshot puts the cue ball down, at which point the ball is being driven by the
+   * snapshot again and nothing about its position changes.
+   */
+  endPlacementCamera(
+    cuePos: { x: number; y: number } | null,
+    onArrived?: () => void,
+    seconds: number = PLACEMENT_TRANSITION_SECONDS
+  ): void {
+    if (!this.placementViewHeld && !this.placementTransition.active) return
+    this.placementViewHeld = false
+    this.placementArrival = onArrived ?? null
+    // A placement that was withdrawn rather than confirmed has no spot to hold the ball
+    // at, and nothing was sent to the server, so the ball is simply wherever the snapshot
+    // says it is. That case falls back to the live snapshot's cue ball.
+    const landing = cuePos ?? this.cueBallPosition()
+    this.placementCueLock = cuePos ? { x: cuePos.x, y: cuePos.y } : null
+    // The pose to come back to is resolved from the position being flown back to, not
+    // from a pose captured when the flight in started: the cue ball has moved since, and
+    // the camera is supposed to end up behind where it actually is.
+    this.placementTransition = beginPlacementTransition(
+      this.rig.pose,
+      aimPose(landing, this.rig.yaw),
+      seconds
+    )
+  }
+
+  /**
+   * Whether a placement camera move is in flight and gameplay input must stay refused.
+   *
+   * The single question the frame loop asks before it will let the player aim, fire,
+   * move the ghost or drag the camera round. True from the frame a move begins until
+   * the frame it completes.
+   */
+  isPlacementTransitionBlocking(): boolean {
+    return this.placementTransition.blocking
+  }
+
+  /**
+   * Whether the camera has finished a placement move: not flying into the overhead view
+   * and not flying back out of it. True when no placement has ever been asked for, which
+   * is what lets the flow treat "nothing in flight" and "arrived" the same way.
+   *
+   * Deliberately not "and not holding the overhead view either". Holding the view is the
+   * *destination* of the flight in and the state the player places the ball in, so folding
+   * it in here meant this stayed false for exactly as long as a placement was live - and a
+   * flow waiting to hear it had arrived would wait forever. Whether the view is being held
+   * is its own question, answered by {@link isPlacementViewHeld}.
+   */
+  isPlacementCameraSettled(): boolean {
+    return !this.placementTransition.active
+  }
+
+  /**
+   * Whether the camera is holding the overhead placement view, as opposed to flying
+   * into it or back out of it. False while either move is in flight.
+   */
+  isPlacementViewHeld(): boolean {
+    return this.placementViewHeld && !this.placementTransition.active
+  }
+
+  /** Where the cue ball is on the table, or the table centre before it has ever existed. */
+  private cueBallPosition(): { x: number; y: number } {
+    const cue = this.lastSnapshot?.balls.find((b) => b.id === BALL_IDS.CUE && !b.potted)
+    return cue ? { x: cue.x, y: cue.y } : { x: TABLE_LENGTH / 2, y: TABLE_WIDTH / 2 }
+  }
+
   update(snapshot: FrameSnapshotData | null, options: RenderOptions = {}): void {
     this.immediate = options.immediate === true
     // Kept for the camera, which moves on its own clock in `render` rather than in here:
@@ -1108,6 +2278,14 @@ export class Scene3D {
     if (!this.shadowTexCache) this.shadowTexCache = contactShadowTexture()
     const highlightId = this.resolveHighlight(snapshot)
     const seen = new Set<number>()
+
+    // The server has taken the placement once its snapshot stops saying the cue ball is
+    // in hand. Until then the confirmed position is drawn rather than the snapshot's, so
+    // the cue ball sits still at the spot the player chose instead of vanishing for the
+    // length of the camera's flight home. The ball is at that same spot by the time this
+    // clears, so nothing moves across the handover.
+    if (this.placementCueLock && snapshot.cueInHand !== true) this.placementCueLock = null
+
     for (const ball of snapshot.balls) {
       seen.add(ball.id)
       let rig = this.balls.get(ball.id)
@@ -1117,7 +2295,20 @@ export class Scene3D {
         this.scene.add(rig.group)
       }
       rig.setVisible(!ball.potted || rig.sinking)
-      if (!ball.potted) {
+      // The cue ball under a placement lock is drawn from the confirmed position and
+      // stays visible even while the snapshot still has it potted: this is the ball the
+      // player just placed, and it is what the camera is flying back to. Every other ball
+      // is driven by the snapshot exactly as before.
+      if (this.placementCueLock && ball.id === BALL_IDS.CUE) {
+        const lx = tableX(this.placementCueLock.x)
+        const lz = tableZ(this.placementCueLock.y)
+        const lockMoved = Math.hypot(rig.group.position.x - lx, rig.group.position.z - lz)
+        rig.setVisible(true)
+        // Not a rise: it was never potted as far as the player is concerned, it was
+        // placed. Snapping rather than rising is the difference between a ball staying
+        // where it was put and a ball popping up from a pocket it never went in.
+        rig.aim(lx, lz, ball.id === highlightId, rig.firstSeen || lockMoved > 500)
+      } else if (!ball.potted) {
         const x = tableX(ball.x)
         const z = tableZ(ball.y)
         const moved = Math.hypot(rig.group.position.x - x, rig.group.position.z - z)
@@ -1153,7 +2344,20 @@ export class Scene3D {
       this.wasPotted.set(ball.id, ball.potted)
     }
     for (const [id, rig] of this.balls) {
-      if (!seen.has(id)) rig.setVisible(false)
+      if (!seen.has(id) && !(this.placementCueLock && id === BALL_IDS.CUE)) {
+        rig.setVisible(false)
+      }
+    }
+
+    // A snapshot that omits the cue ball entirely - rather than reporting it potted, which
+    // is what the loop above handles - would otherwise leave the placed ball hidden for
+    // the whole flight home, since there is no ball in the list to draw it from.
+    if (this.placementCueLock) {
+      const locked = this.balls.get(BALL_IDS.CUE)
+      if (locked) {
+        locked.setVisible(true)
+        locked.aim(tableX(this.placementCueLock.x), tableZ(this.placementCueLock.y), false, locked.firstSeen)
+      }
     }
 
     const cueBall = snapshot.balls.find((b) => b.id === 0 && !b.potted)
@@ -1323,7 +2527,7 @@ export class Scene3D {
 
   /**
    * Asks for one of the two views the player controls: the camera behind the cue ball, or
-   * the overhead one. Nothing is cut — the rig eases between them — so this can be called
+   * the overhead one. Nothing is cut — the rig eases between them — so this can be called
    * as often as the button is pressed.
    */
   setCameraMode(mode: 'AIM' | 'TOP_DOWN'): void {
@@ -1335,7 +2539,7 @@ export class Scene3D {
    *
    * While one is, the camera stops being a view the player chose and becomes a view of the
    * balls: it follows where they are going. When it ends, the rig eases back to whichever
-   * view the player had asked for, which is why this is a flag rather than a mode — the
+   * view the player had asked for, which is why this is a flag rather than a mode — the
    * choice underneath is remembered across every shot.
    */
   setTracking(tracking: boolean): void {
@@ -1455,18 +2659,41 @@ export class Scene3D {
         spread = Math.max(spread, Math.hypot(ball.x - midX, ball.y - midY))
       }
     }
-    this.rig = stepCameraRig(
-      this.rig,
-      {
-        mode: this.tracking ? 'TRACK' : this.cameraMode,
-        aspect: this.cvw / Math.max(1, this.cvh),
-        cue,
-        aimAngle: this.lastAimAngle,
-        latch: this.latch,
-        focus: count > 0 ? { x: sumX / count, y: sumY / count, spread } : null
-      },
-      dt
-    )
+    // A placement camera move, if one is in flight, owns the pose outright: it is a
+    // timed interpolation between two known endpoints, so the rig is stepped with the
+    // interpolated pose rather than being asked for a mode. Running both would have two
+    // things writing the camera at once, and the loser's contribution shows up as a
+    // wobble on the way through.
+    if (this.placementTransition.active) {
+      const stepped = stepPlacementTransition(this.placementTransition, dt)
+      this.placementTransition = stepped.transition
+      // The rig is seeded with the interpolated pose rather than damped towards it, so
+      // the transition's timing is the timing of the move: when it finishes the camera
+      // is exactly on the end pose, and when it is not running the rig carries on from
+      // exactly where the last frame left it.
+      this.rig = { pose: stepped.pose, yaw: this.rig.yaw }
+      if (!this.placementTransition.active) {
+        // Arrived. The pose is written back so the rig continues from the end of the
+        // move rather than snapping to it again on the next frame's damp.
+        this.rig = { pose: placementTransitionEndPose(this.placementTransition), yaw: this.rig.yaw }
+        const arrived = this.placementArrival
+        this.placementArrival = null
+        if (arrived) arrived()
+      }
+    } else {
+      this.rig = stepCameraRig(
+        this.rig,
+        {
+          mode: this.tracking ? 'TRACK' : this.placementViewHeld ? 'PLACEMENT_TOP_DOWN' : this.cameraMode,
+          aspect: this.cvw / Math.max(1, this.cvh),
+          cue,
+          aimAngle: this.lastAimAngle,
+          latch: this.latch,
+          focus: count > 0 ? { x: sumX / count, y: sumY / count, spread } : null
+        },
+        dt
+      )
+    }
     const pose = this.rig.pose
     this.camera.position.set(tableX(pose.x), pose.height, tableZ(pose.y))
     this.camera.lookAt(tableX(pose.lookX), pose.lookHeight, tableZ(pose.lookY))
@@ -1554,7 +2781,7 @@ export class Scene3D {
       scale
     })
     // No per-frame shadow work happens here: the map was baked once, and moving balls
-    // are shaded by the lamp itself, so they read as lit rather than floating — their
+    // are shaded by the lamp itself, so they read as lit rather than floating — their
     // contact with the cloth is sold by the textured blobs under them, which move
     // with the balls and cost no shadow renders.
     //
@@ -1563,7 +2790,7 @@ export class Scene3D {
     // the moment it renders the shadow map, and the bake frame would otherwise be
     // whichever view happened to be on screen first. A map baked under one view and
     // sampled under the other is the mechanism behind the diagonal stripe artifacts
-    // that appeared when toggling between the two views — the depth matrix disagreed
+    // that appeared when toggling between the two views — the depth matrix disagreed
     // with itself by a rotation. Pinning it to the world axes makes the map, and every
     // sample of it, view-independent by construction.
     if (this.renderer.shadowMap.needsUpdate) {

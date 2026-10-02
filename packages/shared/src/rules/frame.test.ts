@@ -4,7 +4,7 @@ import { colourSpotPosition, cueStartPosition } from '../physics/layout.js'
 import { vec, type Vec2 } from '../vec.js'
 import type { FrameState } from '../state.js'
 import { buildInitialBalls } from '../state.js'
-import { applyFrameWinner, applyStroke, createFrame, createMatch, frameFromSnapshot, frameSnapshot, framesToWin, matchWinnerIndex, maybeEndFrame } from './frame.js'
+import { applyCuePlacement, applyFrameWinner, applyStroke, createFrame, createMatch, frameFromSnapshot, frameSnapshot, framesToWin, matchWinnerIndex, maybeEndFrame } from './frame.js'
 import { applyResolution, isRedId, resolveStroke, respotBall, applyTimeoutFoul } from './snooker.js'
 
 function stroke(frame: FrameState, shooterIndex: number, pottedIds: number[], cuePotted: boolean, firstContactId: number | null): { frameEnded: boolean; frameWinner: number | null; reason?: string } {
@@ -708,5 +708,179 @@ describe('ball in hand placement', () => {
     const legacy = frameSnapshot(createFrame(0))
     delete legacy.cueInHandInD
     expect(frameFromSnapshot(legacy).cueInHandInD).toBe(false)
+  })
+})
+
+describe('applyCuePlacement', () => {
+  const IN_D: Vec2 = vec(600, TABLE_WIDTH / 2)
+  /** Well clear of the D, and of every ball and pocket on the table. */
+  const ANYWHERE: Vec2 = vec(1200, 1400)
+
+  /** Puts the cue ball in hand the way a real in-off does, and returns that frame. */
+  function midFrameInHand(): FrameState {
+    const frame = createFrame(0)
+    frame.balls = frame.balls.filter((b) => b.isCue)
+    frame.balls[0]!.pos = vec(400, 400)
+    frame.balls[0]!.vel = vec(0, 0)
+    frame.cueInHand = false
+    frame.ballOn = 'RED'
+    const outcome = applyStroke(frame, 0, { aimAngle: Math.atan2(-400, -400), power: 0.15, spin: { x: 0, y: 0 } })
+    expect(outcome.sim.cuePotted).toBe(true)
+    expect(frame.cueInHand).toBe(true)
+    return frame
+  }
+
+  describe('places the ball and changes nothing else', () => {
+    it('puts the cue ball down on the chosen spot', () => {
+      const frame = createFrame(0)
+      const outcome = applyCuePlacement(frame, IN_D)
+      expect(outcome.ok).toBe(true)
+      expect(outcome.placed).toEqual(IN_D)
+      expect(ball(frame, BALL_IDS.CUE).pos).toEqual(IN_D)
+    })
+
+    // The regression this whole function exists for. Placing was carried as a zero-power
+    // stroke with a `cuePos`, which the rules resolved as a stroke: nothing moved, so
+    // nothing was contacted, so it was a foul worth the ball on - four points at the
+    // break - and the visit went to the opponent. A player who did exactly what they were
+    // asked lost four points and watched the other player start.
+    it('is not a foul, and does not score against the player', () => {
+      const frame = createFrame(0)
+      const before = { ...frame.scores }
+      applyCuePlacement(frame, IN_D)
+      expect(frame.scores).toEqual(before)
+    })
+
+    it('does not hand the turn away', () => {
+      const frame = createFrame(0)
+      const before = frame.turnIndex
+      applyCuePlacement(frame, IN_D)
+      expect(frame.turnIndex).toBe(before)
+    })
+
+    it('does not pot, move or disturb any other ball', () => {
+      const frame = createFrame(0)
+      const before = frame.balls.map((b) => ({ id: b.id, x: b.pos.x, y: b.pos.y, potted: b.potted }))
+      applyCuePlacement(frame, IN_D)
+      const after = frame.balls.map((b) => ({ id: b.id, x: b.pos.x, y: b.pos.y, potted: b.potted }))
+      // Only the cue may differ, and only in position.
+      for (let i = 0; i < after.length; i++) {
+        if (after[i]!.id === BALL_IDS.CUE) continue
+        expect(after[i]).toEqual(before[i])
+      }
+    })
+
+    it('leaves the cue ball at rest, so the next stroke starts from where it was put', () => {
+      const frame = createFrame(0)
+      applyCuePlacement(frame, IN_D)
+      const cue = ball(frame, BALL_IDS.CUE)
+      expect(cue.vel).toEqual(vec(0, 0))
+      expect(cue.spin).toEqual(vec(0, 0))
+    })
+
+    it('clears both in-hand flags, leaving the visit as the striker to aim', () => {
+      const frame = createFrame(0)
+      expect(frame.cueInHand).toBe(true)
+      applyCuePlacement(frame, IN_D)
+      expect(frame.cueInHand).toBe(false)
+      expect(frame.cueInHandInD).toBe(false)
+    })
+  })
+
+  describe('enforces exactly the same placement rules', () => {
+    it('restricts the break-off to the D', () => {
+      const frame = createFrame(0)
+      const outcome = applyCuePlacement(frame, ANYWHERE)
+      expect(outcome.ok).toBe(false)
+      expect(outcome.reason).toBe('outside-D')
+      expect(ball(frame, BALL_IDS.CUE).pos).toEqual(cueStartPosition())
+      expect(frame.cueInHand, 'a refused placement keeps the ball in hand').toBe(true)
+    })
+
+    it('refuses a break-off placement on the wrong side of the baulk line', () => {
+      const frame = createFrame(0)
+      const beyondBaulk = vec(BAULK_LINE_X + 10, TABLE_WIDTH / 2)
+      expect(applyCuePlacement(frame, beyondBaulk).reason).toBe('outside-D')
+    })
+
+    it('lets a mid-frame ball in hand go anywhere on the table', () => {
+      const frame = midFrameInHand()
+      expect(frame.cueInHandInD).toBe(false)
+      expect(applyCuePlacement(frame, ANYWHERE).placed).toEqual(ANYWHERE)
+    })
+
+    it('refuses a placement off the cloth', () => {
+      const frame = midFrameInHand()
+      const before = vec(ball(frame, BALL_IDS.CUE).pos.x, ball(frame, BALL_IDS.CUE).pos.y)
+      for (const off of [vec(-500, 900), vec(9000, 900), vec(1200, -40), vec(1200, 1900)]) {
+        const outcome = applyCuePlacement(frame, off)
+        expect(outcome.ok, `placement ${off.x},${off.y} must be refused`).toBe(false)
+        expect(vec(ball(frame, BALL_IDS.CUE).pos.x, ball(frame, BALL_IDS.CUE).pos.y)).toEqual(before)
+      }
+    })
+
+    it('refuses a placement inside a pocket', () => {
+      const frame = midFrameInHand()
+      const outcome = applyCuePlacement(frame, vec(30, 30))
+      expect(outcome.ok).toBe(false)
+      expect(outcome.reason).toBe('in-pocket')
+    })
+
+    it('refuses a placement overlapping a ball', () => {
+      const frame = midFrameInHand()
+      frame.balls = frame.balls.filter((b) => b.isCue)
+      const reds = buildInitialBalls().filter((b) => b.isRed).slice(0, 2)
+      reds[0]!.pos = vec(1200, 400)
+      reds[1]!.pos = vec(1800, 900)
+      for (const red of reds) {
+        red.potted = false
+        red.vel = vec(0, 0)
+        frame.balls.push(red)
+      }
+      expect(applyCuePlacement(frame, vec(1200, 400)).reason).toBe('crowded')
+      // A ball a diameter away is still touching; a clear ball-width is legal.
+      expect(applyCuePlacement(frame, vec(1200, 445)).reason).toBe('crowded')
+      expect(applyCuePlacement(frame, vec(1200, 470)).placed).toEqual(vec(1200, 470))
+    })
+
+    it('refuses a non-finite coordinate rather than placing the ball at NaN', () => {
+      const frame = createFrame(0)
+      expect(applyCuePlacement(frame, { x: Number.NaN, y: 900 }).ok).toBe(false)
+      expect(applyCuePlacement(frame, { x: 600, y: Number.POSITIVE_INFINITY }).ok).toBe(false)
+      expect(ball(frame, BALL_IDS.CUE).pos).toEqual(cueStartPosition())
+      expect(frame.cueInHand).toBe(true)
+    })
+  })
+
+  describe('is idempotent', () => {
+    // A confirmation can arrive twice: a retried socket message, a reconnect mid-flight,
+    // a client that reloaded. The second one has to land on the same table.
+    it('reports a repeated confirmation as already placed and does not move the ball', () => {
+      const frame = createFrame(0)
+      expect(applyCuePlacement(frame, IN_D).alreadyPlaced).toBe(false)
+
+      const second = applyCuePlacement(frame, ANYWHERE)
+      expect(second.ok).toBe(true)
+      expect(second.alreadyPlaced).toBe(true)
+      expect(second.placed).toBeNull()
+      expect(ball(frame, BALL_IDS.CUE).pos, 'a repeat must not move the ball').toEqual(IN_D)
+    })
+
+    it('a repeat cannot foul even when its coordinate would have been illegal', () => {
+      const frame = createFrame(0)
+      applyCuePlacement(frame, IN_D)
+      const before = { ...frame.scores }
+      const repeat = applyCuePlacement(frame, { x: -9999, y: -9999 })
+      expect(repeat.ok).toBe(true)
+      expect(frame.scores).toEqual(before)
+      expect(frame.turnIndex).toBe(0)
+    })
+
+    it('a refusal does not consume the in-hand, so the player can try again', () => {
+      const frame = createFrame(0)
+      expect(applyCuePlacement(frame, ANYWHERE).ok).toBe(false)
+      expect(frame.cueInHand).toBe(true)
+      expect(applyCuePlacement(frame, IN_D).placed).toEqual(IN_D)
+    })
   })
 })

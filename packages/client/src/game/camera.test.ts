@@ -7,12 +7,19 @@ import {
   CAMERA_REACH_MM,
   MAX_CAMERA_HEIGHT_MM,
   MIN_CAMERA_HEIGHT_MM,
+  PLACEMENT_TRANSITION_MAX_SECONDS,
+  PLACEMENT_TRANSITION_MIN_SECONDS,
+  PLACEMENT_TRANSITION_SECONDS,
   TOP_DOWN_MIN_HEIGHT_MM,
+  beginPlacementTransition,
+  clampPlacementTransitionSeconds,
   initialHeadingLatch,
   stepHeadingLatch,
   latchedCameraYaw,
   addOrbit,
   MAX_ORBIT_RAD,
+  noPlacementTransition,
+  stepPlacementTransition,
   TRACK_MIN_HEIGHT_MM,
   VISIBLE_HALF_LENGTH,
   VISIBLE_HALF_WIDTH,
@@ -20,6 +27,7 @@ import {
   clampPose,
   dampAngle,
   initialRigState,
+  placementTransitionEase,
   poseHeading,
   resolveCameraTarget,
   shortestAngleDelta,
@@ -395,7 +403,8 @@ describe('the sanity clamp', () => {
       fov: 50
     })
     expect(pose.height).toBe(MIN_CAMERA_HEIGHT_MM)
-    expect(pose.lookHeight).toBe(MIN_CAMERA_HEIGHT_MM)
+    // lookHeight is no longer clamped to MIN_CAMERA_HEIGHT_MM; it can be at cloth level or below
+    expect(pose.lookHeight).toBe(-10)
   })
 
   it('brings it back inside the reach of the table', () => {
@@ -425,5 +434,231 @@ describe('the sanity clamp', () => {
     expect(clamped.x).toBeCloseTo(pose.x, 12)
     expect(clamped.height).toBeCloseTo(pose.height, 12)
     expect(clamped.fov).toBeCloseTo(pose.fov, 12)
+  })
+})
+
+describe('the placement camera transition', () => {
+  const overhead = topDownPose(ASPECT_2_TO_1)
+  const gameplay = aimPose({ x: 600, y: TABLE_WIDTH / 2 }, 0)
+  /** Runs a transition to completion at a fixed step, handing back every pose it drew. */
+  function runTransition(from: typeof gameplay, to: typeof overhead, seconds = PLACEMENT_TRANSITION_SECONDS) {
+    let transition = beginPlacementTransition(from, to, seconds)
+    const poses: Array<ReturnType<typeof aimPose>> = []
+    let guard = 0
+    while (transition.active && guard++ < 10_000) {
+      const stepped = stepPlacementTransition(transition, 1 / 60)
+      transition = stepped.transition
+      poses.push(stepped.pose)
+    }
+    return { poses, transition }
+  }
+
+  it('refuses input from the first frame of the move, not once it is under way', () => {
+    // The bug this guards: input stayed live for the opening frames of the camera's
+    // flight, so a player could aim or click while the table was still lifting.
+    const transition = beginPlacementTransition(gameplay, overhead)
+    expect(transition.blocking).toBe(true)
+    expect(transition.active).toBe(true)
+    expect(noPlacementTransition().blocking).toBe(false)
+  })
+
+  it('keeps refusing input for the whole move and only releases on arrival', () => {
+    let transition = beginPlacementTransition(gameplay, overhead)
+    let frames = 0
+    // The invariant, asserted every frame rather than reasoned about: a transition that is
+    // still running is always blocking, and a transition that has finished never is. The
+    // window between "move started" and "move finished" is exactly where an input that
+    // fights the camera would land, so the two can never come apart.
+    while (frames++ < 10_000) {
+      expect(transition.blocking).toBe(transition.active)
+      if (!transition.active) break
+      transition = stepPlacementTransition(transition, 1 / 60).transition
+    }
+    expect(frames).toBeGreaterThan(1)
+    expect(transition.active).toBe(false)
+    expect(transition.blocking).toBe(false)
+  })
+
+  it('lands exactly on the overhead pose, not a step short of it', () => {
+    const { poses, transition } = runTransition(gameplay, overhead)
+    const last = poses[poses.length - 1]!
+    const end = clampPose(overhead)
+    // The frame the input is released on is the end pose itself. Ending one eased step
+    // short would be a visible snap on the very frame controls come back.
+    expect(transition.active).toBe(false)
+    expect(last.height).toBeCloseTo(end.height, 9)
+    expect(last.x).toBeCloseTo(end.x, 9)
+    expect(last.y).toBeCloseTo(end.y, 9)
+    expect(last.lookX).toBeCloseTo(end.lookX, 9)
+    expect(last.lookY).toBeCloseTo(end.lookY, 9)
+    expect(last.lookHeight).toBeCloseTo(end.lookHeight, 9)
+    expect(last.fov).toBeCloseTo(end.fov, 9)
+  })
+
+  it('starts on the pose it was given, so the first frame does not jump', () => {
+    const stepped = stepPlacementTransition(beginPlacementTransition(gameplay, overhead), 1 / 60)
+    // A first frame that has moved a visible fraction of the way reads as a cut even
+    // though every later frame is smooth.
+    expect(Math.abs(stepped.pose.height - gameplay.height)).toBeLessThan(40)
+  })
+
+  it('never teleports: every frame moves a small fraction of the way', () => {
+    const { poses } = runTransition(gameplay, overhead)
+    let previous = gameplay
+    for (const pose of poses) {
+      // The whole move is thousands of millimetres of camera travel. Any single frame
+      // covering a large part of that is a snap, whatever the curve is doing overall.
+      expect(Math.abs(pose.height - previous.height)).toBeLessThan(300)
+      previous = pose
+    }
+  })
+
+  it('moves position, height, look-at and field of view together', () => {
+    // Every one of these is interpolated rather than only the position: a camera whose
+    // lens slid up while its look-at stayed behind would swing the table across frame
+    // on the way past, which is the "cut" the flow exists to avoid. The endpoints here
+    // differ in fov as well, because the aim and overhead views happen to share one and
+    // would otherwise not exercise that component at all.
+    const narrow = { ...gameplay, fov: 40 }
+    const { poses } = runTransition(narrow, overhead)
+    let sawHeight = false
+    let sawLookAt = false
+    let sawFov = false
+    let previous = narrow
+    for (const pose of poses) {
+      if (Math.abs(pose.height - previous.height) > 0.01) sawHeight = true
+      if (Math.abs(pose.lookX - previous.lookX) > 0.01 || Math.abs(pose.lookY - previous.lookY) > 0.01) {
+        sawLookAt = true
+      }
+      if (Math.abs(pose.fov - previous.fov) > 0.01) sawFov = true
+      previous = pose
+    }
+    expect(sawHeight).toBe(true)
+    expect(sawLookAt).toBe(true)
+    expect(sawFov).toBe(true)
+  })
+
+  it('leaves and arrives at zero speed, so there is no jolt at either end', () => {
+    // Smoothstep's derivative vanishes at 0 and 1. A linear move is smooth in position but
+    // not in speed, and the visible start-stop at each end is what reads as a cut.
+    expect(placementTransitionEase(0)).toBe(0)
+    expect(placementTransitionEase(1)).toBe(1)
+    const first = placementTransitionEase(0.001)
+    const lastStep = 1 - placementTransitionEase(0.999)
+    expect(first).toBeLessThan(0.001)
+    expect(lastStep).toBeLessThan(0.001)
+    // And the curve is monotonic, so it cannot overshoot the end pose and come back.
+    let previous = -1
+    for (let t = 0; t <= 1.0001; t += 0.01) {
+      const eased = placementTransitionEase(t)
+      expect(eased).toBeGreaterThanOrEqual(previous)
+      previous = eased
+    }
+  })
+
+  it('clamps a frame that overshoots the window onto the end pose', () => {
+    // A dropped frame must not extrapolate the camera past where it was going: the
+    // overshoot lands on 1, which is the pose, rather than sailing through it. This is
+    // also why `dt` is not clamped the way the rig's is - a tab that was in the
+    // background has to come back to the end pose, not to a camera stranded part of the
+    // way across the table still refusing input.
+    const transition = beginPlacementTransition(gameplay, overhead)
+    const jumped = stepPlacementTransition(transition, 5)
+    expect(jumped.transition.active).toBe(false)
+    expect(jumped.transition.blocking).toBe(false)
+    expect(jumped.pose.height).toBeCloseTo(clampPose(overhead).height, 9)
+  })
+
+  it('survives a zero or negative frame step without moving', () => {
+    const transition = beginPlacementTransition(gameplay, overhead)
+    const zero = stepPlacementTransition(transition, 0)
+    expect(zero.pose.height).toBeCloseTo(gameplay.height, 9)
+    const negative = stepPlacementTransition(transition, -1)
+    expect(negative.pose.height).toBeCloseTo(gameplay.height, 9)
+  })
+
+  it('holds the end pose once it has finished rather than drifting off it', () => {
+    const done = runTransition(gameplay, overhead).transition
+    const after = stepPlacementTransition(done, 1 / 60)
+    expect(after.pose.height).toBeCloseTo(clampPose(overhead).height, 9)
+    expect(after.transition.active).toBe(false)
+  })
+
+  it('keeps the lens sane at every frame of the move, in both directions', () => {
+    // The transition's endpoints come from the rig, so the clamp has nothing to catch in
+    // the normal case. It is asserted anyway because an out-of-bounds pose mid-flight is
+    // the failure that looks worst: the table vanishing from inside the cloth.
+    for (const [from, to] of [
+      [gameplay, overhead],
+      [overhead, gameplay],
+      [aimPose({ x: 100, y: 100 }, 0), overhead],
+      [overhead, aimPose({ x: TABLE_LENGTH - 100, y: 100 }, Math.PI)]
+    ] as const) {
+      let transition = beginPlacementTransition(from, to)
+      let guard = 0
+      while (transition.active && guard++ < 10_000) {
+        const stepped = stepPlacementTransition(transition, 1 / 60)
+        transition = stepped.transition
+        const p = stepped.pose
+        expect(p.height).toBeGreaterThanOrEqual(MIN_CAMERA_HEIGHT_MM)
+        expect(p.height).toBeLessThanOrEqual(MAX_CAMERA_HEIGHT_MM)
+        expect(Math.abs(p.x - HALF_L)).toBeLessThanOrEqual(CAMERA_REACH_MM)
+        expect(Math.abs(p.y - HALF_W)).toBeLessThanOrEqual(CAMERA_REACH_MM)
+        expect(Number.isFinite(p.x + p.y + p.height + p.lookX + p.lookY + p.lookHeight + p.fov)).toBe(true)
+      }
+    }
+  })
+
+  it('keeps every requested duration inside the 0.5-1.0 second window', () => {
+    // A caller cannot ask for a cut by passing a small number, and cannot ask for a wait
+    // by passing a large one: the flow's feel is fixed by these bounds, not by whatever
+    // value happens to reach the function.
+    expect(clampPlacementTransitionSeconds(0.01)).toBe(PLACEMENT_TRANSITION_MIN_SECONDS)
+    expect(clampPlacementTransitionSeconds(60)).toBe(PLACEMENT_TRANSITION_MAX_SECONDS)
+    expect(clampPlacementTransitionSeconds(0.8)).toBe(0.8)
+    expect(PLACEMENT_TRANSITION_SECONDS).toBeGreaterThanOrEqual(PLACEMENT_TRANSITION_MIN_SECONDS)
+    expect(PLACEMENT_TRANSITION_SECONDS).toBeLessThanOrEqual(PLACEMENT_TRANSITION_MAX_SECONDS)
+  })
+
+  it('takes about as long as it says it will, at any frame rate', () => {
+    for (const step of [1 / 30, 1 / 60, 1 / 120]) {
+      let transition = beginPlacementTransition(gameplay, overhead)
+      let frames = 0
+      while (transition.active && frames++ < 10_000) {
+        transition = stepPlacementTransition(transition, step).transition
+      }
+      expect(transition.active).toBe(false)
+      // Elapsed time tracks wall-clock rather than frames, so a 30fps client and a 120fps
+      // one get the same move: not one that is twice as fast on the slow machine, and not
+      // one that has not finished when the frame budget says it should have.
+      expect(transition.elapsed).toBeGreaterThanOrEqual(PLACEMENT_TRANSITION_SECONDS)
+      expect(transition.elapsed).toBeLessThan(PLACEMENT_TRANSITION_SECONDS + step)
+      expect(frames).toBeGreaterThan(0)
+    }
+  })
+
+  it('resolves the placement view through the rig like any other mode', () => {
+    // The placement view is a mode on the existing rig, not a second camera, so asking
+    // the rig for it directly has to give the overhead pose.
+    const target = resolveCameraTarget(
+      request({ mode: 'PLACEMENT_TOP_DOWN' })
+    )
+    expect(target.height).toBeCloseTo(overhead.height, 9)
+    expect(target.x).toBeCloseTo(HALF_L, 9)
+    expect(target.lookHeight).toBe(0)
+  })
+
+  it('eases the rig itself into the placement view without a cut', () => {
+    // Proves the placement view is reachable through the ordinary rig, so a client that
+    // never runs a transition at all still arrives somewhere legal.
+    let state = run(initialRigState(ASPECT_2_TO_1), request({ aimAngle: 0 }), 2)
+    const placement = request({ mode: 'PLACEMENT_TOP_DOWN' })
+    let previous = { ...state.pose }
+    for (let i = 0; i < 120; i++) {
+      state = stepCameraRig(state, placement, 1 / 60)
+      expect(Math.abs(state.pose.height - previous.height)).toBeLessThan(400)
+      expect(state.pose.height).toBeGreaterThanOrEqual(MIN_CAMERA_HEIGHT_MM)
+      previous = { ...state.pose }
+    }
   })
 })

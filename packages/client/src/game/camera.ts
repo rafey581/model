@@ -139,8 +139,17 @@ export const MAX_FOV_DEG = 75
 export const VISIBLE_HALF_LENGTH = HALF_L + POCKET_RADIUS_CORNER + 60
 export const VISIBLE_HALF_WIDTH = HALF_W + POCKET_RADIUS_CORNER + 60
 
-/** The three things the camera can be doing. */
-export type CameraMode = 'AIM' | 'TOP_DOWN' | 'TRACK'
+/**
+ * The things the camera can be doing.
+ *
+ * `PLACEMENT_TOP_DOWN` is the overhead view the cue-ball placement flow flies to and holds
+ * while the player places the ball. Being in the middle of flying there or back is not a
+ * mode at all: a placement move interpolates the rig's pose directly rather than damping
+ * towards a target, so the flight owns the pose outright and no mode is being served while
+ * it runs. That is what stops a placement cutting to a different camera and back again -
+ * there is only ever the one rig and one pose.
+ */
+export type CameraMode = 'AIM' | 'TOP_DOWN' | 'TRACK' | 'PLACEMENT_TOP_DOWN'
 
 /** Where the camera is, and where it is looking, all in table millimetres. */
 export interface CameraPose {
@@ -396,14 +405,19 @@ export function clampPose(pose: CameraPose): CameraPose {
     height: clamp(pose.height, MIN_CAMERA_HEIGHT_MM, MAX_CAMERA_HEIGHT_MM),
     lookX,
     lookY,
-    lookHeight: clamp(pose.lookHeight, MIN_CAMERA_HEIGHT_MM, MAX_CAMERA_HEIGHT_MM),
+    // lookHeight is the height of the point the camera looks at.
+    // It must be allowed to be at cloth level (0) or below for the AIM camera
+    // which looks ahead at the cloth. Only the camera position (height) is
+    // clamped to stay above the table. The look target can be anywhere in the
+    // horizontal reach range vertically.
+    lookHeight: clamp(pose.lookHeight, -MAX_CAMERA_HEIGHT_MM, MAX_CAMERA_HEIGHT_MM),
     fov: clamp(pose.fov, MIN_FOV_DEG, MAX_FOV_DEG)
   }
 }
 
 /** The pose a request asks for, before any easing. */
 export function resolveCameraTarget(request: CameraRequest): CameraPose {
-  if (request.mode === 'TOP_DOWN') return topDownPose(request.aspect)
+  if (request.mode === 'TOP_DOWN' || request.mode === 'PLACEMENT_TOP_DOWN') return topDownPose(request.aspect)
   if (request.mode === 'TRACK') {
     return request.focus ? trackPose(request.focus, request.aimAngle) : topDownPose(request.aspect)
   }
@@ -463,4 +477,171 @@ export function stepCameraRig(state: CameraRigState, request: CameraRequest, dt:
 /** The heading a pose implies, for tests and for re-seeding the rig. */
 export function poseHeading(pose: CameraPose): number {
   return Math.atan2(pose.lookY - pose.y, pose.lookX - pose.x)
+}
+
+/* ------------------------------------------------------------------ *
+ * Placement camera transitions.
+ *
+ * The cue-ball placement flow needs the camera to fly into the overhead view, hold
+ * there while the player moves the ball, and fly back afterwards, without the player
+ * ever seeing a cut. That is a timed interpolation between two poses rather than a
+ * second camera, so it lives here next to the rig and is testable without a browser.
+ *
+ * The rules that make this a state machine rather than a flag: input is refused for
+ * the whole of a transition (the caller reads {@link PlacementTransition.blocking}), the
+ * transition owns the rig's mode so nothing can fight it mid-flight, and the pose at
+ * either end is the same {@link CameraPose} the rig itself produces, so arriving at
+ * either end is indistinguishable from having arrived there normally.
+ * ------------------------------------------------------------------ */
+
+/** The short end of the recommended placement-transition window, in seconds. */
+export const PLACEMENT_TRANSITION_MIN_SECONDS = 0.5
+/** The long end of it, in seconds: long enough to read as a camera move, short enough not to wait. */
+export const PLACEMENT_TRANSITION_MAX_SECONDS = 1
+/** The default, sitting between the two. */
+export const PLACEMENT_TRANSITION_SECONDS = 0.75
+
+/**
+ * The eased shape of a placement transition, from 0 at the start to 1 at the end.
+ *
+ * Smoothstep, so the camera leaves and arrives at zero speed. A linear move between two
+ * poses is smooth in position but not in velocity: it visibly starts and stops, which is
+ * exactly the "sudden cut" the flow exists to avoid. Smoothstep's derivative is zero at
+ * both ends, so the lens accelerates out of the aim view and settles into the overhead
+ * one without a hitch at either.
+ *
+ * The argument is clamped, so a frame that overshoots the window lands on 1 rather than
+ * extrapolating past the end pose.
+ */
+export function placementTransitionEase(t: number): number {
+  const clamped = Math.max(0, Math.min(1, t))
+  return clamped * clamped * (3 - 2 * clamped)
+}
+
+/** Clamps a requested duration into the window the flow is tuned for. */
+export function clampPlacementTransitionSeconds(seconds: number): number {
+  if (!Number.isFinite(seconds)) return PLACEMENT_TRANSITION_SECONDS
+  return Math.max(PLACEMENT_TRANSITION_MIN_SECONDS, Math.min(PLACEMENT_TRANSITION_MAX_SECONDS, seconds))
+}
+
+/**
+ * Where a placement transition is: which pose it started from, which it is going to,
+ * how far through it is, and whether input is being refused.
+ *
+ * `from` and `to` are snapshots of the two end poses taken when the transition began,
+ * not live lookups. That is deliberate: the aim pose at the end is built from the cue
+ * ball's position, and reading it fresh every frame would let the target move under the
+ * transition and turn it back into the jitter the state machine exists to prevent.
+ */
+export interface PlacementTransition {
+  /** The pose the camera was in when the transition began. */
+  from: CameraPose
+  /** The pose the camera is being taken to. */
+  to: CameraPose
+  /** How far through the transition is, in seconds. */
+  elapsed: number
+  /** How long the whole transition is meant to take, in seconds. */
+  duration: number
+  /** True while the transition is still running. */
+  active: boolean
+  /** True while the transition is running, and input must stay refused. */
+  blocking: boolean
+}
+
+/** A transition that is not happening: the camera is where the player left it. */
+export function noPlacementTransition(): PlacementTransition {
+  return {
+    from: topDownPose(2),
+    to: topDownPose(2),
+    elapsed: 0,
+    duration: PLACEMENT_TRANSITION_SECONDS,
+    active: false,
+    blocking: false
+  }
+}
+
+/**
+ * Begins a transition from where the rig is now to `to`, over `seconds`.
+ *
+ * `seconds` is clamped into the 0.5-1.0s window, so a caller cannot ask for a cut. The
+ * returned transition is blocking from its first frame: input is refused the moment the
+ * move starts, not once it is under way.
+ */
+export function beginPlacementTransition(
+  from: CameraPose,
+  to: CameraPose,
+  seconds: number = PLACEMENT_TRANSITION_SECONDS
+): PlacementTransition {
+  return {
+    from: { ...from },
+    // The end pose is clamped on the way in, not on the way out. Interpolating towards an
+    // unclamped endpoint and clamping the interpolated result instead would mean the
+    // move's arrival point drifts as it goes - and would make the pose reached on the
+    // final frame depend on where the camera happened to be when it started. Clamping
+    // here makes the endpoint exactly the pose the rig itself would hold.
+    to: clampPose(to),
+    elapsed: 0,
+    duration: clampPlacementTransitionSeconds(seconds),
+    active: true,
+    blocking: true
+  }
+}
+
+/**
+ * Advances a transition by `dt` and hands back the pose the camera should be at.
+ *
+ * The pose is a straight interpolation of the two endpoints along the eased curve: no
+ * component is solved, moved or recomputed from the table, so the camera's position,
+ * height, look-at point and field of view all move together along one path and the
+ * frame cannot arrive somewhere its neighbours would not. The result is clamped like any
+ * other pose, so a transition is as bounded as the states at either end of it.
+ *
+ * When the window closes the transition is marked finished, so the caller can hand
+ * control back. The pose returned on that frame is exactly the end pose, not the last
+ * eased step short of it, so there is no visible snap on the frame the input is released.
+ */
+export function stepPlacementTransition(
+  transition: PlacementTransition,
+  dt: number
+): { pose: CameraPose; transition: PlacementTransition } {
+  if (!transition.active) {
+    return { pose: transition.to, transition }
+  }
+  // Not clamped at the top, the way the rig's own `dt` is. The rig damps towards a
+  // target, so discarding a long frame just means it converges a little further next
+  // time. This is a move with an end time: a frame that overshoots the window has to
+  // land on the end pose, or a tab that was in the background comes back to a camera
+  // stranded part of the way across the table, still refusing input.
+  const elapsed = transition.elapsed + Math.max(0, dt)
+  const done = elapsed >= transition.duration
+  const t = done ? 1 : placementTransitionEase(elapsed / transition.duration)
+  const lerp = (a: number, b: number): number => a + (b - a) * t
+  const pose = clampPose({
+    x: lerp(transition.from.x, transition.to.x),
+    y: lerp(transition.from.y, transition.to.y),
+    height: lerp(transition.from.height, transition.to.height),
+    lookX: lerp(transition.from.lookX, transition.to.lookX),
+    lookY: lerp(transition.from.lookY, transition.to.lookY),
+    lookHeight: lerp(transition.from.lookHeight, transition.to.lookHeight),
+    fov: lerp(transition.from.fov, transition.to.fov)
+  })
+  return {
+    pose,
+    transition: {
+      ...transition,
+      elapsed,
+      active: !done,
+      blocking: !done
+    }
+  }
+}
+
+/**
+ * The pose a transition has arrived at, for callers that want the end state directly.
+ *
+ * Identical to the last {@link stepPlacementTransition} result; named so the scene does
+ * not have to reach into the transition's fields to hand a pose back to the rig.
+ */
+export function placementTransitionEndPose(transition: PlacementTransition): CameraPose {
+  return transition.active ? transition.from : transition.to
 }

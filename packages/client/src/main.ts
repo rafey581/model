@@ -19,9 +19,30 @@ import { ShotPlayer } from './game/playback.js'
 import type { PlaybackBall } from './game/playback.js'
 import { renderAuthScreen } from './auth.js'
 import { startAdminApp } from './adminLogin.js'
-import { placementAimAngle, placementShot } from './game/placement.js'
+import {
+  confirmPlacement,
+  initialPlacementFlow,
+  rejectPlacement,
+  placementAllowsGhostInput,
+  placementAllowsGameplayInput,
+  placementIsOver,
+  stepPlacementFlow
+} from './game/placement.js'
+import { PLACEMENT_TRANSITION_SECONDS } from './game/camera.js'
 /** Radians of camera orbit per pixel of right-drag: a full-width drag sweeps half a turn. */
 const CAMERA_ORBIT_PER_PIXEL = Math.PI / 900
+
+/**
+ * How long the camera takes to fly into the overhead placement view and back out of it,
+ * in seconds.
+ *
+ * A named constant rather than a literal at each call site, because the two flights have
+ * to take the same time: a camera that goes up quickly and comes back slowly reads as two
+ * different events rather than one flow being entered and left. `clampPlacementTransitionSeconds`
+ * keeps it inside the 0.5-1.0s window whatever it is set to, so no value here can ask for
+ * a cut.
+ */
+const PLACEMENT_CAMERA_SECONDS = PLACEMENT_TRANSITION_SECONDS
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 const toast = makeToast(document.body)
@@ -59,8 +80,15 @@ let scene3d: Scene3D | null = null
  */
 let cameraMode: 'AIM' | 'TOP_DOWN' = 'AIM'
 let cameraToggleEl: HTMLButtonElement | null = null
-/** True on the previous loop pass while a placement was live, so the end of one is detectable. */
-let placementWasActive = false
+/**
+ * Where the cue-ball placement flow currently stands: idle, flying the camera up to the
+ * overhead placement view, placing, or flying back to the gameplay view.
+ *
+ * This is the single source of truth for the whole flow. The camera moves, the overlays
+ * show and the input locks all read off the phase, so none of them can be right about
+ * what the flow is doing while another is wrong.
+ */
+let placementFlow = initialPlacementFlow()
 /** Where the pointer last sat on the cloth during placement, in table millimetres. */
 let placementTarget: { x: number; y: number } | null = null
 /** Whether the ghost is currently sitting on a legal spot. */
@@ -69,6 +97,19 @@ let placementLegal = false
 let placementPendingCommit: { x: number; y: number } | null = null
 /** Set when the placement click has been sent; cleared when the server's snapshot shows the cue down. */
 let placementCommitInFlight = false
+/**
+ * Whether the server is holding the strike clock for a placement this client has put down
+ * but not yet finished.
+ *
+ * The hold is released by a separate `placement:done`, sent when the camera lands back at
+ * the gameplay view. Set when the ball goes down, cleared once that message is on its way.
+ * It exists so the release is sent exactly once, and so it is never sent for a placement
+ * that was rejected - the server holds through a rejection for the retry, and releasing
+ * early would leave the retry to be played on a running clock.
+ */
+let placementResumePending = false
+/** Set once this placement has told the server the clock is to be held; reset per placement. */
+let placementDeclared = false
 /** The last pointer position over the canvas, in client pixels, for the placement ghost. */
 let lastPointerCanvas: { clientX: number; clientY: number } | null = null
 let myTurn = false
@@ -1625,7 +1666,10 @@ function renderGame(): void {
   })
   canvas.addEventListener('pointerdown', (e) => {
     lastPointerCanvas = { clientX: e.clientX, clientY: e.clientY }
-    if (!isPlacing() || placementCommitInFlight) return
+    // Only a placement in the `PLACING` phase accepts a click. During either camera move
+    // the click is consumed and dropped, so a player who clicks while the table is still
+    // lifting cannot commit a spot from a view that has not finished moving.
+    if (!placementAllowsGhostInput(placementFlow) || placementCommitInFlight) return
     const rect = canvas.getBoundingClientRect()
     const px = ((e.clientX - rect.left) / rect.width) * canvas.width
     const py = ((e.clientY - rect.top) / rect.height) * canvas.height
@@ -1703,6 +1747,25 @@ function renderGame(): void {
   scene3d?.dispose()
   scene3d = Scene3D.create(canvas, canvas.width, canvas.height)
 
+  // A new scene has no camera move in it and is not holding the overhead placement view,
+  // so a placement that was mid-flight against the old one would be describing a camera
+  // that no longer exists: waiting for a flight home that the new scene will never start,
+  // or picking a ghost through a camera that is sitting at the gameplay view. The flow is
+  // reset to nothing and the next snapshot drives it again from the top, which is the only
+  // honest starting point.
+  placementFlow = initialPlacementFlow()
+  placementTarget = null
+  placementLegal = false
+  placementPendingCommit = null
+  placementCommitInFlight = false
+  // Nothing is waiting on a resume from the old scene. The server's hold for it is left
+  // to its own backstop, which is the only thing that can end a hold whose client is gone.
+  placementResumePending = false
+  // The declaration is per-placement too. A hold left standing on the old scene would
+  // be held against a flow that no longer exists, so the next placement declares itself
+  // again from the top.
+  placementDeclared = false
+
   updateHud()
   updateOpponentGone()
 
@@ -1730,7 +1793,12 @@ function renderGame(): void {
     // The visit is only playable when the table has settled, which is the same
     // condition that draws the cue. Firing while a shot is still animating used to
     // be accepted by the server and cut the animation dead.
-    enabled: () => isVisitPlayable(),
+    enabled: () => {
+      // Input stays refused for the whole of a placement camera move, in either
+      // direction. Without this a player could aim mid-flight, and the aim's heading
+      // would arrive as the transition lands and yank the camera off its end pose.
+      return isInputAllowed()
+    },
     onChange: (aim) => {
       hud?.setPower(aim.power)
       // The dial mirrors whatever wrote the spin ΓÇö arrows, its own drag, a reset ΓÇö
@@ -2099,7 +2167,31 @@ function handleSocketEvents(socket: Socket): void {
       }
     }
   )
-  socket.on('error', (data: { code?: string }) => toast(`Server: ${data.code ?? 'unknown error'}`, 'error'))
+  socket.on('error', (data: { code?: string }) => {
+    // A refusal while a placement commit is in flight is the server rejecting the spot.
+    // The snapshot then still says the cue ball is in hand, which looks exactly like a
+    // commit that is merely slow, so nothing downstream would ever notice the refusal and
+    // the flow would sit in `RETURNING` waiting for an acknowledgement that is not coming -
+    // leaving the player at a gameplay view with dead controls and a cue ball they still
+    // own. Handing the placement back is what turns that dead end into a retry.
+    if (placementCommitInFlight) {
+      const recovered = rejectPlacement(placementFlow)
+      if (recovered !== placementFlow) {
+        placementFlow = recovered
+        placementCommitInFlight = false
+        // Nothing was put down, so there is no flight to finish and no resume owed. The
+        // server is still holding the clock for this placement, which is what it should
+        // do: the player is about to try again, and the retry is still part of placing.
+        placementResumePending = false
+        placementTarget = null
+        placementLegal = false
+        // The camera is halfway back down to the gameplay view. It has to turn around:
+        // finishing that flight would land the player at a view they are not allowed to use.
+        scene3d?.beginPlacementCamera(PLACEMENT_CAMERA_SECONDS)
+      }
+    }
+    toast(`Server: ${data.code ?? 'unknown error'}`, 'error')
+  })
   socket.on('notification:new', (n: NotificationItem) => {
     notifications.unshift(n)
     if (panelOpen) panelEl?.classList.remove('open')
@@ -2119,44 +2211,93 @@ function isPlacing(): boolean {
 }
 
 /**
- * Runs the ball-in-hand placement experience for one frame: the D-only or
- * whole-table indication, the ghost cue ball and the click-to-place commit.
+ * Tells the server that a placement is under way, so the strike clock is held for it.
  *
- * The camera is deliberately NOT touched here. Placement happens in whatever
- * 3D perspective view the player is in ΓÇö orbit and look-around stay live, and
- * the view toggle remains theirs alone to press. The ghost cue ball and the
- * ghost's legality tint carry the placement in the perspective view, which is
- * what keeps the scene from snapping into a flat overhead card on every foul.
+ * Once per placement, not once per frame. `stepPlacement` runs every animation frame and
+ * re-enters `ENTERING` only on the frame the phase changes, but the declaration has to
+ * be safe against the other ways in: the confirm path calls it too, so that a
+ * confirmation cannot leave the clock running for the flight home. The server treats a
+ * repeated `placement:begin` as a no-op rather than re-holding the clock, so a duplicate
+ * here costs a message and nothing else.
+ *
+ * Nothing here changes the flow or the camera. This is a message about time, not about
+ * rules: the server holds the clock for a declared placement and releases it when the
+ * ball is down or when its own backstop expires, whichever comes first.
+ */
+function declarePlacement(): void {
+  if (placementDeclared || !activeMatchId) return
+  placementDeclared = true
+  getSocket().emit('placement:begin', { matchId: activeMatchId })
+}
+
+/**
+ * Runs the ball-in-hand placement experience for one frame.
+ *
+ * The camera, the overlays and the ghost are all driven off one phase, from
+ * `stepPlacementFlow`: entering, placing, returning. The camera flies up to the overhead
+ * view on `ENTERING`, the ghost is only live on `PLACING`, and the flight back to the
+ * gameplay view happens on `RETURNING` with the cue ball already locked at the confirmed
+ * spot. Input is refused in every phase but `PLACING`, which is what stops the player
+ * fighting a camera that is still moving.
+ *
+ * Nothing here decides a rule: the D restriction comes from the snapshot's
+ * `cueInHandInD`, and the legality of any given spot comes from `placementStatus`, which
+ * mirrors the server's own test. The server still rejects an illegal placement
+ * authoritatively.
  */
 function stepPlacement(canvas: HTMLCanvasElement): void {
   const placing = isPlacing()
   const inD = frame?.cueInHandInD === true
+  const cameraSettled = scene3d?.isPlacementCameraSettled() ?? true
+  // The server has taken the placement once the snapshot stops saying the cue ball is in
+  // hand. Nothing else clears it, so a rejected spot cannot be mistaken for a placed one.
+  const serverAccepted = !frame?.cueInHand
 
-  if (placing && !placementWasActive) {
-    // Entering placement: overlays on, in the current view. A placement already
-    // sent (a fast double-click, say) is not forgotten; the in-flight flag is
-    // only cleared by the server showing the ball placed.
-    placementTarget = null
+  const previousPhase = placementFlow.phase
+  placementFlow = stepPlacementFlow(placementFlow, { placing, cameraSettled, serverAccepted })
+
+  // The camera is moved exactly once per transition, keyed on the phase having just
+  // changed into it. Keying on the phase rather than on a frame-by-frame condition is
+  // what stops a move being restarted every frame while it is already running.
+  if (placementFlow.phase !== previousPhase) {
+    if (placementFlow.phase === 'ENTERING') {
+      // A fresh placement: nothing is confirmed, the overlays go up, and the camera
+      // starts its flight to the overhead view. The D overlay follows `cueInHandInD`,
+      // so this is the break-off case and only the D is shaded.
+      placementTarget = null
+      placementLegal = false
+      placementPendingCommit = null
+      placementCommitInFlight = false
+      scene3d?.setPlacementMode(true, inD)
+      scene3d?.beginPlacementCamera(PLACEMENT_CAMERA_SECONDS)
+      // Declared as the placement starts rather than when it is confirmed, because the
+      // flight to the overhead view is part of placing and not part of aiming. The
+      // player should not spend strike-clock seconds watching a camera move.
+      declarePlacement()
+    } else if (placementFlow.phase === 'RETURNING') {
+      // The flight home happens on `RETURNING` whether the placement was confirmed or
+      // withdrawn. Gating this on `confirmed` left the camera stranded overhead when a
+      // placement was pulled out from under it mid-flight: nothing was sent to the
+      // server, the flow went to `RETURNING`, and with no camera move started the view
+      // never came back down.
+placementTarget = null
     placementLegal = false
     placementPendingCommit = null
-    scene3d?.setPlacementMode(!placementCommitInFlight, inD)
-  } else if (placing && placementWasActive) {
-    // Staying in placement: the D flag can change between frames (a snapshot
-    // arriving late), so the overlays follow it live.
-    if (!placementCommitInFlight) scene3d?.setPlacementMode(true, inD)
-  } else if (!placing && placementWasActive) {
-    // Placement over: the cue ball is down (or the visit moved on).
     scene3d?.setPlacementMode(false, false)
-    placementTarget = null
-    placementPendingCommit = null
-    placementCommitInFlight = false
+    hintPlacement(null)
+    scene3d?.endPlacementCamera(placementFlow.confirmed, undefined, PLACEMENT_CAMERA_SECONDS)
+    }
   }
-  placementWasActive = placing && !placementCommitInFlight
 
-  if (placing && !placementCommitInFlight) {
-    // Track the pointer as the ghost's target. The pointer position is read
-    // through the live camera each frame, so the view easing toward overhead
-    // does not freeze the ghost at a stale spot.
+  // The ghost is live only in `PLACING`, and the D flag can change between frames (a
+  // snapshot arriving late), so the overlays follow it live rather than being latched
+  // when the placement began. `cueInHandInD` is true only at break-off, so this is the
+  // one place the D is shaded; a mid-frame in-hand leaves the whole table unshaded.
+  if (placementAllowsGhostInput(placementFlow)) {
+    scene3d?.setPlacementMode(true, inD)
+    // Track the pointer as the ghost's target. The pointer position is read through the
+    // live camera each frame, so the camera easing overhead does not freeze the ghost at
+    // a stale spot.
     if (lastPointerCanvas) {
       const rect = canvas.getBoundingClientRect()
       const px = ((lastPointerCanvas.clientX - rect.left) / rect.width) * canvas.width
@@ -2174,7 +2315,7 @@ function stepPlacement(canvas: HTMLCanvasElement): void {
               : status.reason === 'in-pocket'
                 ? 'Too close to a pocket'
                 : status.reason === 'crowded'
-                  ? 'Not enough room ΓÇö a ball is in the way'
+                  ? 'Not enough room — a ball is in the way'
                   : 'Place the cue on the table'
           hintPlacement(label)
         } else {
@@ -2187,24 +2328,79 @@ function stepPlacement(canvas: HTMLCanvasElement): void {
     }
   }
 
-  // A click that was accepted fires the placement stroke exactly once. The shot
-  // carries `cuePos`, which is all the server needs to put the ball down and let
-  // the frame continue; everything else is the same shape a real shot has.
+  // A click that was accepted fires the placement exactly once. It goes out as a
+  // `placement:confirm` carrying only the spot, and never as a shot: this used to be
+  // sent as a zero-power `shot:play` with a `cuePos`, which the server could not tell
+  // apart from a striker who had swung at nothing, so it placed the ball and then ruled
+  // on the empty stroke - a foul, four points against, and the visit handed to the
+  // opponent. Confirming moves the flow to `RETURNING`, which starts the camera's
+  // flight home.
   if (placementPendingCommit && placementLegal && !placementCommitInFlight && activeMatchId) {
     const pos = placementPendingCommit
+    const confirmed = confirmPlacement(placementFlow, pos)
     placementPendingCommit = null
-    placementCommitInFlight = true
+    if (confirmed === placementFlow) {
+      // Not in `PLACING`, so the click arrived while a camera move was in flight and is
+      // discarded rather than starting a second placement on top of the one running.
+      placementLegal = false
+    } else {
+      placementFlow = confirmed
+      placementCommitInFlight = true
+      scene3d?.setPlacementMode(false, false)
+      hintPlacement(null)
+      // The confirmed spot is handed to the camera rather than left for it to work out:
+      // the snapshot that carries the placed cue ball has not arrived yet, so resolving it
+      // there would aim the flight home at wherever the ball used to be.
+      scene3d?.endPlacementCamera(confirmed.confirmed, undefined, PLACEMENT_CAMERA_SECONDS)
+      // Declared before confirming, so the clock is already held if the confirmation is
+      // slow or is lost and has to be retried. Ordering it the other way round would
+      // leave a window where the ball is down and the server is still counting.
+      declarePlacement()
+      getSocket().emit('placement:confirm', { matchId: activeMatchId, cuePos: { x: pos.x, y: pos.y } })
+      // The clock stays held from here until the camera is home. This is the flag that
+      // sends the release when that happens.
+      placementResumePending = true
+      toast('Cue ball placed', 'info')
+    }
+  }
+
+  // Back to idle: the camera has landed at the gameplay view and the server has taken the
+  // placement, so this player's controls are theirs again.
+  if (placementIsOver(placementFlow)) {
     scene3d?.setPlacementMode(false, false)
-    const shot = placementShot(pos, placementAimAngle(pos), cueController?.aim.power ?? 0)
-    getSocket().emit('shot:play', { matchId: activeMatchId, input: { ...shot, timestamp: Date.now() } })
-    toast('Cue ball placed', 'info')
-    hintPlacement(null)
-  }
-  // If the commit was lost ΓÇö the server rejected the spot, say ΓÇö the snapshot
-  // still says cueInHand and the placement state machine starts over cleanly.
-  if (placementCommitInFlight && frame?.cueInHand && isVisitPlayable() && !shotInFlight) {
+    placementTarget = null
+    placementPendingCommit = null
     placementCommitInFlight = false
+    // The ball is down and the camera is home, which is the point at which the player can
+    // actually shoot - so this is where the clock starts again. The server has been holding
+    // it since the placement began and resumes it from the time that was left then, so
+    // nothing the player spent on the camera or on hunting for a spot is charged to them.
+    if (placementResumePending && activeMatchId) {
+      placementResumePending = false
+      getSocket().emit('placement:done', { matchId: activeMatchId })
+    }
+    // The next placement has to declare itself again. The hold was released once the ball
+    // went down and the camera landed, so leaving this set would leave the next
+    // placement's clock running while the player hunted for a spot.
+    placementDeclared = false
   }
+}
+
+/**
+ * Whether the player may aim, fire or charge power right now.
+ *
+ * Three answers have to agree before the controls come back. `isVisitPlayable` is this
+ * client's own: whose turn it is, and whether the table has settled. `placementAllowsGameplayInput`
+ * is the flow's, and the scene's `isPlacementTransitionBlocking` is the camera's. Dropping
+ * the first of those let the controls come back during a replay or on the opponent's turn,
+ * because the placement flow is perfectly happy to be `IDLE` the whole time.
+ */
+function isInputAllowed(): boolean {
+  return (
+    isVisitPlayable() &&
+    placementAllowsGameplayInput(placementFlow) &&
+    !(scene3d?.isPlacementTransitionBlocking() ?? false)
+  )
 }
 
 /**
@@ -2259,7 +2455,11 @@ function loop(): void {
       // aim guide were drawn while the balls were still moving. The power slider is
       // enabled by exactly the same condition: it is this player's visit and the
       // balls have stopped.
-      const canAim = isVisitPlayable()
+      //
+      // `isInputAllowed` folds in the placement flow as well, so the cue stick, the aim
+      // guide and the power bar all come back on the same frame — and stay away on every
+      // frame of a placement camera move.
+      const canAim = isInputAllowed()
       hud?.setPowerEnabled(canAim)
       const renderOptions = {
         aim: cueController?.aim,
@@ -2272,7 +2472,14 @@ function loop(): void {
         // the view for as long as it lasts, then hands it back.
         scene3d.setCameraMode(cameraMode)
         scene3d.setTracking(shotPlayer !== null)
-        if (cameraToggleEl) cameraToggleEl.hidden = false
+        if (cameraToggleEl) {
+          cameraToggleEl.hidden = false
+          // The toggle is one of the player's normal controls, so it goes away with the
+          // rest of them during a placement. The scene already ignores the mode while the
+          // placement view is up, but a button that still reads as live and changes its
+          // own label while doing nothing is worse than one that is plainly unavailable.
+          cameraToggleEl.disabled = !canAim
+        }
         scene3d.update(shown, renderOptions)
         scene3d.render()
       } else {

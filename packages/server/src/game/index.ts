@@ -309,6 +309,90 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
       shots.recordAccepted(socket.id, input)
     })
 
+    // The striker says it is about to place its cue ball. This is a declaration, not a
+    // game action: it moves nothing and cannot foul anybody. All it does is tell the room
+    // that the player is mid-placement, which is what lets the room hold the strike clock
+    // while the player spends time on something that is not aiming.
+    //
+    // Deliberately not rate limited as a shot. A player searching for a legal spot will
+    // send this on every approach to the table, and counting those against the shot
+    // flood guard would let a player trip a fraud flag for playing the game correctly.
+    socket.on('placement:begin', (payload: { matchId: string }) => {
+      const { matchId } = payload ?? {}
+      if (!matchId) {
+        socket.emit('error', { code: 'bad_request' })
+        return
+      }
+      const room = getOrCreateRoom(matchId)
+      if (!room) {
+        socket.emit('error', { code: 'match_not_found' })
+        return
+      }
+      const result = room.handlePlacementBegin(userId)
+      if (!result.accepted) socket.emit('error', { code: result.error ?? 'rejected' })
+    })
+
+    // The striker puts the cue ball down where it chose. This is the placement that used
+    // to ride in on `shot:play` as a zero-power shot with a `cuePos`, which the rules
+    // layer resolved as a stroke: no contact, so a foul, the penalty, and the visit gone.
+    //
+    // It is a separate event so that the room can place the ball and change nothing else.
+    // There is no shot token taken here either, for the same reason as above plus one
+    // more: a spot the player thought was legal can turn out not to be, and being told so
+    // and trying again is correct play, not a shot flood.
+    socket.on(
+      'placement:confirm',
+      (payload: { matchId: string; cuePos: { x: number; y: number } }) => {
+        const { matchId, cuePos } = payload ?? {}
+        if (!matchId) {
+          socket.emit('error', { code: 'bad_request' })
+          return
+        }
+        const room = getOrCreateRoom(matchId)
+        if (!room) {
+          socket.emit('error', { code: 'match_not_found' })
+          return
+        }
+        // Bounds are checked here so a malformed coordinate is refused before it can
+        // reach the rules layer. The rules are the authority on legality - this is only
+        // the shape of the message.
+        const shape = shots.validate({ aimAngle: 0, power: 0, spin: { x: 0, y: 0 }, cuePos })
+        if (!shape.ok) {
+          socket.emit('error', { code: shape.reason })
+          return
+        }
+        const result = room.handlePlacementConfirm(userId, cuePos)
+        if (!result.accepted) socket.emit('error', { code: result.error ?? 'rejected' })
+      }
+    )
+
+    // The second half of the placement: the client reports that the camera has landed back
+    // at the gameplay view, and the strike clock resumes from the time the hold preserved.
+    //
+    // It is separate from the confirmation because that is the instant the player can
+    // actually shoot. Resuming on the confirmation would spend the first seconds of every
+    // placement on a transition the player could not act through, which is exactly the
+    // complaint the hold exists to answer.
+    //
+    // Like `shot:done` this is a pacing signal rather than a game action: it cannot place
+    // or move anything, and the room re-checks that the ball is down and that the hold
+    // belongs to this player before it lifts it. Rate limiting it against the shot guard
+    // would make a client that reconnects mid-flight look like a flooder.
+    socket.on('placement:done', (payload: { matchId: string }) => {
+      const { matchId } = payload ?? {}
+      if (!matchId) {
+        socket.emit('error', { code: 'bad_request' })
+        return
+      }
+      const room = getOrCreateRoom(matchId)
+      if (!room) {
+        socket.emit('error', { code: 'match_not_found' })
+        return
+      }
+      const result = room.handlePlacementDone(userId)
+      if (!result.accepted) socket.emit('error', { code: result.error ?? 'rejected' })
+    })
+
     // A client reports that a shot has finished animating. The room holds the next
     // shot until it hears this, which is what stops a bot firing a new shot into the
     // middle of the previous one's replay. It is a pacing signal, not a game

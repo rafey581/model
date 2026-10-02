@@ -14,6 +14,8 @@ import { WalletError, connectWallet, signWithWallet } from './wallet.js'
  * accounts, and admins have their own screen at /admin that this file has no link to.
  */
 
+type AuthMode = 'providers' | 'login' | 'register' | 'guest'
+
 export interface AuthProvider {
   id: string
   label: string
@@ -358,6 +360,346 @@ function renderProvidersInto(container: HTMLElement, errs: ReturnType<typeof err
     .catch((error: Error) => errs.show(error.message))
 }
 
+function renderLoginForm(
+  container: HTMLElement,
+  errs: ReturnType<typeof errorSlot>,
+  onSwitchMode: (mode: AuthMode) => void
+): void {
+  const form = document.createElement('form')
+  form.className = 'auth-form'
+  form.noValidate = true
+
+  const emailGroup = el('div', 'auth-input-group')
+  const emailLabel = document.createElement('label')
+  emailLabel.htmlFor = 'auth-login-email'
+  emailLabel.textContent = 'Email'
+  const emailInput = document.createElement('input')
+  emailInput.id = 'auth-login-email'
+  emailInput.name = 'email'
+  emailInput.type = 'email'
+  emailInput.placeholder = 'you@example.com'
+  emailInput.autocomplete = 'email'
+  emailInput.required = true
+  emailGroup.append(emailLabel, emailInput)
+  form.appendChild(emailGroup)
+
+  const passwordGroup = el('div', 'auth-input-group')
+  const passwordLabel = document.createElement('label')
+  passwordLabel.htmlFor = 'auth-login-password'
+  passwordLabel.textContent = 'Password'
+  const passwordInput = document.createElement('input')
+  passwordInput.id = 'auth-login-password'
+  passwordInput.name = 'password'
+  passwordInput.type = 'password'
+  passwordInput.placeholder = '••••••••'
+  passwordInput.autocomplete = 'current-password'
+  passwordInput.required = true
+  passwordGroup.append(passwordLabel, passwordInput)
+  form.appendChild(passwordGroup)
+
+  const submit = document.createElement('button')
+  submit.type = 'submit'
+  submit.className = 'auth-submit'
+  submit.textContent = 'SIGN IN'
+
+  const switchToRegister = document.createElement('button')
+  switchToRegister.type = 'button'
+  switchToRegister.className = 'auth-link'
+  switchToRegister.textContent = 'Create an account'
+  switchToRegister.addEventListener('click', () => onSwitchMode('register'))
+
+  const switchToGuest = document.createElement('button')
+  switchToGuest.type = 'button'
+  switchToGuest.className = 'auth-link'
+  switchToGuest.textContent = 'Continue as Guest'
+  switchToGuest.addEventListener('click', () => onSwitchMode('guest'))
+
+  form.append(submit, el('div', 'auth-footer', ''), switchToRegister, switchToGuest)
+  container.replaceChildren(form)
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault()
+    if (submit.disabled) return
+    errs.clear()
+    submit.disabled = true
+    submit.textContent = 'SIGNING IN…'
+    try {
+      const res = await api<{ user: AuthUserShape; token: string }>('/auth/login', {
+        method: 'POST',
+        body: { email: emailInput.value.trim(), password: passwordInput.value }
+      })
+      localStorage.setItem('token', res.token)
+      window.location.replace('/')
+    } catch (error: unknown) {
+      submit.disabled = false
+      submit.textContent = 'SIGN IN'
+      errs.show(error instanceof Error ? error.message : 'Sign in failed')
+      emailInput.focus()
+    }
+  })
+
+  emailInput.focus()
+}
+
+function renderRegisterForm(
+  container: HTMLElement,
+  errs: ReturnType<typeof errorSlot>,
+  onSwitchMode: (mode: AuthMode) => void
+): void {
+  const form = document.createElement('form')
+  form.className = 'auth-form'
+  form.noValidate = true
+
+  const emailGroup = el('div', 'auth-input-group')
+  const emailLabel = document.createElement('label')
+  emailLabel.htmlFor = 'auth-register-email'
+  emailLabel.textContent = 'Email'
+  const emailInput = document.createElement('input')
+  emailInput.id = 'auth-register-email'
+  emailInput.name = 'email'
+  emailInput.type = 'email'
+  emailInput.placeholder = 'you@example.com'
+  emailInput.autocomplete = 'email'
+  emailInput.required = true
+  emailGroup.append(emailLabel, emailInput)
+  form.appendChild(emailGroup)
+
+  const usernameGroup = el('div', 'auth-input-group')
+  const usernameLabel = document.createElement('label')
+  usernameLabel.htmlFor = 'auth-register-username'
+  usernameLabel.textContent = 'Username'
+  const usernameInput = document.createElement('input')
+  usernameInput.id = 'auth-register-username'
+  usernameInput.name = 'username'
+  usernameInput.type = 'text'
+  usernameInput.placeholder = 'e.g. cue_king'
+  usernameInput.maxLength = 24
+  usernameInput.autocomplete = 'off'
+  usernameInput.setAttribute('autocapitalize', 'off')
+  usernameInput.setAttribute('spellcheck', 'false')
+  usernameInput.required = true
+  const usernameStatus = el('div', 'auth-field-status')
+  usernameStatus.setAttribute('role', 'status')
+  usernameStatus.setAttribute('aria-live', 'polite')
+  usernameGroup.append(usernameLabel, usernameInput, usernameStatus)
+  form.appendChild(usernameGroup)
+
+  const passwordGroup = el('div', 'auth-input-group')
+  const passwordLabel = document.createElement('label')
+  passwordLabel.htmlFor = 'auth-register-password'
+  passwordLabel.textContent = 'Password'
+  const passwordInput = document.createElement('input')
+  passwordInput.id = 'auth-register-password'
+  passwordInput.name = 'password'
+  passwordInput.type = 'password'
+  passwordInput.placeholder = '••••••••'
+  passwordInput.autocomplete = 'new-password'
+  passwordInput.minLength = 6
+  passwordInput.required = true
+  passwordGroup.append(passwordLabel, passwordInput)
+  form.appendChild(passwordGroup)
+
+  const confirmGroup = el('div', 'auth-input-group')
+  const confirmLabel = document.createElement('label')
+  confirmLabel.htmlFor = 'auth-register-confirm'
+  confirmLabel.textContent = 'Confirm Password'
+  const confirmInput = document.createElement('input')
+  confirmInput.id = 'auth-register-confirm'
+  confirmInput.name = 'confirm'
+  confirmInput.type = 'password'
+  confirmInput.placeholder = '••••••••'
+  confirmInput.autocomplete = 'new-password'
+  confirmInput.required = true
+  confirmGroup.append(confirmLabel, confirmInput)
+  form.appendChild(confirmGroup)
+
+  let checkTimer: number | undefined
+  usernameInput.addEventListener('input', () => {
+    errs.clear()
+    window.clearTimeout(checkTimer)
+    usernameStatus.textContent = ''
+    const value = usernameInput.value.trim()
+    if (value.length < 3) {
+      usernameStatus.textContent = 'At least 3 characters.'
+      return
+    }
+    checkTimer = window.setTimeout(() => {
+      void api<{ available: boolean; message?: string }>(`/auth/username/check?username=${encodeURIComponent(value)}`)
+        .then((r) => {
+          if (usernameInput.value.trim() !== value) return
+          usernameStatus.textContent = r.available ? `${value} is free` : (r.message ?? 'Unavailable')
+          usernameStatus.classList.toggle('bad', !r.available)
+          usernameStatus.classList.toggle('good', r.available)
+        })
+        .catch(() => {})
+    }, 300)
+  })
+
+  const submit = document.createElement('button')
+  submit.type = 'submit'
+  submit.className = 'auth-submit'
+  submit.textContent = 'CREATE ACCOUNT'
+
+  const switchToLogin = document.createElement('button')
+  switchToLogin.type = 'button'
+  switchToLogin.className = 'auth-link'
+  switchToLogin.textContent = 'Already have an account? Sign in'
+  switchToLogin.addEventListener('click', () => onSwitchMode('login'))
+
+  const switchToGuest = document.createElement('button')
+  switchToGuest.type = 'button'
+  switchToGuest.className = 'auth-link'
+  switchToGuest.textContent = 'Continue as Guest'
+  switchToGuest.addEventListener('click', () => onSwitchMode('guest'))
+
+  form.append(submit, el('div', 'auth-footer', ''), switchToLogin, switchToGuest)
+  container.replaceChildren(form)
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault()
+    if (submit.disabled) return
+    const email = emailInput.value.trim()
+    const username = usernameInput.value.trim()
+    const password = passwordInput.value
+    const confirm = confirmInput.value
+
+    if (password !== confirm) {
+      errs.show('Passwords do not match')
+      confirmInput.focus()
+      return
+    }
+    if (username.length < 3) {
+      errs.show('Username must be at least 3 characters')
+      usernameInput.focus()
+      return
+    }
+    if (password.length < 6) {
+      errs.show('Password must be at least 6 characters')
+      passwordInput.focus()
+      return
+    }
+
+    errs.clear()
+    submit.disabled = true
+    submit.textContent = 'CREATING…'
+    try {
+      const res = await api<{ user: AuthUserShape; token: string }>('/auth/register', {
+        method: 'POST',
+        body: { email, username, password }
+      })
+      localStorage.setItem('token', res.token)
+      window.location.replace('/')
+    } catch (error: unknown) {
+      submit.disabled = false
+      submit.textContent = 'CREATE ACCOUNT'
+      errs.show(error instanceof Error ? error.message : 'Registration failed')
+      emailInput.focus()
+    }
+  })
+
+  emailInput.focus()
+}
+
+function renderGuestMode(
+  container: HTMLElement,
+  errs: ReturnType<typeof errorSlot>,
+  onSwitchMode: (mode: AuthMode) => void
+): void {
+  const card = container.closest('.auth-card') as HTMLElement
+  const note = el('div', 'auth-notice')
+  note.textContent = 'Play as a guest without creating an account. Your progress will not be saved.'
+  container.replaceChildren(note)
+
+  const submit = document.createElement('button')
+  submit.type = 'button'
+  submit.className = 'auth-submit'
+  submit.textContent = 'PLAY AS GUEST'
+  submit.addEventListener('click', async () => {
+    submit.disabled = true
+    submit.textContent = 'ENTERING…'
+    try {
+      localStorage.removeItem('token')
+      window.location.replace('/')
+    } catch {
+      submit.disabled = false
+      submit.textContent = 'PLAY AS GUEST'
+      errs.show('Failed to start guest session')
+    }
+  })
+
+  const switchToLogin = document.createElement('button')
+  switchToLogin.type = 'button'
+  switchToLogin.className = 'auth-link'
+  switchToLogin.textContent = 'Sign in or create an account'
+  switchToLogin.addEventListener('click', () => onSwitchMode('login'))
+
+  container.append(submit, el('div', 'auth-footer', ''), switchToLogin)
+}
+
+function renderAuthTabs(
+  container: HTMLElement,
+  activeMode: AuthMode,
+  onSwitchMode: (mode: AuthMode) => void
+): HTMLElement {
+  const tabs = el('div', 'auth-tabs')
+  const modes: { key: AuthMode; label: string }[] = [
+    { key: 'providers', label: 'Providers' },
+    { key: 'login', label: 'Login' },
+    { key: 'register', label: 'Register' },
+    { key: 'guest', label: 'Guest' }
+  ]
+  for (const { key, label } of modes) {
+    const tab = document.createElement('button')
+    tab.type = 'button'
+    tab.className = `auth-tab${key === activeMode ? ' active' : ''}`
+    tab.textContent = label
+    tab.addEventListener('click', () => onSwitchMode(key))
+    tabs.appendChild(tab)
+  }
+  return tabs
+}
+
+function renderAuthCard(
+  root: HTMLElement,
+  errs: ReturnType<typeof errorSlot>,
+  initialMode: AuthMode
+): void {
+  const screen = el('div', 'auth-screen')
+  const card = el('div', 'auth-card')
+  card.appendChild(brandCard())
+
+  card.appendChild(errs.node)
+
+  const body = el('div')
+  let currentMode: AuthMode = initialMode
+
+  const switchMode = (mode: AuthMode) => {
+    currentMode = mode
+    const tabs = card.querySelector('.auth-tabs')
+    if (tabs) {
+      for (const tab of tabs.querySelectorAll('.auth-tab')) {
+        tab.classList.toggle('active', tab.textContent?.toLowerCase() === mode)
+      }
+    }
+    if (mode === 'providers') {
+      renderProvidersInto(body, errs)
+    } else if (mode === 'login') {
+      renderLoginForm(body, errs, switchMode)
+    } else if (mode === 'register') {
+      renderRegisterForm(body, errs, switchMode)
+    } else if (mode === 'guest') {
+      renderGuestMode(body, errs, switchMode)
+    }
+  }
+
+  card.appendChild(renderAuthTabs(card, currentMode, switchMode))
+  card.appendChild(body)
+  screen.appendChild(card)
+  root.appendChild(screen)
+
+  switchMode(currentMode)
+}
+
 export function renderAuthScreen(
   root: HTMLElement,
   app: HTMLElement,
@@ -365,9 +707,6 @@ export function renderAuthScreen(
 ): void {
   const params = new URLSearchParams(window.location.search)
 
-  // The OAuth callback redirects back here with the outcome in the query string.
-  // Handle it before anything else so a signed-in player is not shown a login card
-  // for a frame while the session is restored.
   const outcome = params.get('auth')
 
   if (outcome === 'pending') {
@@ -384,8 +723,6 @@ export function renderAuthScreen(
   }
 
   if (outcome) {
-    // Strip the query so a refresh does not replay the outcome, and so a token
-    // never lingers in the address bar or in history.
     window.history.replaceState({}, '', '/')
     const messages: Record<string, string> = {
       ok: 'Signed in with Google.',
@@ -394,56 +731,23 @@ export function renderAuthScreen(
       failed: 'Google sign-in failed. Please try again.',
       suspended: 'That account is suspended.'
     }
-    // Only Google redirects back to this page, so only Google has outcomes here.
     const text = messages[outcome]
     if (text) notify(text, outcome === 'ok' ? 'info' : 'error')
   }
 
-  const screen = el('div', 'auth-screen')
-  const card = el('div', 'auth-card')
-  card.appendChild(brandCard())
-
   const errs = errorSlot()
-  card.appendChild(errs.node)
-
-  const body = el('div', 'auth-providers')
-  screen.appendChild(card)
-  root.appendChild(screen)
+  const initialMode: AuthMode = 'providers'
+  renderAuthCard(root, errs, initialMode)
 
   void api<{ providers: AuthProvider[] }>('/auth/providers')
     .then(({ providers }) => {
       if (providers.length === 0) {
-        // The honest state: nothing is configured, so say that rather than
-        // rendering a card with no way in and no explanation.
-        const note = el('div', 'auth-empty')
-        note.appendChild(el('strong', undefined, 'Sign-in is not available right now'))
-        note.appendChild(
-          el('p', undefined, 'No identity provider is configured on this server. An operator needs to enable one.')
-        )
-        body.replaceChildren(note)
-        return
-      }
-      for (const provider of providers) {
-        body.appendChild(
-          providerButton(provider, () => {
-            if (provider.id === 'phantom') {
-              // Phantom is not a redirect: the wallet prompt is a JS dialog we have
-              // to drive, and the session comes back over fetch rather than a
-              // navigation.
-              void startPhantomSignIn(body, errs)
-              return
-            }
-            // A full navigation, not fetch: the provider redirects, and the
-            // response has to be able to set the session cookie.
-            window.location.href = `/api/auth/${provider.id}`
-          })
-        )
-      }
-      if (providers.length > 1) {
-        body.appendChild(el('p', 'auth-hint', 'Choose a provider to continue.'))
+        // No providers configured - switch to login/register/guest
+        errs.clear()
       }
     })
     .catch((error: Error) => {
-      errs.show(error.message)
+      // Provider loading failed - show login/register/guest as fallback
+      errs.clear()
     })
 }

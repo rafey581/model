@@ -16,6 +16,22 @@ export interface TurnTiming {
   turnDurationMs: number
   /** The server's clock at the moment it sent this, for offset correction. */
   serverNow: number
+  /**
+   * True while the clock is being held for a placement, and only then.
+   *
+   * The deadline is still sent while held, and is still the one the server will resume
+   * from, so this is not the same thing as `turnDeadlineAt === null`. It says: the clock
+   * is stopped, but these are the seconds you have. A client that ignored it would keep
+   * counting the hold away and show the player draining to zero for a placement that is
+   * costing them nothing, and would then resume from a deadline the server has already
+   * moved on from.
+   */
+  paused?: boolean
+}
+
+/** Whether the server has said it is holding this clock. */
+export function isPaused(timing: TurnTiming | null): boolean {
+  return timing?.paused === true
 }
 
 /** Below this the clock changes tone. Named because the display and the tests share it. */

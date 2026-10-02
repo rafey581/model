@@ -57,6 +57,29 @@ function currentStriker(room: GameRoom): 'user-a' | 'user-b' {
 }
 
 /**
+ * Puts the cue ball down through the placement path, if the frame has it in hand.
+ *
+ * A striker no longer places by playing a zero-power shot with a `cuePos` attached -
+ * that is precisely the bug this suite now pins - so anything that needs a playable
+ * table has to place the cue properly first. The ball goes down on its own layout
+ * spot, which is a legal D placement, and no stroke is played: the visit is still the
+ * striker's afterwards.
+ */
+function placeCueIfInHand(room: GameRoom): void {
+  const frame = room.match.currentFrame
+  if (!frame?.cueInHand) return
+  const turn = frame.turnIndex
+  const userId = turn === 1 ? 'user-b' : 'user-a'
+  const cue = frame.balls.find((b) => b.isCue)
+  if (!cue) throw new Error('frame has no cue ball')
+  const spot = { x: cue.pos.x, y: cue.pos.y }
+  expect(room.handlePlacementBegin(userId).accepted).toBe(true)
+  expect(room.handlePlacementConfirm(userId, spot).accepted).toBe(true)
+  // The two-phase flow requires the client to report camera-home before the hold lifts.
+  expect(room.handlePlacementDone(userId).accepted).toBe(true)
+}
+
+/**
  * Rejection reason for a shot that is not allowed right now, or null if allowed.
  *
  * Probed as whoever currently holds the turn. The turn alternates after every shot,
@@ -67,6 +90,7 @@ function currentStriker(room: GameRoom): 'user-a' | 'user-b' {
  * started. Where a test only needs to *look* at the hold, use `isHeld` instead.
  */
 function blockedReason(room: GameRoom): string | null {
+  placeCueIfInHand(room)
   const turn = room.match.currentFrame?.turnIndex
   const userId = turn === 1 ? 'user-b' : 'user-a'
   const result = room.handleShot(userId, SHOT)
@@ -80,6 +104,7 @@ function blockedReason(room: GameRoom): string | null {
  * probe itself advancing the match.
  */
 function isHeld(room: GameRoom): boolean {
+  placeCueIfInHand(room)
   const turn = room.match.currentFrame?.turnIndex
   const userId = turn === 1 ? 'user-b' : 'user-a'
   return room.handleShot(userId, SHOT).error === 'wait for the table to settle'
@@ -437,19 +462,16 @@ describe('turn clock', () => {
   }
 
   /**
-   * Plays and watches the break-off, so the frame is past its opening ball-in-hand.
+   * Places the cue and plays and watches the break-off, so the frame is past its
+   * opening ball-in-hand.
    *
-   * The clock runs from the moment the frame starts — placing is part of aiming —
-   * so the stroke here both places the cue (on its layout spot, a legal D
-   * placement) and spends the opening turn. The acknowledgement hands the visit on.
+   * Two separate things, and the split is the point. Placing happens first and plays
+   * nothing: no stroke, no foul, no change of turn. Only then is the break-off struck,
+   * and the acknowledgement hands the visit on.
    */
   function playBreak(room: GameRoom, cbs: ReturnType<typeof callbacks>): void {
-    const frame = room.match.currentFrame
-    const cue = frame?.balls.find((b) => b.isCue)
-    const placed = room.handleShot('user-a', {
-      ...SHOT,
-      cuePos: cue ? { x: cue.pos.x, y: cue.pos.y } : undefined
-    })
+    placeCueIfInHand(room)
+    const placed = room.handleShot('user-a', SHOT)
     expect(placed.accepted).toBe(true)
     room.noteShotPlayed('user-a', lastToken(cbs), 'sock-a')
   }
@@ -502,6 +524,7 @@ describe('turn clock', () => {
 
   it('stops the moment a shot is committed, and does not run while it is watched', () => {
     const { room, cbs } = startedRoom()
+    placeCueIfInHand(room)
     room.handleShot('user-a', SHOT)
     // The update that commits the shot is broadcast with the hold already taken, so
     // the clock is absent from it: a client that drew a deadline from this message
@@ -513,6 +536,7 @@ describe('turn clock', () => {
 
   it('stays stopped for the whole of the replay, however long the hold lasts', () => {
     const { room, cbs } = startedRoom()
+    placeCueIfInHand(room)
     room.handleShot('user-a', SHOT)
     // Time passes while the shot is watched. The clock must not appear in the meantime.
     vi.advanceTimersByTime(5_000)
@@ -525,6 +549,7 @@ describe('turn clock', () => {
 
   it('runs for the next turn once the hold is released, from the moment of release', () => {
     const { room, cbs } = startedRoom()
+    placeCueIfInHand(room)
     room.handleShot('user-a', SHOT)
     const token = lastToken(cbs)
     const before = Date.now()
@@ -641,6 +666,7 @@ describe('turn clock', () => {
     // say so on its own. Without this, clients kept drawing the stopped clock they
     // were last sent.
     const { room, cbs } = startedRoom()
+    placeCueIfInHand(room)
     room.handleShot('user-a', SHOT)
     const token = lastToken(cbs)
     const before = Date.now()
@@ -692,5 +718,354 @@ describe('turn clock', () => {
     )
     expect(frameEndUpdate).toBeDefined()
     expect(frameEndUpdate!.payload.turn.turnDeadlineAt).toBeNull()
+  })
+})
+
+describe('placement hold', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function started(opts: { connect?: ('a' | 'b')[]; timeoutSec?: number } = {}) {
+    const cbs = callbacks()
+    const room = new GameRoom(MATCH_ID, 'RANKED', 'BO1', 0, undefined, cbs, opts.timeoutSec ?? 30)
+    for (const seat of ['a', 'b'] as const) {
+      const userId = seat === 'a' ? 'user-a' : 'user-b'
+      if ((opts.connect ?? ['a']).includes(seat)) {
+        room.registerSocket(userId, seat === 'a' ? 0 : 1, `sock-${seat}`)
+      } else {
+        room.seatOfUser.set(userId, seat === 'a' ? 0 : 1)
+      }
+    }
+    room.tryStart()
+    return { room, cbs }
+  }
+
+  /** A legal D spot, which is the only kind of placement a fresh frame allows. */
+  const IN_D = { x: 600, y: 889 }
+
+  function eventsOfType(cbs: ReturnType<typeof callbacks>, type: string): any[] {
+    return cbs.broadcasts.flatMap((b) =>
+      b.event === 'game:update' ? ((b.payload?.events ?? []) as any[]).filter((e) => e.type === type) : []
+    )
+  }
+
+  it('holds the clock while the player is placing', () => {
+    const { room } = started({ timeoutSec: 1 })
+    const deadline = room.turnTiming().turnDeadlineAt
+    expect(deadline).not.toBeNull()
+    expect(room.handlePlacementBegin('user-a').accepted).toBe(true)
+    // The deadline is still there: this is a hold, not a cleared clock.
+    expect(room.turnTiming().turnDeadlineAt).toBe(deadline)
+    expect(room.turnTiming().paused).toBe(true)
+  })
+
+  // The bug as reported: the clock kept running across a legal placement and the frame
+  // ended in a timeout foul while the player was still doing the thing they were asked.
+  it('does not time out while a placement is in progress, however long it takes', () => {
+    const { room, cbs } = started({ timeoutSec: 1 })
+    expect(room.handlePlacementBegin('user-a').accepted).toBe(true)
+    vi.advanceTimersByTime(60_000)
+    const timeouts = eventsOfType(cbs, 'FOUL').filter((e) => e.data?.reason === 'turn timeout')
+    expect(timeouts, 'a held clock must not foul').toHaveLength(0)
+    expect(room.turnTiming().paused).toBe(true)
+    // And the visit is untouched: no penalty, no turn change.
+    expect(room.match.currentFrame?.turnIndex).toBe(0)
+    expect(room.match.currentFrame?.scores.player1).toBe(0)
+  })
+
+it('resumes from the time that was left, not from a fresh turn', () => {
+    const { room } = started({ timeoutSec: 30 })
+    vi.advanceTimersByTime(5_000)
+    expect(room.handlePlacementBegin('user-a').accepted).toBe(true)
+    // The player spends well over the five seconds left searching for a spot.
+    vi.advanceTimersByTime(45_000)
+    expect(room.handlePlacementConfirm('user-a', IN_D).accepted).toBe(true)
+    // The hold is still up - the camera is flying home. Clock is still paused.
+    expect(room.turnTiming().paused).toBe(true)
+    // Now the camera lands: the client reports done and the hold lifts.
+    expect(room.handlePlacementDone('user-a').accepted).toBe(true)
+    const timing = room.turnTiming()
+    expect(timing.paused).toBe(false)
+    // 25s of 30 were left when the placement began, and that is what comes back. Resetting
+    // to a full 30 here would hand every placing player half a minute they never earned.
+    expect(timing.turnDeadlineAt! - timing.serverNow).toBe(25_000)
+  })
+
+  it('reports the hold to clients, so the ring freezes rather than running on', () => {
+    const { room, cbs } = started()
+    room.handlePlacementBegin('user-a')
+    const clock = cbs.broadcasts.filter((b) => b.event === 'turn:clock')
+    expect(clock.length).toBeGreaterThan(0)
+    expect(clock[clock.length - 1]!.payload.turn.paused).toBe(true)
+    // The deadline travels with the pause, because it is the one the room will resume
+    // from. A client that read a paused clock as "no clock" would hide the player's time.
+    expect(clock[clock.length - 1]!.payload.turn.turnDeadlineAt).not.toBeNull()
+  })
+
+it('placing the cue is not a shot: no foul, no score, no turn change', () => {
+    const { room, cbs } = started()
+    const before = { ...room.match.currentFrame!.scores }
+    room.handlePlacementBegin('user-a')
+    expect(room.handlePlacementConfirm('user-a', IN_D).accepted).toBe(true)
+
+    expect(eventsOfType(cbs, 'FOUL'), 'placing must not raise a foul').toHaveLength(0)
+    expect(eventsOfType(cbs, 'SHOT'), 'placing must not announce a shot').toHaveLength(0)
+    expect(eventsOfType(cbs, 'BALL_POTTED')).toHaveLength(0)
+    expect(eventsOfType(cbs, 'TURN_CHANGE')).toHaveLength(0)
+    expect(room.match.currentFrame!.scores).toEqual(before)
+    expect(room.match.currentFrame!.turnIndex).toBe(0)
+    // The ball is down, but the camera is still flying home - clock is still held.
+    expect(room.match.currentFrame!.cueInHand).toBe(false)
+    // While the hold is up, the execution state reflects the placement phase.
+    expect(room.executionState()).toBe('BALL_IN_HAND_PLACEMENT')
+    expect(room.turnTiming().paused).toBe(true)
+
+    // The camera lands, the hold lifts, the clock resumes.
+    expect(room.handlePlacementDone('user-a').accepted).toBe(true)
+    expect(room.turnTiming().paused).toBe(false)
+    // Now the player can aim.
+    expect(room.executionState()).toBe('PLAYER_AIMING')
+  })
+
+it('broadcasts the placed ball so every client sees it', () => {
+    const { room, cbs } = started()
+    room.handlePlacementBegin('user-a')
+    room.handlePlacementConfirm('user-a', IN_D)
+    // The clock is still held while the camera flies home.
+    expect(room.turnTiming().paused).toBe(true)
+    const update = cbs.broadcasts.filter((b) => b.event === 'game:update').pop()
+    // A snapshot ball is `{ id, x, y, potted }`, so the cue is found by its id, which is 0.
+    const cue = update!.payload.frame.balls.find((b: any) => b.id === 0)
+    expect(cue).toBeDefined()
+    expect(cue.x).toBeCloseTo(IN_D.x, 5)
+    expect(cue.y).toBeCloseTo(IN_D.y, 5)
+    // The frame snapshot carries the paused clock, so clients see the held value.
+    expect(update!.payload.frame.cueInHand).toBe(false)
+    expect(update!.payload.turn.paused).toBe(true)
+  })
+
+it('lets the player shoot once the camera is home', () => {
+    const { room } = started()
+    room.handlePlacementBegin('user-a')
+    room.handlePlacementConfirm('user-a', IN_D)
+    // Shot is refused while the placement hold is still up.
+    expect(room.handleShot('user-a', SHOT).accepted).toBe(false)
+    // The camera lands, the hold lifts.
+    expect(room.handlePlacementDone('user-a').accepted).toBe(true)
+    // Now the player can shoot.
+    expect(room.handleShot('user-a', SHOT).accepted).toBe(true)
+  })
+
+  it('refuses a shot through the back of a placement', () => {
+    const { room } = started()
+    room.handlePlacementBegin('user-a')
+    const result = room.handleShot('user-a', SHOT)
+    expect(result.accepted).toBe(false)
+    expect(result.error).toBe('place the cue ball first')
+  })
+
+  describe('a refused spot is a retry, not a loss', () => {
+    it('keeps the hold up and the ball in hand, so the player can try again', () => {
+      const { room } = started()
+      room.handlePlacementBegin('user-a')
+      // Well outside the D, which a fresh frame forbids.
+      const refused = room.handlePlacementConfirm('user-a', { x: 1200, y: 1400 })
+      expect(refused.accepted).toBe(false)
+      expect(refused.error).toBe('outside-D')
+      expect(room.match.currentFrame!.cueInHand).toBe(true)
+      expect(room.match.currentFrame!.turnIndex).toBe(0)
+      // Still held: a rejected spot is not a reason to start charging the player time.
+      expect(room.turnTiming().paused).toBe(true)
+      // And the retry works.
+      expect(room.handlePlacementConfirm('user-a', IN_D).accepted).toBe(true)
+    })
+
+    it('a full turn spent retrying still cannot end in a timeout', () => {
+      const { room, cbs } = started({ timeoutSec: 1 })
+      room.handlePlacementBegin('user-a')
+      for (let i = 0; i < 20; i++) {
+        room.handlePlacementConfirm('user-a', { x: 1200, y: 1400 })
+        vi.advanceTimersByTime(1_000)
+      }
+      expect(eventsOfType(cbs, 'FOUL')).toHaveLength(0)
+    })
+  })
+
+  describe('idempotency', () => {
+    it('a repeated begin does not re-hold the clock or restart the backstop', () => {
+      const { room } = started({ timeoutSec: 30 })
+      vi.advanceTimersByTime(5_000)
+      expect(room.handlePlacementBegin('user-a').accepted).toBe(true)
+      const held = room.turnTiming().turnDeadlineAt
+      vi.advanceTimersByTime(3_000)
+      expect(room.handlePlacementBegin('user-a').accepted).toBe(true)
+      // The hold is the same hold: a chatty client cannot stretch the window by repeating.
+      expect(room.turnTiming().turnDeadlineAt).toBe(held)
+    })
+
+it('a repeated begin does not hand out a fresh clock', () => {
+      const { room } = started({ timeoutSec: 30 })
+      vi.advanceTimersByTime(5_000)
+      room.handlePlacementBegin('user-a')
+      vi.advanceTimersByTime(20_000)
+      // The client re-declares part-way through, as one reconnecting would. It must not be
+      // read as a new placement starting from the top of the clock.
+      room.handlePlacementBegin('user-a')
+      room.handlePlacementConfirm('user-a', IN_D)
+      // Hold is still up; clock is paused.
+      expect(room.turnTiming().paused).toBe(true)
+      // Camera lands.
+      room.handlePlacementDone('user-a')
+      // Still the 25s that was left at the first declaration, not a re-hold of 30.
+      expect(room.turnTiming().turnDeadlineAt! - room.turnTiming().serverNow).toBe(25_000)
+    })
+
+it('a repeated confirm lands on the same table without moving the ball', () => {
+      const { room, cbs } = started()
+      room.handlePlacementBegin('user-a')
+      const first = room.handlePlacementConfirm('user-a', IN_D)
+      expect(first.accepted).toBe(true)
+      expect(first.alreadyPlaced).toBe(false)
+
+      const second = room.handlePlacementConfirm('user-a', { x: 620, y: 900 })
+      expect(second.accepted).toBe(true)
+      expect(second.alreadyPlaced, 'the room must report this rather than re-place').toBe(true)
+      // The ball must not have moved - check the latest broadcast snapshot.
+      const update = cbs.broadcasts.filter((b) => b.event === 'game:update').pop()
+      const cue = update!.payload.frame.balls.find((b: any) => b.id === 0)
+      expect(cue).toBeDefined()
+      expect(cue.x).toBeCloseTo(IN_D.x, 5)
+      expect(cue.y).toBeCloseTo(IN_D.y, 5)
+    })
+  })
+
+  describe('cannot outlive its own backstop', () => {
+it('releases a placement nobody finished, without fouling the player', () => {
+      // The hold must not be a way to freeze a match, but letting it lapse must not be a
+      // timeout either - that is the fault the hold exists to remove.
+      const { room, cbs } = started({ timeoutSec: 1 })
+      room.handlePlacementBegin('user-a')
+      // Everything a player could reasonably spend on a placement, several times over,
+      // and still no foul.
+      vi.advanceTimersByTime(119_000)
+      expect(eventsOfType(cbs, 'FOUL'), 'a hold in progress must not foul').toHaveLength(0)
+      expect(room.match.currentFrame!.turnIndex).toBe(0)
+
+      // Just past the backstop but short of the clock it re-arms, so the two are not confused.
+      vi.advanceTimersByTime(1_500)
+      expect(room.turnTiming().paused, 'the hold ends on its own').toBe(false)
+      expect(room.match.currentFrame!.turnIndex, 'and does not hand over the visit').toBe(0)
+      // The clock is running again, which is what stops the frame stalling for good. It
+      // is the ordinary clock, so it can still time the player out from here on - which
+      // is the whole point of letting it go.
+      expect(room.turnTiming().turnDeadlineAt).not.toBeNull()
+      vi.advanceTimersByTime(1_000)
+      const timeouts = eventsOfType(cbs, 'FOUL').filter((e) => e.data?.reason === 'turn timeout')
+      expect(timeouts, 'the released clock still times an unused turn out').toHaveLength(1)
+    })
+
+    it('a player who never places at all is still timed out, so a frame cannot hang', () => {
+      const { room, cbs } = started({ timeoutSec: 1 })
+      // No `placement:begin`: nobody ever declared a placement, so the ordinary clock
+      // runs exactly as it always did.
+      vi.advanceTimersByTime(1_500)
+      const timeouts = eventsOfType(cbs, 'FOUL').filter((e) => e.data?.reason === 'turn timeout')
+      expect(timeouts).toHaveLength(1)
+    })
+
+    it('a placement still places correctly after the backstop has released it', () => {
+      const { room } = started({ timeoutSec: 1 })
+      room.handlePlacementBegin('user-a')
+      vi.advanceTimersByTime(150_000)
+      expect(room.handlePlacementConfirm('user-a', IN_D).accepted).toBe(true)
+      expect(room.match.currentFrame!.cueInHand).toBe(false)
+      expect(room.handleShot('user-a', SHOT).accepted).toBe(true)
+    })
+  })
+
+  describe('who may hold it', () => {
+    it('refuses a player who is not on', () => {
+      const { room } = started()
+      expect(room.handlePlacementBegin('user-b').accepted).toBe(false)
+      expect(room.handlePlacementBegin('nobody').accepted).toBe(false)
+    })
+
+    it('refuses a begin when the ball is not in hand', () => {
+      const { room, cbs } = started()
+      placeCueIfInHand(room)
+      const result = room.handlePlacementBegin('user-a')
+      expect(result.accepted).toBe(false)
+      expect(room.turnTiming().paused).toBe(false)
+    })
+
+    it('refuses a confirm from a player who is not on', () => {
+      const { room } = started()
+      room.handlePlacementBegin('user-a')
+      expect(room.handlePlacementConfirm('user-b', IN_D).accepted).toBe(false)
+      expect(room.match.currentFrame!.cueInHand).toBe(true)
+    })
+
+    it('never lets the robot begin a placement', () => {
+      const cbs = callbacks()
+      const room = new GameRoom(MATCH_ID, 'PRACTICE', 'BO1', 0, undefined, cbs, 30)
+      room.seatOfUser.set('user-a', 0)
+      room.seatOfUser.set('bot', 1)
+      room.registerSocket('user-a', 0, 'sock-a')
+      room.tryStart()
+      // Put the robot on with the cue in hand.
+      room.match.currentFrame!.turnIndex = 1
+      room.match.currentFrame!.cueInHand = true
+      expect(room.isBotTurn()).toBe(true)
+      expect(room.handlePlacementBegin('bot').accepted).toBe(false)
+    })
+
+    it('the robot is not scheduled to play while a placement is in progress', () => {
+      const cbs = callbacks()
+      const room = new GameRoom(MATCH_ID, 'PRACTICE', 'BO1', 0, undefined, cbs, 30)
+      room.seatOfUser.set('user-a', 0)
+      room.seatOfUser.set('bot', 1)
+      room.registerSocket('user-a', 0, 'sock-a')
+      room.tryStart()
+      room.match.currentFrame!.turnIndex = 1
+      room.match.currentFrame!.cueInHand = true
+// Force a hold onto the robot's seat to prove the bot gate is not merely relying on
+      // `handlePlacementBegin` refusing it elsewhere. The leading semicolon is load-bearing:
+      // without it the preceding `= true` is read as a call on the cast expression.
+      const seat = room as unknown as { placementSeat: number | null }
+      seat.placementSeat = 1
+      const before = cbs.broadcasts.filter((b) => b.event === 'game:update').length
+      vi.advanceTimersByTime(5_000)
+      const after = cbs.broadcasts.filter((b) => b.event === 'game:update').length
+      expect(after, 'the bot must not play while a placement is held').toBe(before)
+      seat.placementSeat = null
+    })
+  })
+
+  it('drops the hold when the striker disconnects, so a rejoin is not held forever', () => {
+    const { room } = started()
+    room.handlePlacementBegin('user-a')
+    expect(room.turnTiming().paused).toBe(true)
+    room.unregisterSocket('user-a', 'sock-a')
+    expect(room.turnTiming().paused, 'a hold must not outlive its player').toBe(false)
+    expect(room.turnTiming().turnDeadlineAt).toBeNull()
+
+    // The player comes back and starts placing again: the clock is armed afresh, which
+    // is the existing "a returner gets a full turn" rule, and the hold takes it again.
+    room.registerSocket('user-a', 0, 'sock-a')
+    expect(room.turnTiming().turnDeadlineAt).not.toBeNull()
+    expect(room.handlePlacementBegin('user-a').accepted).toBe(true)
+    expect(room.turnTiming().paused).toBe(true)
+  })
+
+  it('leaves no hold behind when the room is disposed', () => {
+    const { room } = started()
+    room.handlePlacementBegin('user-a')
+    room.dispose()
+    expect(room.turnTiming().paused).toBe(false)
   })
 })
