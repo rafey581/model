@@ -91,6 +91,7 @@ let activeMatchId: string | null = null
  */
 let activeScreen: AppScreen = 'home'
 /** The difficulty the setup screen opens on, kept so a trip to the lobby does not reset it. */
+let practiceDifficulty: PracticeAiLevel = DEFAULT_DIFFICULTY
 
 let mySeat: number | undefined
 let frame: FrameSnapshotData | null = null
@@ -1030,6 +1031,9 @@ function render(): void {
   } else if (activeScreen === 'home') {
     app.appendChild(header({ home: true }))
     renderHome()
+  } else if (activeScreen === 'practice') {
+    app.appendChild(header())
+    renderPracticeSetup()
   } else {
     app.appendChild(header())
     void renderScreen(activeScreen)
@@ -1066,10 +1070,6 @@ function renderHome(): void {
     body.appendChild(el('div', 'home-card-blurb', spec.blurb))
     card.append(icon, body, el('div', 'home-card-cta', 'Play'))
     card.onclick = () => {
-      if (spec.id === 'practice') {
-        void startPractice(DEFAULT_DIFFICULTY)
-        return
-      }
       const target = cardDestination(spec.id)
       if (!target) return
       activeScreen = target
@@ -1080,15 +1080,6 @@ function renderHome(): void {
   page.appendChild(cards)
   page.appendChild(homeBar())
   app.appendChild(page)
-}
-
-/**
- * Starts a practice match at one level, through the same call the setup screen makes.
- */
-function startPractice(level: PracticeAiLevel): Promise<void> {
-  return api<{ id: string }>('/practice/start', { method: 'POST', body: { aiLevel: level } })
-    .then((data) => enterMatch(data.id, true))
-    .catch((error: Error) => toast(error.message, 'error'))
 }
 
 /**
@@ -1261,6 +1252,101 @@ function renderSettingsScreen(wrap: HTMLElement): void {
   row.appendChild(toggle)
   sound.appendChild(row)
   wrap.appendChild(sound)
+}
+
+/**
+ * The pre-practice setup screen.
+ *
+ * Reached from the PRACTICE card and doing one job: choose the level, then start the
+ * match through the same `POST /practice/start` the old lobby card used, with the same
+ * `enterMatch` behind it. Nothing about how a practice match is created, played or
+ * settled is touched here - this is a screen in front of an unchanged flow.
+ *
+ * The setup screen replaces a dropdown that lived inside the lobby grid. A `<select>` is
+ * the right control when the level is one field among five and the wrong one when it is
+ * the only decision the player came here to make: it hides two of the three options and
+ * says nothing about what they mean. Three panes on a glass panel say both, and the
+ * description under them is reserved space, so choosing a level never moves the button.
+ */
+function renderPracticeSetup(): void {
+  const page = el('div', 'practice-page page-enter')
+  const panel = el('div', 'practice-panel glass glass-edge')
+
+  const back = el('button', 'ghost practice-back', 'Back to home') as HTMLButtonElement
+  back.type = 'button'
+  back.onclick = () => {
+    activeScreen = 'home'
+    render()
+  }
+  panel.appendChild(back)
+
+  const heading = el('div', 'practice-heading')
+  heading.appendChild(el('h2', undefined, 'Practice match'))
+  panel.appendChild(heading)
+
+  // The matchup, in the two avatars that will actually be at the table: the player's own,
+  // drawn by the shared component from their name, and the robot.
+  const playerName = currentUser?.username ?? 'You'
+  const matchup = el('div', 'practice-matchup')
+  const you = el('div', 'practice-side')
+  you.appendChild(createAvatarBadge({ name: playerName, isBot: false }))
+  you.appendChild(el('div', 'practice-side-name', playerName))
+  const bot = el('div', 'practice-side')
+  bot.appendChild(createAvatarBadge({ name: 'Robot', isBot: true }))
+  bot.appendChild(el('div', 'practice-side-name', 'Robot'))
+  matchup.append(you, el('div', 'practice-vs', 'vs'), bot)
+  panel.appendChild(matchup)
+
+  panel.appendChild(el('div', 'practice-group-label', 'Robot level'))
+  const blurb = el('div', 'difficulty-blurb')
+  const group = el('div', 'difficulty-group')
+  group.setAttribute('role', 'radiogroup')
+  group.setAttribute('aria-label', 'Robot level')
+
+  // One paint function for the selection, so the three buttons and the description under
+  // them cannot disagree: it is called once on entry and again on every click.
+  const buttons: HTMLButtonElement[] = []
+  const paint = (): void => {
+    for (const btn of buttons) btn.setAttribute('aria-checked', String(btn.dataset.level === practiceDifficulty))
+    const chosen = DIFFICULTIES.find((d) => d.level === practiceDifficulty)
+    blurb.textContent = chosen?.blurb ?? ''
+  }
+  for (const spec of DIFFICULTIES) {
+    const btn = el('button', 'difficulty', spec.label) as HTMLButtonElement
+    btn.type = 'button'
+    btn.dataset.level = spec.level
+    btn.setAttribute('role', 'radio')
+    btn.onclick = () => {
+      practiceDifficulty = spec.level
+      paint()
+    }
+    buttons.push(btn)
+    group.appendChild(btn)
+  }
+  panel.appendChild(group)
+  paint()
+  panel.appendChild(blurb)
+
+  const actions = el('div', 'practice-actions')
+  const play = el('button', 'practice-play', 'Play') as HTMLButtonElement
+  play.type = 'button'
+  play.onclick = () => {
+    // Disabled on the way out so a second click cannot start a second practice match; the
+    // failure path puts it back, because nothing has happened yet in that case.
+    play.disabled = true
+    void api<{ id: string }>('/practice/start', { method: 'POST', body: { aiLevel: practiceDifficulty } })
+      .then((data) => enterMatch(data.id, true))
+      .catch((error: Error) => {
+        play.disabled = false
+        toast(error.message, 'error')
+      })
+  }
+  actions.appendChild(play)
+  actions.appendChild(el('div', 'practice-note', 'Practice costs no credits and does not count toward your record.'))
+  panel.appendChild(actions)
+
+  page.appendChild(panel)
+  app.appendChild(page)
 }
 
 /**
