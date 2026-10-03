@@ -142,6 +142,15 @@ export const COLOR_NAMES: Record<number, string> = {
 
 export const TOTAL_REDS = 15
 
+/**
+ * The product's name, in one place.
+ *
+ * `index.html` cannot import it, so its `<title>` is the one copy that has to be typed
+ * out again; everything rendered in the app reads this, which is what keeps the wordmark
+ * from drifting between the header, the auth screens and the home screen.
+ */
+export const APP_TITLE = 'Snooker Arena'
+
 export const PRACTICE_AI_LEVELS = ['EASY', 'MEDIUM', 'HARD'] as const
 export type PracticeAiLevel = (typeof PRACTICE_AI_LEVELS)[number]
 

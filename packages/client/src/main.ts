@@ -1,4 +1,4 @@
-﻿import './styles.css'
+import './styles.css'
 import { api, connectSocket, getSocket, makeToast } from './game/network.js'
 import { drawTable, resetTableAnimation } from './game/renderer.js'
 import { Scene3D } from './game/scene3d.js'
@@ -12,7 +12,19 @@ import { fitTableBox } from './game/layout.js'
 import { createShotTimer } from './game/shotTimerView.js'
 import type { TurnTiming } from './game/shotTimer.js'
 import type { ShotInput, ShotPlayback } from '@snooker/shared'
-import { STAKE_TIERS, COLOR_VALUES } from '@snooker/shared'
+import { APP_TITLE, STAKE_TIERS, COLOR_VALUES } from '@snooker/shared'
+import type { PracticeAiLevel } from '@snooker/shared'
+import { createAvatarBadge } from './game/avatar.js'
+import {
+  DEFAULT_DIFFICULTY,
+  DIFFICULTIES,
+  HOME_BAR,
+  HOME_CARDS,
+  barDestination,
+  cardDestination,
+  comingSoonMessage
+} from './lobbyModel.js'
+import type { AppScreen } from './lobbyModel.js'
 import type { Socket } from 'socket.io-client'
 import { playCushion, playFoul, playFrameEnd, playMatchEnd, playPot, setSoundMuted, isSoundMuted, unlockAudio } from './game/audio.js'
 import { ShotPlayer } from './game/playback.js'
@@ -69,6 +81,17 @@ let badgeEl: HTMLElement | null = null
 let panelEl: HTMLElement | null = null
 
 let activeMatchId: string | null = null
+/**
+ * Which of the screens behind a card or a bar icon is on.
+ *
+ * A screen rather than a URL: the app is one page and every one of these is a re-render,
+ * so the id only has to survive long enough to choose the branch in `render`. A match or
+ * a tournament still wins over it, because those are states rather than screens — you
+ * leave whichever screen you were on to go and play, and you come back to it.
+ */
+let activeScreen: AppScreen = 'home'
+/** The difficulty the setup screen opens on, kept so a trip to the lobby does not reset it. */
+
 let mySeat: number | undefined
 let frame: FrameSnapshotData | null = null
 let cueController: CueController | null = null
@@ -206,7 +229,16 @@ function el(tag: string, className?: string, text?: string): HTMLElement {
   return node
 }
 
-function header(): HTMLElement {
+/**
+ * The top bar.
+ *
+ * `home: true` is the home screen's version, and the only difference is what the bar is
+ * for. There, the player's identity is the headline — it is what says which account you
+ * are about to play on — so it carries the shared avatar and the balance chip steps out.
+ * The balance is not lost from the app: it is on the tables screen beside the stake tiers
+ * it pays for, which is the only point in this flow at which it changes anything.
+ */
+function header(options: { home?: boolean } = {}): HTMLElement {
   const head = el('header')
 
   const brand = el('a', 'brand') as HTMLAnchorElement
@@ -217,19 +249,19 @@ function header(): HTMLElement {
   const logoIcon = el('span', 'brand-logo')
   logoIcon.innerHTML =
     '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" fill="#c9a84c"/><circle cx="12" cy="12" r="7" fill="#0a0a0f"/><circle cx="9.5" cy="9.5" r="2.5" fill="#e8c872"/></svg>'
-  brand.append(logoIcon, el('span', 'brand-name', 'Snooker Arena'))
+  brand.append(logoIcon, el('span', 'brand-name', APP_TITLE))
   head.appendChild(brand)
 
   const right = el('div', 'row header-actions')
   if (currentUser) {
     // The avatar carries the first letter, so the player is recognisable at a glance
-    // and the two names in a scoreboard are told apart without reading them.
+    // and the two names in a scoreboard are told apart without reading them. It is the
+    // same component the match HUD draws, so the face here is the face at the table.
     const chip = el('div', 'user-chip')
-    const avatar = el('span', 'user-avatar', (currentUser.username[0] ?? '?').toUpperCase())
-    avatar.setAttribute('aria-hidden', 'true')
+    chip.appendChild(createAvatarBadge({ name: currentUser.username, isBot: false }))
     const name = el('span', 'user-name')
     name.appendChild(el('strong', undefined, currentUser.username))
-    chip.append(avatar, name)
+    chip.appendChild(name)
 
     const conn = el('span', connected ? 'chip-ok' : 'chip-bad', connected ? 'online' : 'reconnectingâ€¦')
     conn.id = 'conn-chip'
@@ -237,16 +269,20 @@ function header(): HTMLElement {
     chip.appendChild(conn)
     right.appendChild(chip)
 
-    // The balance is its own chip so it is the thing that reads as a number, rather
-    // than a run-on sentence with the username.
-    const walletChip = el('div', 'wallet-chip')
-    walletChip.id = 'wallet-chip'
-    walletChip.title = 'Virtual credits â€” no real money'
-    const coin = el('span', 'wallet-coin')
-    coin.setAttribute('aria-hidden', 'true')
-    coin.textContent = 'â—ˆ'
-    walletChip.append(coin, el('span', 'wallet-amount', `${wallet.balance} CR`))
-    right.appendChild(walletChip)
+// The balance is its own chip so it is the thing that reads as a number, rather
+    // than a run-on sentence with the username. The home screen drops the chip but not
+    // the balance: a number there would compete with the three things that screen is
+    // for, so it waits until the player is choosing a stake.
+    if (!options.home) {
+      const walletChip = el('div', 'wallet-chip')
+      walletChip.id = 'wallet-chip'
+      walletChip.title = 'Virtual credits — no real money'
+      const coin = el('span', 'wallet-coin')
+      coin.setAttribute('aria-hidden', 'true')
+      coin.textContent = '◈'
+      walletChip.append(coin, el('span', 'wallet-amount', `${wallet.balance} CR`))
+      right.appendChild(walletChip)
+    }
 
     right.appendChild(renderBell())
 
@@ -270,6 +306,7 @@ function header(): HTMLElement {
       currentUser = null
       activeMatchId = null
       activeTournamentId = null
+      activeScreen = 'home'
       clearTournamentTimer()
       leaveGameState()
       render()
@@ -730,6 +767,9 @@ async function finishPractice(): Promise<void> {
     await api('/practice/resign', { method: 'POST', body: { matchId: activeMatchId } })
     toast('Practice ended')
     leaveGameState()
+    // The session is over: back to the home screen rather than to a setup screen
+    // offering to start another one the player did not ask for.
+    activeScreen = 'home'
     render()
   } catch (error) {
     toast((error as Error).message, 'error')
@@ -740,6 +780,10 @@ function leaveToLobby(): void {
   leaveGameState()
   clearTournamentTimer()
   removeOverlay()
+  // Home is where every exit from a match lands, whichever screen the match was
+  // entered from. A tournament match keeps activeTournamentId set, so render still
+  // prefers the bracket over the home screen for that one case.
+  activeScreen = 'home'
   render()
 }
 
@@ -776,7 +820,8 @@ async function renderTournament(): Promise<void> {
   const wrap = el('div')
   app.appendChild(wrap)
   if (!activeTournamentId) {
-    void renderLobby()
+    activeScreen = 'home'
+    render()
     return
   }
   let data: TournamentData
@@ -784,9 +829,10 @@ async function renderTournament(): Promise<void> {
     data = await api<TournamentData>(`/tournaments/${activeTournamentId}`)
   } catch (error) {
     wrap.appendChild(el('div', 'muted', (error as Error).message))
-    const back = el('button', undefined, 'Back to lobby')
+    const back = el('button', undefined, 'Back to home')
     back.onclick = () => {
       activeTournamentId = null
+      activeScreen = 'home'
       render()
     }
     wrap.appendChild(back)
@@ -804,9 +850,10 @@ async function renderTournament(): Promise<void> {
   const refreshBtn = el('button', 'ghost', 'Refresh')
   refreshBtn.onclick = () => void renderTournament()
   actions.appendChild(refreshBtn)
-  const backBtn = el('button', 'ghost', 'Back to lobby')
+  const backBtn = el('button', 'ghost', 'Back to home')
   backBtn.onclick = () => {
     activeTournamentId = null
+    activeScreen = 'home'
     render()
   }
   actions.appendChild(backBtn)
@@ -940,24 +987,37 @@ async function finishMatch(winnerSeat: number, reason?: string): Promise<void> {
     }
   }
   if (reason === 'concede') box.appendChild(el('div', 'muted', 'by concession'))
-  const backBtn = el('button', undefined, activeTournamentId ? 'Back to tournament' : 'Back to lobby')
+  const backBtn = el('button', undefined, activeTournamentId ? 'Back to tournament' : 'Back to home')
   backBtn.onclick = () => leaveToLobby()
   box.appendChild(backBtn)
   showOverlay(box)
 }
 
+/**
+ * Draws whichever screen the player is on.
+ *
+ * A match and a tournament bracket are states rather than screens, so they are checked
+ * first: you leave a screen to go and play and you come back to it. The full-height
+ * shells are decided from the same list, because a screen that is one viewport tall has
+ * to be told so before its first child is measured, not after.
+ */
 function render(): void {
   app.innerHTML = ''
-  // The game screen is the only full-height page; every other screen is a scrolling
-  // column, so the class is reset here rather than left behind by the last render.
-  app.className = 'app-root'
-  document.body.classList.remove('game-mode')
   hud = null
-  app.appendChild(header())
+  document.body.classList.remove('game-mode', 'home-mode', 'practice-mode')
+
+  const shell = activeMatchId ? 'app-game' : activeScreen === 'home' ? 'app-home' : activeScreen === 'practice' ? 'app-practice' : null
+  app.className = shell ? `app-root ${shell}` : 'app-root'
+  if (shell === 'app-home') document.body.classList.add('home-mode')
+  if (shell === 'app-practice') document.body.classList.add('practice-mode')
+
   if (!currentUser) {
     // The auth screen centres itself on the viewport, so the transition is applied to
-    // the card rather than to a wrapper â€” the wrapper would be a full-height block
+    // the card rather than to a wrapper — the wrapper would be a full-height block
     // and the animation would be invisible behind the card's own entrance.
+    app.className = 'app-root'
+    document.body.classList.remove('home-mode', 'practice-mode')
+    app.appendChild(header())
     renderAuthScreen(app, app, toast)
   } else if (activeMatchId) {
     // No page transition here: the game fits itself to the space the header and HUD
@@ -965,44 +1025,242 @@ function render(): void {
     // wrong for the duration of the animation.
     renderGame()
   } else if (activeTournamentId) {
+    app.appendChild(header())
     void renderTournament()
+  } else if (activeScreen === 'home') {
+    app.appendChild(header({ home: true }))
+    renderHome()
   } else {
-    void renderLobby()
+    app.appendChild(header())
+    void renderScreen(activeScreen)
   }
 }
 
-async function renderLobby(): Promise<void> {
+/**
+ * The home screen.
+ *
+ * Deliberately synchronous and deliberately empty of requests. Every element here is
+ * built from state the app already holds, so the screen is painted complete on the first
+ * frame and nothing reflows when something arrives: no skeletons, no reserved heights
+ * guessing at content, and no request that can fail halfway and leave a hole. The wallet
+ * the tables screen will want is fetched in the background, after the screen is up.
+ */
+function renderHome(): void {
+  void refreshWallet()
+
+  const page = el('div', 'home-page page-enter')
+
+  const title = el('div', 'home-title')
+  title.appendChild(el('h1', 'home-wordmark', APP_TITLE))
+  title.appendChild(el('div', 'home-tagline', 'Play online snooker'))
+  page.appendChild(title)
+
+  const cards = el('div', 'home-cards')
+  for (const spec of HOME_CARDS) {
+    const card = el('button', 'home-card glass glass-edge') as HTMLButtonElement
+    card.type = 'button'
+    const icon = el('span', 'home-card-icon')
+    icon.innerHTML = spec.icon
+    const body = el('div', 'home-card-body')
+    body.appendChild(el('div', 'home-card-label', spec.label))
+    body.appendChild(el('div', 'home-card-blurb', spec.blurb))
+    card.append(icon, body, el('div', 'home-card-cta', 'Play'))
+    card.onclick = () => {
+      if (spec.id === 'practice') {
+        void startPractice(DEFAULT_DIFFICULTY)
+        return
+      }
+      const target = cardDestination(spec.id)
+      if (!target) return
+      activeScreen = target
+      render()
+    }
+    cards.appendChild(card)
+  }
+  page.appendChild(cards)
+  page.appendChild(homeBar())
+  app.appendChild(page)
+}
+
+/**
+ * Starts a practice match at one level, through the same call the setup screen makes.
+ */
+function startPractice(level: PracticeAiLevel): Promise<void> {
+  return api<{ id: string }>('/practice/start', { method: 'POST', body: { aiLevel: level } })
+    .then((data) => enterMatch(data.id, true))
+    .catch((error: Error) => toast(error.message, 'error'))
+}
+
+/**
+ * The bottom bar: five entries, all of them finished.
+ *
+ * Leaderboard and Settings go where they have always gone. Shop, Friends and More have
+ * no backend in this project, so they answer with a toast naming themselves rather than
+ * navigating or asking the server for anything — the entry points are real, the features
+ * behind them are not, and the bar does not pretend otherwise.
+ */
+function homeBar(): HTMLElement {
+  const bar = el('nav', 'home-bar glass glass-edge')
+  bar.setAttribute('aria-label', 'More screens')
+  for (const item of HOME_BAR) {
+    const btn = el('button', 'home-bar-item') as HTMLButtonElement
+    btn.type = 'button'
+    const icon = el('span', 'home-bar-icon')
+    icon.innerHTML = item.icon
+    btn.append(icon, el('span', undefined, item.label))
+    btn.onclick = () => {
+      const destination = barDestination(item.id)
+      if (!destination) {
+        toast(comingSoonMessage(item.label))
+        return
+      }
+      activeScreen = destination
+      render()
+    }
+    bar.appendChild(btn)
+  }
+  return bar
+}
+
+/**
+ * The screens a card or a bar icon opens.
+ *
+ * All four were already in the app; what is new is that they each have a screen of their
+ * own with a way back, rather than sharing one long scrolling lobby with everything else
+ * on it. The builders below are the existing ones, unchanged — the flows they drive are
+ * the flows that shipped.
+ */
+async function renderScreen(screen: AppScreen): Promise<void> {
+  const wrap = el('div', 'screen-page page-enter')
+  app.appendChild(wrap)
+  switch (screen) {
+    case 'multiplayer':
+      await renderTablesScreen(wrap)
+      return
+    case 'tournaments':
+      await renderTournamentsScreen(wrap)
+      return
+    case 'leaderboard':
+      await renderLeaderboardScreen(wrap)
+      return
+    case 'settings':
+      renderSettingsScreen(wrap)
+      return
+    default:
+      activeScreen = 'home'
+      render()
+  }
+}
+
+/** The title and the way home, shared by every screen below. */
+function screenHead(title: string, note?: string): HTMLElement {
+  const head = el('div', 'screen-head')
+  const titles = el('div')
+  titles.appendChild(el('h2', 'screen-title', title))
+  if (note) titles.appendChild(el('div', 'muted', note))
+  head.appendChild(titles)
+  const back = el('button', 'ghost', 'Back to home') as HTMLButtonElement
+  back.type = 'button'
+  back.onclick = () => {
+    activeScreen = 'home'
+    render()
+  }
+  head.appendChild(back)
+  return head
+}
+
+/**
+ * One-to-one tables: the create-a-match card, the tiered list of tables waiting for a
+ * second player, and the player's own match history. All of it exactly as it was; the
+ * balance now sits with the tier chips, which is the only decision on this screen that
+ * belongs to credits.
+ */
+async function renderTablesScreen(wrap: HTMLElement): Promise<void> {
+  wrap.appendChild(screenHead('Multiplayer', 'Join a table by price, or open one and wait for an opponent.'))
   await Promise.all([refreshWallet(), loadTiers()])
-  app.innerHTML = ''
-  app.appendChild(header())
-
-  // One container for the whole page, so the entrance reads as a single movement.
-  // The header is left out deliberately: it is sticky, and animating a sticky
-  // element's transform would make it slide against its own sticky position.
-  const page = el('div', 'page-enter')
-
-  // Featured banner. Driven by the tournaments that are actually open for a seat,
-  // so the headline and the button always agree with each other.
-  page.appendChild(await featuredTournamentHero())
-
-  // Game mode cards
-  const grid = el('div', 'lobby-grid')
-  grid.appendChild(createMatchCard())
-  grid.appendChild(createPracticeCard())
-  grid.appendChild(createTournamentCard())
-  page.appendChild(grid)
+  if (!wrap.isConnected) return
+  wrap.appendChild(createMatchCard())
 
   // Tables that are open for a seat. The server only reports matches still waiting
   // for a second player, so this is a "join a waiting table" list rather than a
-  // spectator feed â€” calling it anything else would overstate what is being shown.
+  // spectator feed — calling it anything else would overstate what is being shown.
   const openSection = el('div', 'lobby-section')
   openSection.appendChild(el('h3', 'lobby-section-title', 'Open Tables'))
   openSection.appendChild(await openTablesStrip())
-  page.appendChild(openSection)
+  if (!wrap.isConnected) return
+  wrap.appendChild(openSection)
 
-  page.appendChild(await matchHistoryCard())
-  page.appendChild(await profileStatsCard())
-  app.appendChild(page)
+  wrap.appendChild(await matchHistoryCard())
+}
+
+/** The tournament banner and the create/join card: the existing flow, given its own screen. */
+async function renderTournamentsScreen(wrap: HTMLElement): Promise<void> {
+  wrap.appendChild(screenHead('Tournaments', '8-player single-elimination brackets, seeded by join order.'))
+  // Driven by the tournaments that are actually open for a seat, so the headline and
+  // the button always agree with each other.
+  wrap.appendChild(await featuredTournamentHero())
+  if (!wrap.isConnected) return
+  wrap.appendChild(createTournamentCard())
+}
+
+/** The leaderboard, which has had working logic since the profile phase. */
+async function renderLeaderboardScreen(wrap: HTMLElement): Promise<void> {
+  wrap.appendChild(screenHead('Leaderboard', 'Ranked on real matches only — practice never counts.'))
+  wrap.appendChild(await profileStatsCard())
+}
+
+/**
+ * Settings.
+ *
+ * Only what already works: the account as `/api/me` reports it, and the sound toggle,
+ * which is the same `audio.ts` mute the in-game button sets. Nothing here is stored
+ * anywhere new and nothing here is a placeholder for a feature — if a setting is added
+ * later it arrives here with its own logic rather than as a row that does nothing.
+ */
+function renderSettingsScreen(wrap: HTMLElement): void {
+  wrap.appendChild(screenHead('Settings'))
+
+  const account = card('Account')
+  const rows = el('div')
+  rows.appendChild(el('div', 'muted', 'Loading...'))
+  account.appendChild(rows)
+  void api<MyProfile>('/me')
+    .then((profile) => {
+      if (!rows.isConnected) return
+      rows.innerHTML = ''
+      const name = el('div', 'table-row')
+      name.appendChild(el('div', undefined, profile.user.username))
+      name.appendChild(el('span', 'badge', currentUser?.role ?? 'PLAYER'))
+      rows.appendChild(name)
+      const joined = el('div', 'table-row')
+      joined.appendChild(el('div', undefined, 'Member since'))
+      joined.appendChild(el('div', 'meta', new Date(profile.user.createdAt).toLocaleDateString()))
+      rows.appendChild(joined)
+      const credits = el('div', 'table-row')
+      credits.appendChild(el('div', undefined, 'Credits available'))
+      credits.appendChild(el('div', 'meta', `${profile.user.wallet.available} CR`))
+      rows.appendChild(credits)
+    })
+    .catch((error: Error) => {
+      if (!rows.isConnected) return
+      rows.innerHTML = ''
+      rows.appendChild(el('div', 'muted', error.message))
+    })
+  wrap.appendChild(account)
+
+  const sound = card('Sound')
+  const row = el('div', 'row')
+  const toggle = el('button', 'ghost', isSoundMuted() ? 'Sound: off' : 'Sound: on') as HTMLButtonElement
+  toggle.type = 'button'
+  toggle.onclick = () => {
+    const next = !isSoundMuted()
+    setSoundMuted(next)
+    toggle.textContent = next ? 'Sound: off' : 'Sound: on'
+  }
+  row.appendChild(el('span', 'muted', 'Table sounds'))
+  row.appendChild(toggle)
+  sound.appendChild(row)
+  wrap.appendChild(sound)
 }
 
 /**
@@ -1179,6 +1437,15 @@ function createMatchCard(): HTMLElement {
     return c
   }
   let createTier = activeTierId ?? tiers[0]!.id
+
+  // The balance, immediately above the tiers it pays for. This is the only place in the
+  // new home flow where the number is worth showing: the home screen leads with who you
+  // are, and this screen is where credits are about to be committed to a table.
+  const balance = el('div', 'stake-wallet')
+  balance.appendChild(el('span', undefined, 'Balance available'))
+  balance.appendChild(el('strong', undefined, `${wallet.balance} CR`))
+  c.appendChild(balance)
+
   for (const tier of tiers) {
     const chip = el('button', 'tier-chip', `${tier.label} Â· ${tier.credits} CR`)
     chip.dataset.tier = tier.id
@@ -1211,32 +1478,6 @@ function createMatchCard(): HTMLElement {
   formatLabel.appendChild(formatSelect)
   row.append(formatLabel, createBtn)
   c.appendChild(tierPicker)
-  c.appendChild(row)
-  return c
-}
-
-function createPracticeCard(): HTMLElement {
-  const c = el('div', 'lobby-card')
-  const icon = el('div', 'lobby-card-icon', 'ðŸ¤–')
-  c.appendChild(icon)
-  c.appendChild(el('h3', undefined, 'Practice'))
-  c.appendChild(el('p', undefined, 'Train against the robot'))
-  const levelSelect = el('select') as HTMLSelectElement
-  for (const level of ['EASY', 'MEDIUM', 'HARD']) {
-    const option = el('option') as HTMLOptionElement
-    option.value = level
-    option.textContent = level
-    levelSelect.appendChild(option)
-  }
-  const startBtn = el('button', undefined, 'Start Practice')
-  startBtn.onclick = () =>
-    void api<{ id: string }>('/practice/start', { method: 'POST', body: { aiLevel: levelSelect.value } })
-      .then((data) => enterMatch(data.id, true))
-      .catch((error) => toast(error.message, 'error'))
-  const row = el('div', 'row')
-  const levelLabel = el('label', undefined, 'Robot level')
-  levelLabel.appendChild(levelSelect)
-  row.append(levelLabel, startBtn)
   c.appendChild(row)
   return c
 }
@@ -1367,7 +1608,7 @@ async function tablesCard(): Promise<HTMLElement> {
   const c = card('Tables â€” pick your price')
   const actions = el('div', 'row')
   const refreshBtn = el('button', 'ghost', 'Refresh tables')
-  refreshBtn.onclick = () => void renderLobby()
+  refreshBtn.onclick = () => void renderScreen('multiplayer')
   actions.appendChild(refreshBtn)
   c.appendChild(actions)
   try {

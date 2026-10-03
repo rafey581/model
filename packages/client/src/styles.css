@@ -49,6 +49,28 @@
   --radius-sm: 8px;
   --radius-lg: 16px;
 
+  /* The one glassmorphism recipe.
+     Phase H1 wrote these values inline on the match HUD's top bar; they are tokens now so
+     every other pane in the app can be the same material instead of a lookalike. Change
+     one of these and the HUD, the home cards, the bottom bar and the practice panel all
+     change together — which is the point of having a recipe rather than four recipes. */
+  --glass-fill: linear-gradient(160deg, rgba(13, 20, 27, 0.62), rgba(9, 13, 18, 0.78));
+  --glass-border: rgba(255, 255, 255, 0.09);
+  --glass-border-strong: rgba(255, 255, 255, 0.16);
+  --glass-blur: 12px;
+  --glass-saturate: 1.25;
+  --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  /* The fill a raised pane inside a pane gets: the same family, one step more solid. */
+  --glass-fill-raised: rgba(255, 255, 255, 0.06);
+  --glass-fill-raised-on: rgba(255, 255, 255, 0.12);
+
+  /* Background art slots.
+     These are the only places a real photograph or illustration is expected to arrive.
+     Each is a single variable, unset, so the placeholder gradient shows through; dropping
+     in art is one line per screen and needs no code change anywhere else. */
+  --img-home-bg: none;
+  --img-practice-bg: none;
+
   /* Spacing */
   --hud-gap: 8px;
 }
@@ -161,11 +183,15 @@ header {
  * Sticky, but only on the pages that scroll.
  *
  * The game screen is exactly one viewport tall and already sets `overflow: hidden`
- * on the body, so sticking buys nothing there ΓÇö and the negative margin that lets
+ * on the body, so sticking buys nothing there — and the negative margin that lets
  * the blurred bar span the full width would push it outside the tighter padding the
  * game shell uses, clipping the brand against the edge.
+ *
+ * The full-height shells (`app-home`, `app-practice`) are excluded for a different
+ * reason: nothing on them scrolls, so a sticky header there has nothing to stick and
+ * would only paint a band across the top of the screen.
  */
-#app:not(.app-game) header {
+#app:not(.app-game):not(.app-home):not(.app-practice) header {
   position: sticky;
   top: 0;
   z-index: 20;
@@ -764,16 +790,51 @@ button.small {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 10px;
-  background: linear-gradient(160deg, rgba(13, 20, 27, 0.62), rgba(9, 13, 18, 0.78));
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-top-color: rgba(255, 255, 255, 0.16);
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-border);
+  border-top-color: var(--glass-border-strong);
   border-radius: 14px;
   padding: 6px 10px;
-  backdrop-filter: blur(12px) saturate(1.25);
-  -webkit-backdrop-filter: blur(12px) saturate(1.25);
-  box-shadow:
-    0 10px 30px rgba(0, 0, 0, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  box-shadow: var(--glass-shadow);
+}
+
+/**
+ * The glassmorphism pane, in one class.
+ *
+ * Every translucent surface outside the match HUD — the home cards, the bottom bar, the
+ * practice panel, the level chips — is this class and nothing else. The values are the
+ * `--glass-*` tokens, which are the ones Phase H1's top bar already used, so the panes
+ * outside a match and the pane over the table are visibly the same material.
+ *
+ * `backdrop-filter` only earns its keep over something with colour behind it, which is
+ * why the shells that use it carry a background of their own (see `--img-*-bg`).
+ */
+.glass {
+  position: relative;
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  box-shadow: var(--glass-shadow);
+}
+
+/**
+ * The catchlight along a pane's top edge.
+ *
+ * The one part of the recipe that is not inherited: a glass edge is only legible because
+ * something catches the light on it. Applied with `::before` so a pane keeps one element
+ * in the DOM and any caller can still put its own first child where it wants.
+ */
+.glass-edge::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border-top: 1px solid var(--glass-border-strong);
+  pointer-events: none;
 }
 
 /*
@@ -3115,6 +3176,562 @@ button.mini {
   button:hover,
   .card:hover,
   .lobby-card:hover {
+    transform: none;
+  }
+}
+
+/* ============================================
+   U1 · HOME SCREEN — full-height shell
+   ============================================ */
+
+/**
+ * The two full-height shells that are not the table.
+ *
+ * Same contract as `app-game`: exactly one viewport tall, no page scroll, everything
+ * else fitted into what is left. The rows are declared here rather than per screen so a
+ * laptop window and a phone both get the whole screen without the bar falling off the
+ * bottom, and `overflow: hidden` on the body catches a sub-pixel rounding the same way
+ * the game screen's does.
+ */
+.app-home,
+.app-practice {
+  max-width: none;
+  height: 100dvh;
+  padding: 14px clamp(14px, 4vw, 44px) 18px;
+  overflow: hidden;
+}
+
+body.home-mode,
+body.practice-mode {
+  overflow: hidden;
+}
+
+.app-home {
+  /* Header, then the page. The page is the one that owns the row budget, so the
+     three rows below are the wordmark, the cards and the bar, and the header can
+     change its height without any of them moving. */
+  display: flex;
+  flex-direction: column;
+  gap: clamp(8px, 1.6vh, 18px);
+  /* The one background hook for this screen: `--img-home-bg` sits over the placeholder
+     gradient, so real art is a single variable and nothing else moves. */
+  background-image: var(--img-home-bg), var(--bg-gradient);
+}
+
+/* The wordmark, the cards and the bar, fitted into what the header leaves. */
+.home-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: clamp(8px, 2vh, 22px);
+  flex: 1;
+  min-height: 0;
+}
+
+.app-home header {
+  padding: 2px 0;
+  margin-bottom: 0;
+  border-bottom-color: var(--glass-border);
+}
+
+.app-practice {
+  display: grid;
+  /* header · the panel · nothing */
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: clamp(10px, 2vh, 20px);
+  background-image: var(--img-practice-bg), var(--bg-gradient);
+}
+
+.app-practice header {
+  padding: 2px 0;
+  margin-bottom: 0;
+  border-bottom-color: var(--glass-border);
+}
+
+/**
+ * The wordmark.
+ *
+ * The header's brand is the same name at 24px with a link's hover ring; this is the same
+ * treatment sized for the middle of the screen. Both read the one `APP_TITLE` constant,
+ * so there is no second copy of the name to keep in step.
+ */
+.home-title {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  text-align: center;
+  min-height: 0;
+}
+
+.home-wordmark {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(30px, 6.4vh, 62px);
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+  background: linear-gradient(135deg, var(--gold-light) 0%, var(--gold) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 6px 24px var(--gold-glow));
+}
+
+.home-tagline {
+  font-size: clamp(11px, 1.5vh, 14px);
+  color: var(--muted);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+/**
+ * The three cards.
+ *
+ * `minmax(0, 1fr)` with a `1fr` row above means the cards take the space the header,
+ * wordmark and bar have left and no more, so three tall cards on a short laptop window
+ * shrink instead of pushing the bar off the bottom.
+ */
+.home-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(10px, 1.4vw, 20px);
+  min-height: 0;
+}
+
+button.home-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: clamp(6px, 1vh, 12px);
+  padding: clamp(14px, 2.2vh, 24px);
+  min-height: 0;
+  overflow: hidden;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    transform 380ms ease,
+    box-shadow 380ms ease,
+    border-color 380ms ease;
+}
+
+/* The global button puts a light sweep across itself on hover. That reads as polish on a
+   small button and as a smear across a whole card, so the cards opt out and lift
+   instead. */
+button.home-card::after {
+  display: none;
+}
+
+button.home-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--glass-border-strong);
+  box-shadow: var(--shadow-elevated), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.home-card-icon {
+  display: grid;
+  place-items: center;
+  width: clamp(38px, 6vh, 54px);
+  height: clamp(38px, 6vh, 54px);
+  flex: 0 0 auto;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-fill-raised);
+  color: var(--gold-light);
+}
+
+/* The label and the one line under it. Their own gap rather than the card's, because the
+   card's `gap` is between the icon, this and the affordance. */
+.home-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.home-card-label {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(16px, 2.4vh, 24px);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  line-height: 1.1;
+}
+
+.home-card-blurb {
+  font-size: clamp(12px, 1.6vh, 14px);
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+/**
+ * The card's affordance.
+ *
+ * Present from the first paint rather than appearing on hover: a control that only exists
+ * while the pointer is over it is a control that pops in, and this screen is built to
+ * hold still while it loads and once it has.
+ */
+.home-card-cta {
+  margin-top: auto;
+  padding-top: clamp(6px, 1vh, 12px);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gold-light);
+}
+
+/**
+ * The bottom bar.
+ *
+ * Five equal columns, every one the same markup and the same size: equal visual weight is
+ * the requirement, so nothing here is sized per item. The bar is a pane like the cards,
+ * so it is the same glass — a bar drawn in a different material would read as a system
+ * from another app.
+ */
+.home-bar {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 999px;
+}
+
+.home-bar-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 9px 4px;
+  min-height: 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition:
+    background-color 320ms ease,
+    border-color 320ms ease,
+    color 320ms ease,
+    transform 320ms ease;
+}
+
+.home-bar-item::after {
+  display: none;
+}
+
+.home-bar-item:hover,
+.home-bar-item:active {
+  background: var(--glass-fill-raised-on);
+  border-color: var(--glass-border);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.home-bar-icon {
+  display: grid;
+  place-items: center;
+  height: 24px;
+  color: var(--gold-light);
+}
+
+/* ============================================
+   U1 · SCREENS REACHED FROM THE HOME SCREEN
+   ============================================ */
+
+/**
+ * The head on a screen that has one.
+ *
+ * The tables, tournaments, leaderboard and settings screens are the flows that already
+ * existed; all this adds is a way back to the home screen and a title, so the same screen
+ * is reachable from two directions without either losing its way home.
+ */
+.screen-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.screen-title {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--gold-light);
+}
+
+.screen-page {
+  padding-bottom: 8px;
+}
+
+/**
+ * The stake-tier wallet readout.
+ *
+ * The balance has a job on this screen and only this one: it is what a player checks
+ * before committing credits to a table, so it sits beside the tier chips it pays for
+ * rather than in the home screen's top bar, where it would be a number competing with the
+ * three things the screen is actually for.
+ */
+.stake-wallet {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 4px 0 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.stake-wallet strong {
+  font-family: var(--font-score);
+  font-size: 18px;
+  color: var(--gold-light);
+}
+
+/* ============================================
+   U1 · PRE-PRACTICE SETUP
+   ============================================ */
+
+.practice-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: start;
+  justify-items: center;
+  min-height: 0;
+}
+
+.practice-panel {
+  width: min(560px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  padding: clamp(18px, 3vh, 30px);
+  display: flex;
+  flex-direction: column;
+  gap: clamp(14px, 2.4vh, 24px);
+}
+
+.practice-heading {
+  text-align: center;
+}
+
+.practice-heading h2 {
+  font-family: var(--font-display);
+  font-size: clamp(18px, 2.6vh, 24px);
+  font-weight: 700;
+  color: var(--text);
+}
+
+/**
+ * The matchup: you, the bot, and the `vs` between them.
+ *
+ * Both sides are the shared avatar from `game/avatar.ts` — the same component the match
+ * HUD draws, so the face on this screen is the face that turns up at the table.
+ */
+.practice-matchup {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: clamp(10px, 2vw, 24px);
+}
+
+.practice-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  text-align: center;
+}
+
+/* The avatar is the HUD's, so it keeps the HUD's box. Only the size is the caller's. */
+.practice-side .hud-frame {
+  width: clamp(44px, 9vh, 64px);
+  border-width: 2px;
+  border-color: var(--glass-border-strong);
+}
+
+.practice-side-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.practice-vs {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--gold);
+}
+
+.practice-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/**
+ * The difficulty selector.
+ *
+ * Buttons rather than a `<select>`, because a list of three is easier to read on a glass
+ * panel as three panes than as a dropdown that hides two of them. They are a radio group
+ * in everything but the element used: `role="radiogroup"` and `aria-checked` are what a
+ * keyboard or a screen reader reads, and the arrow keys are not needed because there are
+ * three of them and they are all on screen.
+ */
+.difficulty-group {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+button.difficulty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 8px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  background: var(--glass-fill-raised);
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    background-color 320ms ease,
+    border-color 320ms ease,
+    color 320ms ease;
+}
+
+button.difficulty::after {
+  display: none;
+}
+
+button.difficulty:hover {
+  color: var(--text);
+  border-color: var(--glass-border-strong);
+}
+
+button.difficulty[aria-checked='true'] {
+  background: var(--glass-fill-raised-on);
+  border-color: var(--gold);
+  color: var(--gold-light);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gold) 25%, transparent);
+}
+
+.difficulty-blurb {
+  margin-top: 10px;
+  min-height: 2.9em;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* Reserved, not measured: the line is always two rows tall so choosing a level never
+   pushes the Play button down the panel. */
+.practice-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.practice-play {
+  padding: 14px 18px;
+  font-size: 15px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.practice-note {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.practice-back {
+  align-self: flex-start;
+}
+
+/* ============================================
+   U1 · RESPONSIVE
+   ============================================ */
+
+@media (max-width: 768px) {
+  /* Three cards side by side at 320px would be three columns of three words, so the row
+     becomes a column and each card turns on its side: icon beside the words rather than
+     above them, which is what keeps three of them inside one screen. */
+  .home-cards {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+button.home-card {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+  }
+
+  /* On its side there is no room for the affordance without shrinking the words, and the
+     whole card is the affordance at this size. */
+  .home-card-cta {
+    display: none;
+  }
+
+  .home-bar-item {
+    font-size: 10px;
+    padding: 8px 2px;
+  }
+
+  .difficulty-group {
+    gap: 8px;
+  }
+
+  .screen-title {
+    font-size: 19px;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-home {
+    padding: 10px 12px 12px;
+  }
+
+  .home-bar {
+    padding: 6px;
+    gap: 2px;
+  }
+
+  .practice-matchup {
+    gap: 8px;
+  }
+
+  .practice-panel {
+    padding: 16px;
+  }
+}
+
+/* The hover lift is movement, and this screen is mostly tapped. */
+@media (pointer: coarse) {
+  button.home-card:hover,
+  .home-bar-item:hover {
     transform: none;
   }
 }

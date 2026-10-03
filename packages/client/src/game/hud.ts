@@ -1,5 +1,7 @@
 ﻿import { BALL_IDS, COLOR_NAMES, COLOR_ORDER, COLOR_VALUES, TOTAL_REDS } from '@snooker/shared'
 import { ballColorHex } from './palette.js'
+import { createAvatarSlot, updateAvatarSubject } from './avatar.js'
+import type { AvatarSlot } from './avatar.js'
 import {
   clampPowerLoose,
   easePower,
@@ -325,101 +327,13 @@ function setHidden(node: HTMLElement, hidden: boolean): void {
 }
 
 /**
- * A stable colour per name, so two players on the same table never look like the
- * same avatar. Derived from the name rather than stored, which keeps the HUD free of
- * any per-user state it would have to keep in step with the server.
- */
-function hueFor(name: string): number {
-  let hash = 0
-  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) % 360
-  return hash
-}
-
-const ROBOT_SVG =
-  '<svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">' +
-  '<path d="M16 2.5a1.4 1.4 0 0 1 1.4 1.4v3.2h-2.8V3.9A1.4 1.4 0 0 1 16 2.5Z" fill="#9fd8f2"/>' +
-  '<rect x="3.5" y="7.5" width="25" height="18" rx="5" fill="#9fd8f2"/>' +
-  '<circle cx="11" cy="15" r="2.6" fill="#14181f"/><circle cx="21" cy="15" r="2.6" fill="#14181f"/>' +
-  '<rect x="10" y="20.5" width="12" height="2.4" rx="1.2" fill="#14181f"/>' +
-  '</svg>'
-
-interface AvatarSlot {
-  frame: HTMLElement
-  image: HTMLImageElement
-  glyph: HTMLElement
-  lastUrl: string | null
-  lastMode: '' | 'bot' | 'letter'
-  lastInitial: string
-  lastHue: number
-}
-
-/**
- * An avatar, built once.
+ * An avatar frame, drawn and then given the turn highlight on top.
  *
- * The real profile picture is a slot rather than a feature: if a caller ever supplies
- * a URL the image is used and the generated default steps aside. Until then the
- * default is a letter for a human and a robot for the bot, both drawn here so the
- * HUD needs no image files.
+ * The picture itself comes from `avatar.ts`, shared with the screens outside a match;
+ * only the turn flag is the HUD's, because only the HUD knows whose visit it is.
  */
-function createAvatar(frameId: string, turnKey: 'you' | 'opponent'): AvatarSlot {
-  const frame = el('div', 'hud-frame')
-  frame.id = frameId
-  frame.dataset.hudTurnFrame = turnKey
-
-  const image = document.createElement('img')
-  image.className = 'hud-avatar-img'
-  image.alt = ''
-  image.hidden = true
-
-  const glyph = el('div', 'hud-avatar-glyph')
-  frame.append(image, glyph)
-
-  return {
-    frame,
-    image,
-    glyph,
-    lastUrl: null,
-    lastMode: '',
-    lastInitial: '',
-    lastHue: -1
-  }
-}
-
 function updateAvatar(slot: AvatarSlot, side: HudSide): void {
-  const url = side.avatarUrl
-  setHidden(slot.image, !url)
-  setHidden(slot.glyph, Boolean(url))
-  if (url) {
-    if (slot.lastUrl !== url) {
-      slot.image.src = url
-      slot.lastUrl = url
-    }
-  } else {
-    if (slot.lastUrl !== null) {
-      slot.image.removeAttribute('src')
-      slot.lastUrl = null
-    }
-    const mode = side.isBot ? 'bot' : 'letter'
-    if (slot.lastMode !== mode) {
-      if (mode === 'bot') slot.glyph.innerHTML = ROBOT_SVG
-      else slot.glyph.textContent = ''
-      // Lets the stylesheet tint a letter without also tinting the robot.
-      slot.glyph.dataset.mode = mode
-      slot.lastMode = mode
-    }
-    if (mode === 'letter') {
-      const initial = (side.name.trim()[0] ?? '?').toUpperCase()
-      if (slot.lastInitial !== initial) {
-        slot.glyph.textContent = initial
-        slot.lastInitial = initial
-      }
-      const hue = hueFor(side.name)
-      if (slot.lastHue !== hue) {
-        slot.glyph.style.setProperty('--avatar-hue', String(hue))
-        slot.lastHue = hue
-      }
-    }
-  }
+  updateAvatarSubject(slot, side)
   setFlag(slot.frame, TURN_ACTIVE_CLASS, side.active)
   if (slot.frame.dataset.turn !== (side.active ? '1' : '0')) {
     slot.frame.dataset.turn = side.active ? '1' : '0'
@@ -488,8 +402,8 @@ export function createHud(): Hud {
   const top = el('div', 'hud-top')
   top.id = 'hud-top'
 
-  const youAvatar = createAvatar('hud-frame-you', 'you')
-  const oppAvatar = createAvatar('hud-frame-opp', 'opponent')
+  const youAvatar = createAvatarSlot({ frameId: 'hud-frame-you', turnKey: 'you' })
+  const oppAvatar = createAvatarSlot({ frameId: 'hud-frame-opp', turnKey: 'opponent' })
   const youNames = sideNodes('hud-you', 'hud-points-you')
   const oppNames = sideNodes('hud-opp', 'hud-points-opp')
 
