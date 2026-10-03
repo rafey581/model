@@ -71,17 +71,32 @@
   --img-home-bg: url('/lobby-pic.jpeg');
   --img-practice-bg: url('/lobby-pic.jpeg');
 
-  /* The scrim between that photograph and the text on top of it.
-     A venue photograph is mostly mid-tones, which is exactly where white text stops
-     reading, so the two full-height shells darken it before anything is drawn over it.
-     Painted after the image (it is listed second in `background-image`) and darkest at
-     the top and bottom edges, where the header and the bottom bar sit. */
+  /* The tint over the venue photograph.
+     A green-teal wash rather than a neutral black one: the table is green, the gold
+     accents sit against green, and a neutral scrim made the whole screen read as a dark
+     mode rather than a lit room. It stops short of opaque on purpose - this is a bright
+     lobby, and the photograph is meant to be recognisable through it. */
   --bg-scrim: linear-gradient(
     180deg,
-    rgba(6, 10, 14, 0.88) 0%,
-    rgba(6, 10, 14, 0.68) 42%,
-    rgba(6, 10, 14, 0.74) 68%,
-    rgba(6, 10, 14, 0.92) 100%
+    rgba(8, 24, 18, 0.45) 0%,
+    rgba(10, 32, 26, 0.3) 38%,
+    rgba(8, 26, 21, 0.34) 66%,
+    rgba(6, 20, 16, 0.5) 100%
+  );
+
+  /* The slow light behind everything: a gold core over green, drifting across the
+     window. `--lobby-glow` is the moving one, `--lobby-shine` the sweep that crosses it. */
+  --lobby-glow: radial-gradient(
+    46% 38% at 50% 42%,
+    rgba(201, 168, 76, 0.22) 0%,
+    rgba(46, 138, 106, 0.16) 38%,
+    rgba(8, 26, 21, 0) 72%
+  );
+  --lobby-shine: linear-gradient(
+    104deg,
+    rgba(255, 255, 255, 0) 34%,
+    rgba(255, 246, 214, 0.09) 46%,
+    rgba(255, 255, 255, 0) 58%
   );
 
   /* Spacing */
@@ -167,6 +182,55 @@ body.practice-mode::before {
   background-repeat: no-repeat;
   filter: blur(3px);
   transform: scale(1.05);
+}
+
+/**
+ * The light in the room, on the second layer.
+ *
+ * Two layers on one pseudo-element: the glow is a `radial-gradient` on its own layer,
+ * because a gradient cannot move on its own, and the shine sweep is another layer given a
+ * `background-position` that the keyframes push across the screen. Both are on the same
+ * element as the photograph rather than a third one, so there is one compositing layer for
+ * the whole backdrop and the text above it never has to blend against anything moving.
+ *
+ * Slow on purpose - 24s for the glow and 6s for the sweep. A glow that moves at the speed
+ * of a transition reads as a light switch, not as a room with a lamp in it.
+ */
+@keyframes lobby-glow-drift {
+  0%,
+  100% {
+    background-position: 50% 42%;
+  }
+  50% {
+    background-position: 62% 52%;
+  }
+}
+
+@keyframes lobby-shine-sweep {
+  0% {
+    background-position: -60% 0;
+  }
+  55%,
+  100% {
+    background-position: 160% 0;
+  }
+}
+
+body.home-mode::after,
+body.practice-mode::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -1;
+  pointer-events: none;
+  background-image: var(--lobby-glow), var(--lobby-shine);
+  background-repeat: no-repeat;
+  background-size: 100% 100%, 60% 100%;
+  animation:
+    lobby-glow-drift 24s ease-in-out infinite,
+    lobby-shine-sweep 6s ease-in-out infinite;
 }
 
 /**
@@ -3271,12 +3335,13 @@ button.mini {
  * Same contract as `app-game`: exactly one viewport tall, no page scroll, everything
  * else fitted into what is left. The rows are declared here rather than per screen so a
  * laptop window and a phone both get the whole screen without the bar falling off the
- * bottom, and `overflow: hidden` on the body catches a sub-pixel rounding the same way
+* bottom, and `overflow: hidden` on the body catches a sub-pixel rounding the same way
  * the game screen's does.
+ *
+ * No background here. The photograph is on `body::before`, which is fixed to the viewport;
+ * a background on this shell would repaint it inside the centred column and put the bars
+ * straight back.
  */
-/* No background here. The photograph is on `body::before`, which is fixed to the
-     viewport; a background on this shell would repaint it inside the centred column and
-     put the bars straight back. */
 .app-home,
 .app-practice {
   max-width: none;
@@ -3304,8 +3369,7 @@ body.practice-mode {
 .home-page {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: clamp(8px, 2vh, 22px);
-  flex: 1;
+  gap: clamp(8px, 2vh, 22px);  flex: 1;
   min-height: 0;
 }
 
@@ -3345,18 +3409,33 @@ gap: clamp(10px, 2vh, 20px);
   min-height: 0;
 }
 
+/**
+ * The wordmark, and the one piece of Playfair left in the app.
+ *
+ * Playfair Display stays here and nowhere else — the card titles and everything else on
+ * this screen is Inter, because a serif at 16px on a glass card reads as a different
+ * product sitting inside the page.
+ *
+ * The gold is a clipped gradient, so a plain `text-shadow` would be painted on transparent
+ * letters and never seen. `drop-shadow` on the element is the filter equivalent: it
+ * follows the shape of what is actually painted, gold gradient or not. The dark shadow
+ * underneath it is the part doing the work — a gold gradient over a photograph has almost
+ * no contrast of its own, and this is what keeps the wordmark readable over the brightest
+ * part of the room.
+ */
 .home-wordmark {
   margin: 0;
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: clamp(30px, 6.4vh, 62px);
+  font-size: clamp(32px, 6.6vh, 66px);
   line-height: 1.05;
   letter-spacing: 0.01em;
   background: linear-gradient(135deg, var(--gold-light) 0%, var(--gold) 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  filter: drop-shadow(0 6px 24px var(--gold-glow));
+  filter:
+    drop-shadow(0 3px 6px rgba(4, 12, 9, 0.85)) drop-shadow(0 6px 24px var(--gold-glow));
 }
 
 .home-tagline {
@@ -3369,7 +3448,7 @@ gap: clamp(10px, 2vh, 20px);
 /**
  * The three cards.
  *
- * A row of three, no wider than 1000px and centred, so the cards sit together in the
+ * A row of three, no wider than 1220px and centred, so the cards sit together in the
  * middle of the screen instead of drifting to the edges of a 1200px column with two empty
  * gutters either side of them. The row is centred in the space it has rather than
  * stretched to fill it: `align-items` stops each card stretching to the tallest of the
@@ -3380,53 +3459,114 @@ gap: clamp(10px, 2vh, 20px);
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: center;
   align-content: center;
-  gap: 20px;
+  gap: 28px;
   width: 100%;
-  max-width: 1000px;
+  max-width: 1220px;
   margin-inline: auto;
   min-height: 0;
+  /* The artwork hangs out of the top of each card, so the row needs somewhere to put it.
+     Without this the row would start where the cards start and the floating pictures
+     would be clipped by whatever is above them. */
+  padding-top: clamp(60px, 12vh, 120px);
 }
 
 /**
  * A card is a glass pane over the venue photograph.
  *
- * A lighter fill than the `--glass-*` recipe the HUD uses (8% white rather than a dark
+ * A lighter fill than the `--glass-*` recipe the HUD uses (10% white rather than a dark
  * gradient) because the thing behind this pane is a lit photograph instead of a dimmed
  * table: the pane has to knock the photograph back before the label on it is readable, and
- * a dark fill over a dark scrim would just be a hole. `min()` on the height is the
- * ceiling, not the size — the card is still only as tall as its content.
+ * a dark fill over a dark scrim would just be a hole.
+ *
+ * `overflow: visible` is not an oversight and is the whole reason the art reads as art
+ * rather than as wallpaper: the picture breaks the top edge of the card, which only works
+ * if the card does not clip its children. Nothing else inside the card can rely on being
+ * clipped, so the pane is sized by its own content instead.
  */
 button.home-card {
+  position: relative;
+  /* Its own stacking context, so the artwork's `z-index` beats the card's glass without
+     putting the card into the page's stacking order. */
+  isolation: isolate;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: clamp(5px, 0.8vh, 9px);
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 10px;
   width: 100%;
-  max-width: 300px;
-  max-height: min(190px, 24vh);
+  min-width: 0;
+  max-width: 380px;
+  height: clamp(380px, 46vh, 420px);
   margin-inline: auto;
-  padding: clamp(12px, 1.7vh, 18px) clamp(14px, 1.6vw, 20px);
-  min-height: 0;
-  overflow: hidden;
+  padding: 0 22px 22px;
+  overflow: visible;
   text-align: left;
   color: var(--text);
   font-family: var(--font-body);
   cursor: pointer;
 
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 14px;
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(232, 200, 114, 0.28);
+  border-radius: 20px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   box-shadow:
-    0 8px 24px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    0 14px 34px rgba(0, 0, 0, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
   transition:
     transform 380ms ease,
     box-shadow 380ms ease,
     border-color 380ms ease,
     background-color 380ms ease;
+}
+
+/**
+ * The shine that crosses a card every few seconds.
+ *
+ * A `::after` rather than a background-position animation, so it can travel across the
+ * glass while the glass itself stays put. `pointer-events: none` because it is decoration
+ * over a button and must never take the click.
+ */
+@keyframes card-shine {
+  0% {
+    transform: translateX(-140%) skewX(-18deg);
+    opacity: 0;
+  }
+  8% {
+    opacity: 0.9;
+  }
+  38%,
+  100% {
+    transform: translateX(240%) skewX(-18deg);
+    opacity: 0;
+  }
+}
+
+button.home-card::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 46%;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 246, 214, 0.22) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  transform: translateX(-140%) skewX(-18deg);
+  opacity: 0;
+  animation: card-shine 5.4s ease-in-out infinite;
+}
+
+button.home-card:nth-of-type(2)::after {
+  animation-delay: 1.8s;
+}
+
+button.home-card:nth-of-type(3)::after {
+  animation-delay: 3.6s;
 }
 
 /**
@@ -3440,7 +3580,7 @@ button.home-card {
 @keyframes home-card-fade-up {
   from {
     opacity: 0;
-    transform: translateY(14px);
+    transform: translateY(26px);
   }
   to {
     opacity: 1;
@@ -3449,53 +3589,141 @@ button.home-card {
 }
 
 button.home-card {
-  animation: home-card-fade-up 460ms ease both;
+  animation: home-card-fade-up 520ms ease both;
 }
 
-button.home-card:nth-child(2) {
-  animation-delay: 90ms;
+button.home-card:nth-of-type(2) {
+  animation-delay: 80ms;
 }
 
-button.home-card:nth-child(3) {
-  animation-delay: 180ms;
+button.home-card:nth-of-type(3) {
+  animation-delay: 160ms;
+}
+
+/**
+ * The artwork, standing on top of the card.
+ *
+ * The band is the card's top third and is empty: the picture is taller than the band and
+ * pulled up out of it, so roughly the top third of the image sits above the card's edge
+ * and the words below start underneath where the image ends. `z-index` on a child only
+ * beats a sibling that has no stacking context, which is why the card carries
+ * `isolation: isolate` - the picture then paints above the card's own glass without
+ * creating a stacking context on the page.
+ */
+.home-card-art {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  place-items: end center;
+  height: 40%;
+  min-height: 0;
+  margin-bottom: 6px;
+  pointer-events: none;
+}
+
+/* One width for all three, so `bot.png` (450x450) and the drawn multiplayer art read as
+   the same object at three different shapes. `height: auto` keeps each one's own aspect,
+   which is why the tournament portrait is taller than the square bot. */
+.home-card-art-img,
+.home-card-art-svg {
+  width: clamp(150px, 46%, 210px);
+  height: auto;
+}
+
+.home-card-art-svg {
+  display: grid;
+  place-items: center;
+}
+
+.home-card-art-svg svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.home-card-art-img,
+.home-card-art-svg {
+  /* One filter for both, so a photograph and a drawing cast the same shadow. */
+  filter: drop-shadow(0 14px 18px rgba(0, 0, 0, 0.45));
+}
+
+/**
+ * The slow float and the tilt.
+ *
+ * Two animations on one element because they are on different properties: the float is a
+ * translation and the tilt is a few degrees of rotation, and combining them into one
+ * keyframe set would mean the rotation had to be re-stated at every step of the float. The
+ * delays are what stop the three pictures from moving as one object.
+ */
+@keyframes art-float {
+  0%,
+  100% {
+    transform: translateY(-8px);
+  }
+  50% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes art-tilt {
+  0%,
+  100% {
+    rotate: -2.5deg;
+  }
+  50% {
+    rotate: 2.5deg;
+  }
+}
+
+.home-card-art-img,
+.home-card-art-svg {
+  animation:
+    art-float 3.6s ease-in-out infinite,
+    art-tilt 7s ease-in-out infinite;
+}
+
+button.home-card:nth-of-type(2) .home-card-art-img,
+button.home-card:nth-of-type(2) .home-card-art-svg {
+  animation-delay: 0.9s, 1.4s;
+}
+
+button.home-card:nth-of-type(3) .home-card-art-img,
+button.home-card:nth-of-type(3) .home-card-art-svg {
+  animation-delay: 1.8s, 2.6s;
 }
 
 /* The global button puts a light sweep across itself on hover. That reads as polish on a
    small button and as a smear across a whole card, so the cards opt out and lift
    instead. */
-button.home-card::after {
-  display: none;
-}
-
 button.home-card:hover {
   transform: translateY(-6px);
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(232, 200, 114, 0.55);
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(232, 200, 114, 0.75);
   box-shadow:
-    0 0 0 1px var(--gold-glow),
-    0 18px 40px rgba(0, 0, 0, 0.42),
-    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+    0 0 0 1px rgba(201, 168, 76, 0.35),
+    0 0 28px rgba(201, 168, 76, 0.35),
+    0 22px 46px rgba(0, 0, 0, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
 }
 
-.home-card-icon {
-  display: grid;
-  place-items: center;
-  width: clamp(30px, 4.4vh, 40px);
-  height: clamp(30px, 4.4vh, 40px);
-  flex: 0 0 auto;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--glass-border);
-  background: var(--glass-fill-raised);
-  color: var(--gold-light);
+/* On hover the picture comes up to meet the card. Scoped to the image rather than the
+   band, so the band keeps holding the layout while the picture moves inside it. */
+button.home-card:hover .home-card-art-img,
+button.home-card:hover .home-card-art-svg {
+  scale: 1.08;
+  animation-play-state: paused;
 }
 
-/* The label and the one line under it. Their own gap rather than the card's, because the
-   card's `gap` is between the icon, this and the affordance. */
+/* The label and the one line under it, in a column of their own between the art band and
+   the pill. */
 .home-card-body {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
+  /* Sits below the art band and above the pill. Nothing about the card's own height may
+     push it around: the height is fixed, so this is exactly where it lands. */
+  flex: 0 0 auto;
 }
 
 .home-card-label {
@@ -3516,6 +3744,35 @@ button.home-card:hover {
 }
 
 /**
+ * The two facts under the description.
+ *
+ * Small pills rather than another line of text: they are attributes of the mode, not part
+ * of the sentence, and a second sentence on the card is the first thing that makes a card
+ * read as a paragraph. The words come from the lobby model and are things the app already
+ * knows - no price, no prize, both of which the server decides at runtime.
+ */
+.home-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.home-chip {
+  padding: 3px 9px;
+  border: 1px solid rgba(232, 200, 114, 0.28);
+  border-radius: 999px;
+  background: rgba(8, 24, 18, 0.42);
+  color: var(--gold-light);
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/**
  * The card's affordance, as a gold pill.
  *
  * Present from the first paint rather than appearing on hover: a control that only exists
@@ -3524,18 +3781,21 @@ button.home-card:hover {
  * it, because gold on white glass at 11px is not a contrast anyone can read.
  */
 .home-card-cta {
-  margin-top: auto;
-  padding: 4px 12px;
+  margin-top: 12px;
+  padding: 11px 18px;
   border-radius: 999px;
   background: linear-gradient(135deg, var(--gold-light) 0%, var(--gold) 100%);
   color: #14100a;
   font-family: var(--font-body);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.14em;
-  line-height: 1.6;
+  letter-spacing: 0.16em;
+  line-height: 1.3;
   text-transform: uppercase;
-  box-shadow: 0 2px 10px rgba(201, 168, 76, 0.28);
+  text-align: center;
+  box-shadow:
+    0 6px 18px rgba(201, 168, 76, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 
 /**
@@ -3841,29 +4101,57 @@ button.difficulty[aria-checked='true'] {
 
 @media (max-width: 768px) {
   /* Three cards side by side at 320px would be three columns of three words, so the row
-     becomes a column and each card turns on its side: icon beside the words rather than
-     above them, which is what keeps three of them inside one screen. */
+     becomes a column and each card turns on its side: artwork on the left, words and the
+     pill on the right, which is what keeps three of them inside one screen. */
   .home-cards {
     grid-template-columns: 1fr;
-    gap: 10px;
+    gap: 12px;
+    /* Stacked, the pictures no longer have a card's top edge to break out of, so the row
+       needs the same headroom the desktop row does for exactly that reason. */
+    padding-top: clamp(40px, 8vh, 64px);
   }
 
-button.home-card {
+  button.home-card {
     flex-direction: row;
     align-items: center;
-    gap: 12px;
-    padding: 12px 14px;
-    /* The ceiling is there to keep a row of three cards short; stacked, the height is
-       already whatever the three of them add up to. */
+    gap: 14px;
+    height: auto;
     max-width: none;
-    max-height: none;
+    padding: 14px 16px;
   }
 
-  /* The pill survives the turn on its side: on a row there is spare width at the end of
-     the card, and `margin-top: auto` from the column layout does nothing here. */
+  /* Sideways, the art is a column of its own at the left rather than a band on top, and it
+     is scaled down: at full size it would be wider than a third of a phone. */
+  .home-card-art {
+    flex: 0 0 auto;
+    width: clamp(84px, 26%, 110px);
+    height: auto;
+    margin-bottom: 0;
+  }
+
+  .home-card-art-img,
+  .home-card-art-svg {
+    width: 100%;
+  }
+
+  .home-card-body {
+    flex: 1 1 auto;
+    gap: 4px;
+  }
+
+  /* The pill keeps its own row under the words rather than sitting at the end of the row:
+     a phone is narrow enough that a pill beside the words would wrap the sentence. */
   .home-card-cta {
-    margin-top: 0;
-    margin-left: auto;
+    margin-top: 8px;
+    margin-left: 0;
+    flex: 0 0 auto;
+    align-self: flex-start;
+    padding: 9px 18px;
+  }
+
+  /* On a row the words and the pill are side by side, so the card is two columns. */
+  button.home-card {
+    flex-wrap: wrap;
   }
 
   .home-bar-item {
@@ -3890,6 +4178,11 @@ button.home-card {
     gap: 2px;
   }
 
+  .home-chip {
+    font-size: 9px;
+    padding: 3px 7px;
+  }
+
   .practice-matchup {
     gap: 8px;
   }
@@ -3904,5 +4197,46 @@ button.home-card {
   button.home-card:hover,
   .home-bar-item:hover {
     transform: none;
+  }
+
+  /* The picture does not scale up on a tap either: there is no hover to earn it. */
+  button.home-card:hover .home-card-art-img,
+  button.home-card:hover .home-card-art-svg {
+    scale: 1;
+  }
+}
+
+/**
+ * Motion off, properly.
+ *
+ * The global block earlier in this file floors every duration and delay, which is enough
+ * for the fade-up and the shine. The float and the tilt are cancelled outright instead:
+ * they are two infinite animations whose whole job is to keep moving, and a floored
+ * infinite animation still ticks. `animation: none` is the honest answer, and `transform`
+ * and `rotate` are reset because a cancelled animation would otherwise leave whichever
+ * keyframe it was on.
+ */
+@media (prefers-reduced-motion: reduce) {
+  body.home-mode::after,
+  body.practice-mode::after,
+  button.home-card::after,
+  .home-card-art-img,
+  .home-card-art-svg {
+    animation: none;
+  }
+
+  body.home-mode::after,
+  body.practice-mode::after {
+    background-position: 50% 42%, -60% 0;
+  }
+
+  button.home-card::after {
+    opacity: 0;
+  }
+
+  .home-card-art-img,
+  .home-card-art-svg {
+    transform: translateY(-8px);
+    rotate: 0deg;
   }
 }

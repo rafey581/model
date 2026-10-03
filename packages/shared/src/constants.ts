@@ -147,9 +147,11 @@ export const TOTAL_REDS = 15
  *
  * `index.html` cannot import it, so its `<title>` is the one copy that has to be typed
  * out again; everything rendered in the app reads this, which is what keeps the wordmark
- * from drifting between the header, the auth screens and the home screen.
+ * from drifting between the header and the home screen. The login and admin-login screens
+ * deliberately keep the old name and type their own title, so nothing about them moves
+ * with this constant.
  */
-export const APP_TITLE = 'Snooker Arena'
+export const APP_TITLE = 'SnookerX'
 
 export const PRACTICE_AI_LEVELS = ['EASY', 'MEDIUM', 'HARD'] as const
 export type PracticeAiLevel = (typeof PRACTICE_AI_LEVELS)[number]

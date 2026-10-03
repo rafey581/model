@@ -14,21 +14,44 @@ import {
 const SVG_OPEN =
   '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
 
-const allIcons = [...HOME_CARDS.map((c) => ({ where: `card ${c.id}`, svg: c.icon })), ...HOME_BAR.map((b) => ({ where: `bar ${b.id}`, svg: b.icon }))]
+const allIcons = HOME_BAR.map((b) => ({ where: `bar ${b.id}`, svg: b.icon }))
 
 describe('the home screen cards', () => {
   it('is exactly the three the screen is meant to have', () => {
     expect(HOME_CARDS.map((c) => c.label)).toEqual(['Practice', 'Multiplayer', 'Tournament'])
   })
 
-  it('gives every card a title, a one-line description and an icon', () => {
+  it('gives every card a title and a one-line description', () => {
     for (const card of HOME_CARDS) {
       expect(card.label.length).toBeGreaterThan(0)
       expect(card.blurb.length).toBeGreaterThan(0)
       // One line: a description that wraps to four is a paragraph wearing a card's clothes.
       expect(card.blurb.length).toBeLessThanOrEqual(90)
       expect(card.blurb.endsWith('.')).toBe(true)
-      expect(card.icon.startsWith('<svg')).toBe(true)
+    }
+  })
+
+  it('gives every card exactly one piece of art, and it is either a file or a drawing', () => {
+    for (const card of HOME_CARDS) {
+      // One or the other, never both: the card renders whichever it is given, and two
+      // sources would mean one of them is a fallback nobody knows when it applies.
+      expect(Boolean(card.artUrl) !== Boolean(card.artSvg), `${card.id} has ${card.artUrl ? 'both' : 'no'} art source`).toBe(
+        true
+      )
+      if (card.artUrl) expect(card.artUrl.startsWith('/'), `${card.id} art is not served from the site root`).toBe(true)
+      if (card.artSvg) expect(card.artSvg.trimStart().startsWith('<?xml')).toBe(true)
+    }
+  })
+
+  it('states two facts per card, and no price or prize among them', () => {
+    for (const card of HOME_CARDS) {
+      expect(card.chips.length).toBe(2)
+      for (const chip of card.chips) {
+        expect(chip.length).toBeGreaterThan(0)
+        // Stakes and payouts are decided by the server's settings at runtime, so a chip
+        // that named one would be a number this screen could not keep true.
+        expect(chip, `${card.id} names a price or a prize`).not.toMatch(/\bCR\b|\$|%|credits \d/i)
+      }
     }
   })
 

@@ -1,5 +1,9 @@
 import { PRACTICE_AI_LEVELS } from '@snooker/shared'
 import type { PracticeAiLevel } from '@snooker/shared'
+// Imported as text, not as a URL: the multiplayer card's artwork is drawn rather than
+// photographed, and `?raw` keeps it a file the lobby can be pointed away from later
+// without anything here having to change.
+import multiplayerArt from './ui/multiplayerArt.svg?raw'
 
 /**
  * The home screen's shape, as data.
@@ -81,7 +85,27 @@ export interface HomeCardSpec {
   label: string
   blurb: string
   target: NavTarget
-  icon: string
+  /** The picture that sits on top of the card. */
+  artUrl: string
+  /**
+   * Inline SVG for the same slot, for art that is drawn rather than photographed.
+   * Mutually exclusive with `artUrl`: the card takes whichever is set.
+   */
+  artSvg: string | null
+  /** Two facts about the mode, taken from what the app already knows. Never a price or a prize. */
+  chips: readonly string[]
+}
+
+/** Where each card's picture comes from. `public/` is served at the site root by Vite. */
+interface CardArt {
+  url?: string
+  svg?: string
+}
+
+const ART: Record<'practice' | 'multiplayer' | 'tournament', CardArt> = {
+  practice: { url: '/bot.png' },
+  multiplayer: { svg: multiplayerArt },
+  tournament: { url: '/tournament.png' }
 }
 
 export interface HomeBarItem {
@@ -98,21 +122,27 @@ export const HOME_CARDS: readonly HomeCardSpec[] = [
     label: 'Practice',
     blurb: 'Warm up against the robot at a level you choose.',
     target: 'practice',
-    icon: ICONS.practice
+    artUrl: ART.practice.url ?? '',
+    artSvg: ART.practice.svg ?? null,
+    chips: ['Easy / Medium / Hard', 'No credits']
   },
   {
     id: 'multiplayer',
     label: 'Multiplayer',
     blurb: 'Join a table by price, or open one and wait for an opponent.',
     target: 'multiplayer',
-    icon: ICONS.multiplayer
+    artUrl: ART.multiplayer.url ?? '',
+    artSvg: ART.multiplayer.svg ?? null,
+    chips: ['Real players', 'Entry by price']
   },
   {
     id: 'tournament',
     label: 'Tournament',
     blurb: 'Enter an 8-player knockout bracket and go through to the final.',
     target: 'tournaments',
-    icon: ICONS.tournament
+    artUrl: ART.tournament.url ?? '',
+    artSvg: ART.tournament.svg ?? null,
+    chips: ['8 players', 'Knockout']
   }
 ]
 

@@ -1061,14 +1061,38 @@ function renderHome(): void {
 
   const cards = el('div', 'home-cards')
   for (const spec of HOME_CARDS) {
+    // The card is a column of three bands: the art band, which the picture hangs out of
+    // at the top, then the words, then the button. The picture is a sibling of the card's
+    // content rather than part of it so that `overflow: visible` on the card is what lets
+    // it break the top edge — a picture inside the button would be clipped by the button.
     const card = el('button', 'home-card glass glass-edge') as HTMLButtonElement
     card.type = 'button'
-    const icon = el('span', 'home-card-icon')
-    icon.innerHTML = spec.icon
+
+    const art = el('div', 'home-card-art')
+    if (spec.artSvg) {
+      const svg = el('div', 'home-card-art-svg')
+      svg.innerHTML = spec.artSvg
+      art.appendChild(svg)
+    } else {
+      const img = el('img', 'home-card-art-img') as HTMLImageElement
+      img.src = spec.artUrl
+      img.alt = ''
+      img.loading = 'eager'
+      img.decoding = 'async'
+      img.draggable = false
+      art.appendChild(img)
+    }
+
     const body = el('div', 'home-card-body')
     body.appendChild(el('div', 'home-card-label', spec.label))
     body.appendChild(el('div', 'home-card-blurb', spec.blurb))
-    card.append(icon, body, el('div', 'home-card-cta', 'Play'))
+    const chips = el('div', 'home-card-chips')
+    for (const chip of spec.chips) chips.appendChild(el('span', 'home-chip', chip))
+    body.appendChild(chips)
+
+    const cta = el('div', 'home-card-cta')
+    cta.appendChild(el('span', undefined, 'Play'))
+    card.append(art, body, cta)
     card.onclick = () => {
       const target = cardDestination(spec.id)
       if (!target) return
