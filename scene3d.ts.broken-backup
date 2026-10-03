@@ -110,10 +110,6 @@ function cachedTexture(key: string, make: () => THREE.CanvasTexture): THREE.Canv
   }
   return tex
 }
-function pocketKey(p: ReturnType<typeof pocketPositions>[number]): string {
-  return `${Math.round(p.x)}_${Math.round(p.y)}_${p.radius}`
-}
-
 const POCKETS = pocketPositions()
 
 /**
@@ -1861,7 +1857,7 @@ const outerL = APRON_OUTER_L
         at.set(x + Math.cos(t) * laceR, CUSHION_H + 2.6, z + Math.sin(t) * laceR)
         // Lie the capsule along the circumference, alternating lean so the ring looks
         // stitched. Yaw to face outward, then pitch to the tangent.
-       e.set(Math.PI / 2, -t, i % 2 === 0 ? 0.42 : -0.42, 'YXZ')
+        e.set(0, -t, i % 2 === 0 ? 0.42 : -0.42, 'YXZ')
         q.setFromEuler(e)
         m4.compose(at, q, one)
         stitches.setMatrixAt(i, m4)
@@ -1914,71 +1910,6 @@ const outerL = APRON_OUTER_L
       obj.matrixAutoUpdate = false
       obj.updateMatrix()
     })
-    if ((globalThis as any).__DEBUG_POLES__) {
-      this.__debugPoles()
-    }
-  }
-
-  /** TEMP DEBUG - count tall objects > 100mm above cloth, excluding stick */
-  private __debugPoles(): void {
-    const box = new THREE.Box3()
-    const m4 = new THREE.Matrix4()
-    const v = new THREE.Vector3()
-    let tallCount = 0
-    const byPocket = new Map<string, number>()
-    const tallList: Array<{name?: string, yMax: number, dist: number, key: string}> = []
-    for (const p of POCKETS) {
-      byPocket.set(pocketKey(p), 0)
-    }
-    this.scene.traverse((obj) => {
-      const m = obj as THREE.Mesh | THREE.InstancedMesh
-      if (m === (this as any).stick) return
-      if ((m as any).userData?.isStick) return
-      if (m.name === 'stick' || (m as any).name === 'cueStick') return
-      const isInst = (m as any).isInstancedMesh === true
-      const isMesh = (m as any).isMesh === true || (!isInst && (m as any).geometry)
-      if (isMesh && !isInst) {
-        box.setFromObject(m, true)
-        if (box.max.y > 100) {
-          tallCount++
-          let best = Infinity
-          let bestKey = 'other'
-          const cx = m.position.x
-          const cz = m.position.z
-          for (const p of POCKETS) {
-            const d = Math.hypot(tableX(p.x) - cx, tableZ(p.y) - cz)
-            if (d < best) { best = d; bestKey = pocketKey(p) }
-          }
-          byPocket.set(bestKey, (byPocket.get(bestKey) || 0) + 1)
-          tallList.push({ name: m.name, yMax: box.max.y, dist: best, key: bestKey })
-        }
-      } else if (isInst) {
-        const im = m as THREE.InstancedMesh
-        if (!im.geometry.boundingBox) im.geometry.computeBoundingBox()
-        const geoBox = im.geometry.boundingBox!
-        const tempBox = new THREE.Box3()
-        for (let i = 0; i < im.count; i++) {
-          im.getMatrixAt(i, m4)
-          tempBox.copy(geoBox).applyMatrix4(m4)
-          if (tempBox.max.y > 100) {
-            tallCount++
-            const cx = (tempBox.min.x + tempBox.max.x) / 2
-            const cz = (tempBox.min.z + tempBox.max.z) / 2
-            let best = Infinity
-            let bestKey = 'other'
-            for (const p of POCKETS) {
-              const d = Math.hypot(tableX(p.x) - cx, tableZ(p.y) - cz)
-              if (d < best) { best = d; bestKey = pocketKey(p) }
-            }
-            byPocket.set(bestKey, (byPocket.get(bestKey) || 0) + 1)
-            tallList.push({ name: im.name, yMax: tempBox.max.y, dist: best, key: bestKey })
-            break
-          }
-        }
-      }
-    })
-    console.log('POLES total=' + tallCount, Object.fromEntries(byPocket))
-    console.table(tallList.slice(0, 30))
   }
 
   private buildAim(): void {
