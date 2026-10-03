@@ -125,12 +125,13 @@ Legend: `DONE` = built and verified · `PART` = works but incomplete · `TODO` =
 | 26 | Day 26 — Client interp, perf, resilience | client (+1 shared engine line) | DONE — 2D fallback lerp, allocation-free engine hot path, texture/line caches, adaptive DPR, render-loop guard + err-chip + offline overlay, three/socketio chunk split + lazy admin, a11y live regions (see Day 26 section; e2e 228/0) |
 | 27 | Day 27 — Production readiness (ops, no real deploy yet) | all | DONE — env templates + fail-fast config, db:deploy/status for migration order, real /api/health + /api/ready probes, structured pino logs + redaction + graceful shutdown, recoverMatchValidity wired, SQLite->Postgres pg_dump backup/restore scripts, RUNBOOK.md + README/plan doc fixes (see Day 27 section; e2e 228/0) |
 | 28 | Day 28 — Final review vs Definition of Done + full regression | all | TODO |
+| U1 | U1 Client redesign 1 - A: home screen (single viewport, 3 cards, 5-entry bar), B: pre-practice setup screen | client (+1 shared constant) | DONE - 2 commits (0edb9a9, d1048e6); typecheck clean, client tests 308/308, build green |
 
-> Current focus: **Hotfix H2-follow-up done (Power slider UI + shot-clock reset — see
-> the Hotfix section below; e2e 231/0, ledger repaired)** — next planned phase:
-> **Day 28 — Final review vs Definition of Done + full regression**. Say "work on Day 28"
-> (or "next phase") to start.
-
+> Current focus: **U1 Client redesign phase 1 delivered - Section A (home screen) and
+> Section B (pre-practice setup screen), two commits, nothing pushed; typecheck clean,
+> client tests 308/308, build green** - next planned phase: **Day 28 - Final review vs
+> Definition of Done + full regression**. Say "work on Day 28" (or "next phase") to
+> start.
 ---
 
 ## 6. Completed Sessions (record, for reference)
@@ -1054,6 +1055,52 @@ Each phase: **Goal** · **Tasks** · **Done when** · **Notes**.
   gesture (no auto-decay). No new arrow bindings added.
 - Verified: client typecheck clean, client tests **83/83**, vite build green
   (0 errors). No server/shared changes.
+
+### U1 - Client redesign, phase 1: home screen + pre-practice setup (verified)
+Two sections, two commits, no game or server behaviour touched.
+
+**Section A - the home screen (commit 0edb9a9)**
+- The lobby was one scrolling column (banner, three mode cards, open tables, history,
+  profile stats). It is now a screen per destination, and the first screen a signed-in
+  player sees is the home screen: a **single viewport, no page scroll**, holding the
+  wordmark, three cards (multiplayer / practice / tournaments) and a bottom bar of five
+  equal entries.
+- **Bottom bar**: Leaderboard + Settings open screens; Shop, Friends and More answer with
+  a 'Coming soon' toast and call no API, because no backend exists for them here.
+- **Nothing on the critical path**: the home screen is built entirely from state the app
+  already holds, so it paints complete on the first frame - no skeletons, no reserved
+  heights, and nothing reflows. The wallet is fetched in the background.
+- **Wallet placement**: hidden from the home top bar (it would compete with the three
+  things that screen is for); shown beside the stake tiers on the tables screen
+  (.stake-wallet), which is where credits are about to be committed.
+- **Existing flows preserved**, each on its own screen with a way home: Multiplayer
+  (create-match card, open tables, match history), Tournaments (banner + bracket card),
+  Leaderboard (profileStatsCard()). **Settings is new but real**: /api/me account rows
+  plus the same audio.ts mute the in-game button sets.
+- game/avatar.ts: the letter avatar the header drew inline is now the component the HUD
+  already used - one avatar, and the HUD keeps its turn highlighting. The app name is
+  the shared APP_TITLE constant.
+- Style: inline SVG on the existing palette; the background slots --img-home-bg and
+  --img-practice-bg sit over the existing gradient, so real art is one variable and
+  nothing else moves. Glass tokens (.glass, .glass-edge) shared with the HUD.
+
+**Section B - the pre-practice setup screen (commit d1048e6)**
+- The <select> inside the lobby card is now a screen doing one job: choose the level,
+  press Play. Three panes (Easy / Medium / Hard) with a **reserved** description line, so
+  choosing a level never moves the Play button.
+- Both sides of the matchup are the shared avatar component - the player from their name
+  and the robot - and the group is a radiogroup for keyboard and screen readers.
+- The flow behind it is **unchanged**: POST /practice/start with { aiLevel }, then
+  enterMatch(id, true), using the server's own three values. Play is disabled while the
+  request is out and restored on failure. The chosen difficulty survives a trip back to
+  the lobby.
+- Every exit from a match (end practice, concede, leave) now lands on the home screen.
+
+- Verified: tsc --noEmit clean (client and all workspaces, run serially), client tests
+  **308/308**, pnpm -r build green. Two commits, nothing pushed.
+- Assumptions recorded: there was no player settings screen, so Settings is assembled
+  from what already works; there is no shop/friends/more backend, so those entries are
+  toasts rather than navigation.
 
 ### Day 28 — Final review vs Definition of Done
 - Goal: confirm MVP is complete and consistent.
