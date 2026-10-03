@@ -120,7 +120,7 @@ export const HOME_CARDS: readonly HomeCardSpec[] = [
   {
     id: 'practice',
     label: 'Practice',
-    blurb: 'Warm up against the robot at a level you choose.',
+    blurb: 'Warm up against the bot at your level.',
     target: 'practice',
     artUrl: ART.practice.url ?? '',
     artSvg: ART.practice.svg ?? null,
@@ -129,7 +129,7 @@ export const HOME_CARDS: readonly HomeCardSpec[] = [
   {
     id: 'multiplayer',
     label: 'Multiplayer',
-    blurb: 'Join a table by price, or open one and wait for an opponent.',
+    blurb: 'Join a table, or open one and wait.',
     target: 'multiplayer',
     artUrl: ART.multiplayer.url ?? '',
     artSvg: ART.multiplayer.svg ?? null,
@@ -138,7 +138,7 @@ export const HOME_CARDS: readonly HomeCardSpec[] = [
   {
     id: 'tournament',
     label: 'Tournament',
-    blurb: 'Enter an 8-player knockout bracket and go through to the final.',
+    blurb: 'Enter the 8-player knockout bracket.',
     target: 'tournaments',
     artUrl: ART.tournament.url ?? '',
     artSvg: ART.tournament.svg ?? null,
