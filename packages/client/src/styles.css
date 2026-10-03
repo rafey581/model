@@ -66,10 +66,23 @@
 
   /* Background art slots.
      These are the only places a real photograph or illustration is expected to arrive.
-     Each is a single variable, unset, so the placeholder gradient shows through; dropping
-     in art is one line per screen and needs no code change anywhere else. */
-  --img-home-bg: none;
-  --img-practice-bg: none;
+     Each is a single variable, so swapping the art is one line and needs no code change.
+     `public/` is served at the site root by Vite, so the file is addressed from here. */
+  --img-home-bg: url('/lobby-pic.jpeg');
+  --img-practice-bg: url('/lobby-pic.jpeg');
+
+  /* The scrim between that photograph and the text on top of it.
+     A venue photograph is mostly mid-tones, which is exactly where white text stops
+     reading, so the two full-height shells darken it before anything is drawn over it.
+     Painted after the image (it is listed second in `background-image`) and darkest at
+     the top and bottom edges, where the header and the bottom bar sit. */
+  --bg-scrim: linear-gradient(
+    180deg,
+    rgba(6, 10, 14, 0.88) 0%,
+    rgba(6, 10, 14, 0.68) 42%,
+    rgba(6, 10, 14, 0.74) 68%,
+    rgba(6, 10, 14, 0.92) 100%
+  );
 
   /* Spacing */
   --hud-gap: 8px;
@@ -81,14 +94,79 @@
   padding: 0;
 }
 
+/**
+ * The document is a frame, not a surface.
+ *
+ * The venue photograph lives on `body::before` (below), which is fixed to the viewport,
+ * so nothing here paints a background of its own: the moment the body or the app column
+ * paints an opaque colour, the photograph stops at the edge of that column and the rest
+ * of the window goes black. The app's original gradient moves up here with it, since the
+ * screens that are not the home screen still have nothing behind them but the document.
+ *
+ * No `overflow-x: hidden` here: one axis being `hidden` makes the other compute to
+ * `auto`, which would turn the document element into the scrolling box for every page in
+ * the app. The two full-height shells set `overflow: hidden` on the body instead, which
+ * covers the screens that carry the photograph.
+ */
+html {
+  background-color: var(--bg);
+  background-image: var(--bg-gradient);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
 body {
   font-family: var(--font-body);
-  background: var(--bg);
-  background-image: var(--bg-gradient);
+  background: transparent;
   color: var(--text);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/**
+ * The venue photograph, on its own layer behind everything.
+ *
+ * Fixed to the viewport rather than attached to a screen, so it covers the whole window at
+ * every width instead of filling only the centred column and leaving bars either side.
+ * `scale(1.05)` is what the blur needs: `filter` samples from the edges of the element,
+ * so without it the blur pulls the border pixels inwards and leaves a soft unfocused
+ * frame around the picture.
+ *
+ * The gradient is listed first, so it paints over the photograph, and it is darkest at
+ * the top and bottom where the header and the bottom bar sit.
+ *
+ * Gated on the two shells that asked for it: the game screen draws a table over a dark
+ * room of its own, and a venue photograph behind a match would read as a different app.
+ */
+body.home-mode,
+body.practice-mode {
+  background-color: transparent;
+}
+
+/* Each shell picks which of the two image slots it shows, so the slots stay meaningful. */
+body.home-mode {
+  --shell-bg-image: var(--img-home-bg);
+}
+
+body.practice-mode {
+  --shell-bg-image: var(--img-practice-bg);
+}
+
+body.home-mode::before,
+body.practice-mode::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -1;
+  background-image: var(--bg-scrim), var(--shell-bg-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  filter: blur(3px);
+  transform: scale(1.05);
 }
 
 /**
@@ -3021,6 +3099,9 @@ button.mini {
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+    /* The delay too: a staggered entrance that starts from `opacity: 0` would otherwise
+       hold the later elements invisible for their delay after the duration is floored. */
+    animation-delay: 0.01ms !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
@@ -3193,12 +3274,16 @@ button.mini {
  * bottom, and `overflow: hidden` on the body catches a sub-pixel rounding the same way
  * the game screen's does.
  */
+/* No background here. The photograph is on `body::before`, which is fixed to the
+     viewport; a background on this shell would repaint it inside the centred column and
+     put the bars straight back. */
 .app-home,
 .app-practice {
   max-width: none;
   height: 100dvh;
   padding: 14px clamp(14px, 4vw, 44px) 18px;
   overflow: hidden;
+  background: transparent;
 }
 
 body.home-mode,
@@ -3213,9 +3298,6 @@ body.practice-mode {
   display: flex;
   flex-direction: column;
   gap: clamp(8px, 1.6vh, 18px);
-  /* The one background hook for this screen: `--img-home-bg` sits over the placeholder
-     gradient, so real art is a single variable and nothing else moves. */
-  background-image: var(--img-home-bg), var(--bg-gradient);
 }
 
 /* The wordmark, the cards and the bar, fitted into what the header leaves. */
@@ -3237,8 +3319,7 @@ body.practice-mode {
   display: grid;
   /* header · the panel · nothing */
   grid-template-rows: auto minmax(0, 1fr);
-  gap: clamp(10px, 2vh, 20px);
-  background-image: var(--img-practice-bg), var(--bg-gradient);
+gap: clamp(10px, 2vh, 20px);
 }
 
 .app-practice header {
@@ -3288,32 +3369,95 @@ body.practice-mode {
 /**
  * The three cards.
  *
- * `minmax(0, 1fr)` with a `1fr` row above means the cards take the space the header,
- * wordmark and bar have left and no more, so three tall cards on a short laptop window
- * shrink instead of pushing the bar off the bottom.
+ * A row of three, no wider than 1000px and centred, so the cards sit together in the
+ * middle of the screen instead of drifting to the edges of a 1200px column with two empty
+ * gutters either side of them. The row is centred in the space it has rather than
+ * stretched to fill it: `align-items` stops each card stretching to the tallest of the
+ * three, and `align-content` centres the row itself in the `1fr` track above.
  */
 .home-cards {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: clamp(10px, 1.4vw, 20px);
+  align-items: center;
+  align-content: center;
+  gap: 20px;
+  width: 100%;
+  max-width: 1000px;
+  margin-inline: auto;
   min-height: 0;
 }
 
+/**
+ * A card is a glass pane over the venue photograph.
+ *
+ * A lighter fill than the `--glass-*` recipe the HUD uses (8% white rather than a dark
+ * gradient) because the thing behind this pane is a lit photograph instead of a dimmed
+ * table: the pane has to knock the photograph back before the label on it is readable, and
+ * a dark fill over a dark scrim would just be a hole. `min()` on the height is the
+ * ceiling, not the size — the card is still only as tall as its content.
+ */
 button.home-card {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: clamp(6px, 1vh, 12px);
-  padding: clamp(14px, 2.2vh, 24px);
+  justify-content: center;
+  gap: clamp(5px, 0.8vh, 9px);
+  width: 100%;
+  max-width: 300px;
+  max-height: min(190px, 24vh);
+  margin-inline: auto;
+  padding: clamp(12px, 1.7vh, 18px) clamp(14px, 1.6vw, 20px);
   min-height: 0;
   overflow: hidden;
   text-align: left;
   color: var(--text);
+  font-family: var(--font-body);
   cursor: pointer;
+
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
   transition:
     transform 380ms ease,
     box-shadow 380ms ease,
-    border-color 380ms ease;
+    border-color 380ms ease,
+    background-color 380ms ease;
+}
+
+/**
+ * The cards arrive in sequence rather than all at once.
+ *
+ * The stagger is a `nth-child` delay rather than a transition: a delay is read as three
+ * cards being placed, where animating opacity in place would just be three cards
+ * appearing. The existing global `prefers-reduced-motion` block floors the duration and
+ * the delay together, which is what stops the later cards sitting at `opacity: 0`.
+ */
+@keyframes home-card-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+button.home-card {
+  animation: home-card-fade-up 460ms ease both;
+}
+
+button.home-card:nth-child(2) {
+  animation-delay: 90ms;
+}
+
+button.home-card:nth-child(3) {
+  animation-delay: 180ms;
 }
 
 /* The global button puts a light sweep across itself on hover. That reads as polish on a
@@ -3324,16 +3468,20 @@ button.home-card::after {
 }
 
 button.home-card:hover {
-  transform: translateY(-4px);
-  border-color: var(--glass-border-strong);
-  box-shadow: var(--shadow-elevated), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  transform: translateY(-6px);
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(232, 200, 114, 0.55);
+  box-shadow:
+    0 0 0 1px var(--gold-glow),
+    0 18px 40px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
 }
 
 .home-card-icon {
   display: grid;
   place-items: center;
-  width: clamp(38px, 6vh, 54px);
-  height: clamp(38px, 6vh, 54px);
+  width: clamp(30px, 4.4vh, 40px);
+  height: clamp(30px, 4.4vh, 40px);
   flex: 0 0 auto;
   border-radius: var(--radius-sm);
   border: 1px solid var(--glass-border);
@@ -3351,52 +3499,70 @@ button.home-card:hover {
 }
 
 .home-card-label {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: clamp(16px, 2.4vh, 24px);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  line-height: 1.1;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: clamp(15px, 2vh, 19px);
+  letter-spacing: 0.04em;
+  line-height: 1.15;
 }
 
 .home-card-blurb {
-  font-size: clamp(12px, 1.6vh, 14px);
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: clamp(11px, 1.4vh, 13px);
+  letter-spacing: 0.01em;
   color: var(--muted);
-  line-height: 1.45;
+  line-height: 1.4;
 }
 
 /**
- * The card's affordance.
+ * The card's affordance, as a gold pill.
  *
  * Present from the first paint rather than appearing on hover: a control that only exists
  * while the pointer is over it is a control that pops in, and this screen is built to
- * hold still while it loads and once it has.
+ * hold still while it loads and once it has. Gold on the pill and near-black text inside
+ * it, because gold on white glass at 11px is not a contrast anyone can read.
  */
 .home-card-cta {
   margin-top: auto;
-  padding-top: clamp(6px, 1vh, 12px);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--gold-light) 0%, var(--gold) 100%);
+  color: #14100a;
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  line-height: 1.6;
   text-transform: uppercase;
-  color: var(--gold-light);
+  box-shadow: 0 2px 10px rgba(201, 168, 76, 0.28);
 }
 
 /**
  * The bottom bar.
  *
  * Five equal columns, every one the same markup and the same size: equal visual weight is
- * the requirement, so nothing here is sized per item. The bar is a pane like the cards,
- * so it is the same glass — a bar drawn in a different material would read as a system
- * from another app.
+ * the requirement, so nothing here is sized per item. The bar is the same glass as the
+ * cards for the same reason it is the same width on every screen: a bar drawn in a
+ * different material would read as a system from another app.
  */
 .home-bar {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   align-items: stretch;
   gap: 4px;
-  padding: 8px;
+  width: min(560px, 100%);
+  margin-inline: auto;
+  padding: 7px;
   border-radius: 999px;
+
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .home-bar-item {
@@ -3687,12 +3853,17 @@ button.home-card {
     align-items: center;
     gap: 12px;
     padding: 12px 14px;
+    /* The ceiling is there to keep a row of three cards short; stacked, the height is
+       already whatever the three of them add up to. */
+    max-width: none;
+    max-height: none;
   }
 
-  /* On its side there is no room for the affordance without shrinking the words, and the
-     whole card is the affordance at this size. */
+  /* The pill survives the turn on its side: on a row there is spare width at the end of
+     the card, and `margin-top: auto` from the column layout does nothing here. */
   .home-card-cta {
-    display: none;
+    margin-top: 0;
+    margin-left: auto;
   }
 
   .home-bar-item {
