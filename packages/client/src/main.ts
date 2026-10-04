@@ -410,8 +410,21 @@ function cameraSvg(mode: 'AIM' | 'TOP_DOWN'): string {
   )
 }
 
+/**
+ * The aim / overhead view toggle.
+ *
+ * Built as one of the HUD's own round glass buttons rather than as the loose circle it
+ * used to be, and mounted by the caller directly under Leave: the two controls a player
+ * reaches for between shots sit together in the corner, drawn in the same material as
+ * everything else on the edge of the screen.
+ *
+ * It is not a dead control. It has always switched the 3D scene between the view from
+ * behind the cue ball and the view from above, it is disabled while the balls are moving
+ * or a placement is in flight (see the render loop), and the render loop hides it outright
+ * when the 2D fallback renderer is drawing, because then there is only one view.
+ */
 function buildCameraToggle(): HTMLButtonElement {
-  const btn = el('button', 'camera-toggle') as HTMLButtonElement
+  const btn = el('button', 'hud-tool hud-glass hud-tool--camera') as HTMLButtonElement
   btn.type = 'button'
   btn.onclick = () => {
     setCameraMode(cameraMode === 'AIM' ? 'TOP_DOWN' : 'AIM')
@@ -2120,9 +2133,6 @@ function renderGame(): void {
   tableFrame.appendChild(overlay)
   netOverlayEl = overlay
   updateNetOverlay()
-  // The view toggle sits on the frame rather than in the page flow, top left, clear of the
-  // power rail on the right and the score above.
-  tableFrame.appendChild(buildCameraToggle())
   const oppHolder = el('div')
   oppHolder.id = 'opp-holder'
   tableFrame.appendChild(oppHolder)
@@ -2133,22 +2143,25 @@ function renderGame(): void {
   page.appendChild(stage)
 
   /**
-   * The session tools, mounted in the HUD's own top-left slot.
+   * The session tools, icon-only round glass buttons in the HUD's own corners.
    *
    * They are icon-only because they are needed occasionally, not per shot, and the row of
    * words under the table was the one thing on the screen wide enough to change its layout.
    * Each button keeps its label in `title` and `aria-label`, so nothing is lost by dropping
    * the text, and these are the handlers those buttons already had: this changes how they
    * are drawn, not what they do.
+   *
+   * The mount is a parameter rather than a closure over one slot, because there are two
+   * slots now and only the first three of these belong in either of them: leaving and the
+   * view toggle in the top-left column, everything else in the top-right group.
    */
-  const tools = hud.toolsRoot
-  const tool = (label: string, mark: string) => {
+  const tool = (mount: HTMLElement, label: string, mark: string) => {
     const btn = el('button', 'hud-tool hud-glass') as HTMLButtonElement
     btn.type = 'button'
     btn.title = label
     btn.setAttribute('aria-label', label)
     btn.innerHTML = mark
-    tools.appendChild(btn)
+    mount.appendChild(btn)
     return btn
   }
   // Inline strokes rather than glyphs: they inherit `currentColor`, so there is no icon font
@@ -2168,11 +2181,39 @@ function renderGame(): void {
   const expandMark = stroke(
     '<path d="M3.5 7.6V3.5h4.1M16.5 7.6V3.5h-4.1M3.5 12.4v4.1h4.1M16.5 12.4v4.1h-4.1"/>'
   )
+  const moreMark = stroke(
+    '<circle cx="4.6" cy="10" r="1.35" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.35" fill="currentColor" stroke="none"/><circle cx="15.4" cy="10" r="1.35" fill="currentColor" stroke="none"/>'
+  )
 
-  const leaveBtn = tool('Leave the match', leaveMark)
+  const leaveBtn = tool(hud.toolsRoot, 'Leave', leaveMark)
   leaveBtn.onclick = () => leaveToLobby()
+  // Directly under Leave, in the same column and the same material: the two controls a
+  // player reaches for between shots, and nothing else in that corner.
+  hud.toolsRoot.appendChild(buildCameraToggle())
+
+  /**
+   * The top-right group: everything that is not leaving.
+   *
+   * Sound, finish, fullscreen and the controls popover. Four round glass buttons on a wide
+   * screen; on a phone they collapse behind one "more" button, which the stylesheet
+   * arranges by hiding the group until `hud-more-open` is on the slot — so the collapse is
+   * layout rather than a second set of buttons to keep in step.
+   */
+  const sessionMount = hud.sessionToolsRoot
+  const moreBtn = el('button', 'hud-tool hud-glass hud-tool--more') as HTMLButtonElement
+  moreBtn.type = 'button'
+  moreBtn.title = 'More controls'
+  moreBtn.setAttribute('aria-label', 'More controls')
+  moreBtn.setAttribute('aria-expanded', 'false')
+  moreBtn.innerHTML = moreMark
+  moreBtn.onclick = () => {
+    const open = sessionMount.classList.toggle('hud-more-open')
+    moreBtn.setAttribute('aria-expanded', String(open))
+  }
+  sessionMount.appendChild(moreBtn)
 
   const soundBtn = tool(
+    sessionMount,
     isSoundMuted() ? 'Sound: off' : 'Sound: on',
     isSoundMuted() ? soundOffMark : soundOnMark
   )
@@ -2189,10 +2230,7 @@ function renderGame(): void {
     soundBtn.setAttribute('aria-pressed', String(next))
   }
 
-  const concedeBtn = tool(
-    activeMatchIsPractice ? 'Finish the session' : 'Concede the match',
-    flagMark
-  )
+  const concedeBtn = tool(sessionMount, activeMatchIsPractice ? 'Finish' : 'Concede', flagMark)
   concedeBtn.onclick = () => {
     if (activeMatchIsPractice) void finishPractice()
     else askConcede()
@@ -2203,7 +2241,7 @@ function renderGame(): void {
    * from a gesture, so there is nothing to gain by asking earlier and a shot to lose by
    * interrupting one.
    */
-  const fullBtn = tool('Fullscreen', expandMark)
+  const fullBtn = tool(sessionMount, 'Fullscreen', expandMark)
   fullBtn.onclick = () => {
     const leaving = document.fullscreenElement !== null
     const change = leaving ? document.exitFullscreen() : document.documentElement.requestFullscreen()
@@ -2256,7 +2294,7 @@ function renderGame(): void {
       help.hidden = !help.hidden
       helpBtn.setAttribute('aria-expanded', String(!help.hidden))
     }
-    tools.append(helpBtn, help)
+    sessionMount.append(helpBtn, help)
   }
 
   // The spin readout goes with the dial it describes: the number was the last item in the

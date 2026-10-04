@@ -711,39 +711,26 @@ th {
  * of the left cushion: it sits over the rail, not over the table, so a thumb reaching for it
  * cannot aim a shot by accident on the way.
  */
-.camera-toggle {
-  position: absolute;
-  top: calc(env(safe-area-inset-top, 0px) + 10px);
-  left: calc(env(safe-area-inset-left, 0px) + 10px);
-  width: 40px;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: rgba(22, 27, 34, 0.86);
-  color: var(--muted);
-  cursor: pointer;
-  z-index: 4;
-  backdrop-filter: blur(3px);
-}
-
-.camera-toggle:hover {
-  color: var(--text);
-  border-color: var(--muted);
-}
-
-/** Pressed means overhead, and the mark turns to what it would switch back to. */
-.camera-toggle[aria-pressed='true'] {
+/**
+ * The view toggle, now one of the HUD's own buttons.
+ *
+ * It was a loose dark circle on the corner of the canvas, drawn in a different material
+ * from every other control on the screen and — at 38px in `--muted` grey — reading as an
+ * empty hole. It is the same button with the same handler and the same lens glyph, built as
+ * a `.hud-tool` and mounted by the caller directly under Leave, so the two controls a
+ * player reaches for between shots are one column in one material.
+ *
+ * Only the state colours are restated: pressed means overhead, and it is gold then, which
+ * is the same gold the turn highlight uses.
+ */
+.hud-tool--camera[aria-pressed='true'] {
   color: var(--turn);
-  border-color: var(--turn);
+  border-color: rgba(201, 168, 76, 0.55);
 }
 
-.camera-toggle:focus-visible {
-  outline: 2px solid var(--turn);
-  outline-offset: 2px;
+.hud-tool--camera:disabled {
+  opacity: 0.38;
+  cursor: default;
 }
 
 /**
@@ -1003,9 +990,9 @@ th {
 /*
  * What the ball on is worth.
  *
- * The dot is the ball itself (fed as --badge-dot) and the number is the stake. It sits
- * inside the glass chip rather than being one: a pill inside a pill is glass on glass, and
- * the chip above it is already saying "ball on".
+ * DEAD with the centre chips: the dot is the ball itself (fed as --badge-dot) and the number
+ * is the stake, and neither element is in the DOM any more. Kept with the rest of that
+ * dead block for the same reason.
  */
 .hud-ball-on-value {
   display: inline-flex;
@@ -1027,99 +1014,91 @@ th {
 }
 
 /*
- * Centre-screen event banners.
+ * Transient messages: fouls, pots, ball in hand.
  *
- * Key moments — fouls, pots, ball in hand — announce themselves once, big, in the
- * middle of the table, then get out of the way. Enter and exit are the same keyframe
- * played forwards and backwards: scale up with a fade and a slight upward drift.
- * The blur pass behind each banner is the motion-blur overlay.
+ * Key moments announce themselves once and then get out of the way. This used to be a 22px
+ * block of letter-spaced capitals scaled up out of the middle of the table, which covered
+ * the cloth for the length of the animation and covered the shot while it did.
+ *
+ * They are now a small glass toast in the stack under the score capsule — the same place a
+ * HUD should be putting things it wants to say for a moment, next to the number they are
+ * about. Still the HUD's own glass rather than the near-opaque black it was, so the toast
+ * reads as the same material as the capsule above it instead of as a subtitle from another
+ * product.
+ *
+ * Enter and exit are the same easing played forwards and backwards: opacity and a slight
+ * lift, nothing else. The blur pass is gone — a filter animation is the one thing here that
+ * would not have been transform or opacity, and a two-word toast does not need it.
  */
 .event-banner-layer {
-  position: absolute;
-  inset: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 10px;
+  gap: 6px;
+  width: 100%;
   pointer-events: none;
-  z-index: 6;
 }
 
 .event-banner {
   --banner-tone: #f0f6fc;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 26px;
+  max-width: 100%;
+  padding: 5px 14px;
   border-radius: 999px;
-  background: linear-gradient(160deg, rgba(13, 20, 27, 0.72), rgba(9, 13, 18, 0.86));
+  background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(14px) saturate(130%);
+  -webkit-backdrop-filter: blur(14px) saturate(130%);
   box-shadow:
-    0 12px 44px rgba(0, 0, 0, 0.5),
-    0 0 0 1px rgba(0, 0, 0, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(10px) saturate(1.2);
-  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+    0 4px 10px rgba(0, 0, 0, 0.25),
+    0 12px 28px rgba(0, 0, 0, 0.3);
   color: var(--banner-tone);
-  font-size: 22px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.8);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.35;
+  text-align: center;
   opacity: 0;
-  transform: scale(0.72);
+  transform: translateY(6px);
   transition:
-    opacity 260ms cubic-bezier(0.2, 0.9, 0.25, 1),
-    transform 260ms cubic-bezier(0.2, 0.9, 0.25, 1);
+    opacity 220ms cubic-bezier(0.2, 0.9, 0.25, 1),
+    transform 220ms cubic-bezier(0.2, 0.9, 0.25, 1);
 }
 
 .event-banner.is-in {
   opacity: 1;
-  transform: scale(1);
+  transform: translateY(0);
 }
 
 .event-banner.is-out {
   opacity: 0;
-  transform: scale(0.9) translateY(-14px);
+  transform: translateY(-6px);
 }
 
+/* Two words, sometimes three. Wrapping is allowed here and nowhere else in the HUD: this
+   element is allowed to be taller than a pill because it only exists for a moment. */
 .event-banner-text {
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .event-banner.tone-good {
   --banner-tone: #7ee2a0;
-  border-color: rgba(126, 226, 160, 0.35);
 }
 
 .event-banner.tone-bad {
   --banner-tone: #ff8a8a;
-  border-color: rgba(255, 138, 138, 0.4);
 }
 
 .event-banner.tone-info {
   --banner-tone: #9cc8ff;
-  border-color: rgba(156, 200, 255, 0.35);
-}
-
-@keyframes event-banner-blur-in {
-  from {
-    filter: blur(8px);
-  }
-  to {
-    filter: blur(0);
-  }
-}
-
-.event-banner.is-in {
-  animation: event-banner-blur-in 320ms ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .event-banner {
     transition: opacity 200ms ease;
     transform: none;
-    animation: none;
   }
 
   .event-banner.is-out {
@@ -1320,10 +1299,20 @@ th {
   display: none;
 }
 
+/*
+ * A player's name.
+ *
+ * Inter, not the display serif. The names sit inside the score capsule at arm's length from
+ * the numbers beside them, and a serif there reads as decoration rather than as a label:
+ * Playfair was drawing two pieces of a coffee menu either side of a score. A name is text
+ * that has to be read once and forgotten, so it gets the body face, 600, and clips rather
+ * than pushing the capsule wider.
+ */
 .hud-name {
-  font-family: var(--font-display);
-  font-size: clamp(12px, 1.9vh, 15px);
+  font-family: var(--font-body);
+  font-size: clamp(12px, 1.7vh, 14px);
   font-weight: 600;
+  letter-spacing: -0.005em;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -1332,37 +1321,70 @@ th {
 }
 
 /*
- * The score readout: the centre of the bar, and the largest thing on it.
+ * The score readout, and the capsule it lives in.
  *
- * The frame's own points either side of a rule, with the players' avatars on the ends.
- * It is the one number a player checks constantly, so it gets the condensed score face
- * and the gold, sized in viewport units to match the rest of the HUD (see `.hud`). It is
- * the element `tick-up` flashes on a change, which is why the rule is allowed to be
- * larger than the name beside it. The points keep the ids they have always had, because
- * the two elements were built for the ends of the bar and only moved.
+ * One glass pill at the top of the screen: this player, their points, a colon, the other
+ * player, their points. It is the largest thing on the edge of the table because it is the
+ * one number a player checks constantly, and the numbers get the body face at weight 700 —
+ * a condensed display face was the other thing that made the capsule read as a game asset
+ * rather than as a readout.
+ *
+ * `tabular-nums` with a `min-width` of two digits is what stops the pill twitching on every
+ * pot: the numbers hold their box whether they are one or two digits, so the only thing
+ * that moves on a score change is the number.
  */
-.hud-score {
+.hud-capsule {
   display: flex;
   align-items: center;
   gap: 10px;
+  max-width: min(560px, 100%);
+  padding: 5px 14px;
+  border-radius: 999px;
+}
+
+.hud-capsule-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* The opponent faces the other way, so the two avatars read as the two ends of one bar. */
+.hud-capsule-side--opponent {
+  flex-direction: row-reverse;
+}
+
+.hud-score {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
 }
 
 .hud-score .hud-points {
-  font-size: clamp(19px, 2.8vh, 25px);
-  font-weight: 800;
+  font-size: clamp(19px, 2.6vh, 24px);
+  font-weight: 700;
   line-height: 1;
   color: var(--text);
-  min-width: 1.2ch;
+  min-width: 2ch;
   text-align: center;
 }
 
-/* The rule between the two scores: tall enough to separate the numbers, faint enough
-   that the numbers are the thing being read. */
+/*
+ * The colon between the two scores.
+ *
+ * A colon rather than the vertical rule that was here: a rule between two numbers reads as
+ * a divider and has to be looked past, and it is the wrong shape for the capsule anyway —
+ * the pill's own ends already divide the two players' halves. Dimmed, because the numbers
+ * are the thing being read and this is punctuation.
+ */
 .hud-score-sep {
-  width: 1px;
-  align-self: stretch;
-  min-height: 18px;
-  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.28), transparent);
+  font-family: var(--font-body);
+  font-size: clamp(15px, 2.1vh, 19px);
+  font-weight: 700;
+  line-height: 1;
+  color: rgba(234, 242, 251, 0.34);
+  user-select: none;
 }
 .hud-points {
   font-family: var(--font-score);
@@ -1378,13 +1400,55 @@ th {
   display: none;
 }
 
+/*
+ * The stack under the capsule: the reference line, then the toasts.
+ *
+ * A column, centred, tight. `min-width: 0` lets the centre column of `.hud-top` shrink
+ * under pressure instead of pushing the two corners out of the safe area, and nothing here
+ * wraps — a wrapped line pushes the stack down over the table it is meant to be floating
+ * above.
+ */
 .hud-centre {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 0;
+  min-width: 0;
   text-align: center;
+}
+
+/*
+ * Frame, stake, frames won.
+ *
+ * 11px and `--muted`, on no glass of its own. This line is the definition of reference
+ * information: you read it once when you join and you never look at it mid-frame, so it is
+ * allowed to recede. A pane here would be the third glass surface in the middle of the
+ * screen and the first sign that the HUD is becoming a panel.
+ */
+.hud-sub {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 5px;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
   white-space: nowrap;
+  overflow: hidden;
+}
+
+/* Inside the line, all three are the same size and the same weight — the distinctions were
+   carried by gold and by size, and on 11px text both were doing less work than the words. */
+.hud-sub .hud-frame-label,
+.hud-sub .hud-frames,
+.hud-sub .hud-prize {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  letter-spacing: 0;
 }
 
 .hud-prize {
@@ -1406,11 +1470,60 @@ th {
   letter-spacing: 0.04em;
 }
 
+/*
+ * The toasts.
+ *
+ * Where the two centre chips used to be: a stack directly beneath the capsule, unglazed
+ * until there is something to say. Fouls, pots and ball-in-hand are short messages with a
+ * beginning and an end, so they get a small glass pill, a fade in and a fade out, and then
+ * they are gone — as opposed to the chips, which were on screen for the whole frame telling
+ * the player what to think about.
+ *
+ * The layer is transparent to the pointer, so a toast over the cloth cannot swallow the
+ * drag that is aiming the shot.
+ */
+.hud-toast {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 6px;
+  pointer-events: none;
+}
+
+.hud-toast:empty {
+  display: none;
+}
+
+/*
+ * Ball in hand.
+ *
+ * The one piece of gameplay state still on screen, and the only thing here that changes
+ * what the player is allowed to do next — so it is the one toast that stays while it is
+ * true rather than fading out on a timer. Continuous state, continuous element: no
+ * timer, no JS. White rather than an accent colour, because unlike a message about the
+ * last shot this is not an event: it is the standing conditions, and it should not be
+ * competing with the score for attention.
+ */
 .hud-inhand {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--accent-2);
-  letter-spacing: 0.06em;
+  display: inline-block;
+  padding: 5px 13px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(14px) saturate(130%);
+  -webkit-backdrop-filter: blur(14px) saturate(130%);
+  box-shadow:
+    0 4px 10px rgba(0, 0, 0, 0.25),
+    0 12px 28px rgba(0, 0, 0, 0.3);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0;
+  text-align: center;
+  color: var(--text);
 }
 
 .hud-inhand[hidden] {
@@ -1444,9 +1557,9 @@ th {
 /**
  * A player, as one pill: avatar, name, score.
  *
- * The avatar frame is the pill's left cap, so the shot clock still hangs off its rim and
- * the turn is still readable from the colour of that rim alone. `min-width: 0` on the name
- * is what lets a long name clip instead of widening the pill into the middle of the row.
+ * DEAD since the two player pills were merged into the single score capsule; nothing mounts
+ * a `.hud-player` any more and `.hud-capsule` replaced it. Left in place with the rest of
+ * this step's dead rules rather than deleted mid-restyle.
  */
 .hud-player {
   display: flex;
@@ -1479,10 +1592,12 @@ th {
 /**
  * The session tools, and the question mark that opens the controls.
  *
- * This is the mount point the game screen fills in. `position: relative` is what anchors
- * the popover to the button rather than to the viewport, and `pointer-events: auto` is the
- * one thing the HUD row has to opt back into: the row is transparent to the pointer so the
- * table underneath stays draggable, and a control that cannot be clicked is not a control.
+ * There are two mounts now, and they are grouped by how often they are wanted rather than
+ * by what they act on: Leave and the view toggle in the top-left column, everything else in
+ * the top-right group. `position: relative` is what anchors a popover to its own button
+ * rather than to the viewport, and `pointer-events: auto` is the one thing the HUD row has
+ * to opt back into: the row is transparent to the pointer so the table underneath stays
+ * draggable, and a control that cannot be clicked is not a control.
  */
 .hud-tools {
   position: relative;
@@ -1492,27 +1607,55 @@ th {
   pointer-events: auto;
 }
 
+/*
+ * Top-left: a column of two.
+ *
+ * Leave and the view toggle are the only controls reached for between shots, so they stack
+ * and stop: a row of them would be the widest thing on the left of the screen, and the left
+ * corner is where a player's eye lands first.
+ */
+.hud-tools-left {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+/* Top-right: a row of four, on a wide screen. */
+.hud-tools-right {
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: flex-end;
+}
+
+/*
+ * The tool buttons.
+ *
+ * 40px rather than 34px: 34 was sized for a row of text buttons in the strip under the
+ * table, and at 34px a finger and an icon compete for the same square. The same
+ * `.hud-glass` as the capsule, so the corners and the centre are visibly one material.
+ */
 .hud-tool {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   padding: 0;
   border-radius: 999px;
   color: #eaf2fb;
   cursor: pointer;
-  /* Transform only: the press is a scale, and the hover tint is a colour change left
-     instant on purpose so the one animated property on this control is the one reduced
-     motion can switch off. */
+  /* Transform only, and nothing else animates: the press is a scale, the hover is a lift,
+     and the tint is a colour change left instant on purpose. Those two properties are the
+     ones reduced motion can switch off (see the block below), and adding a third — say a
+     width transition — would be the first one nothing could. */
   transition: transform 140ms ease;
 }
 
 .hud-tool:hover {
   background: rgba(255, 255, 255, 0.14);
+  transform: translateY(-2px);
 }
 
 .hud-tool:active {
-  transform: scale(0.94);
+  transform: translateY(-2px) scale(0.94);
 }
 
 .hud-tool:focus-visible {
@@ -1525,17 +1668,34 @@ th {
 }
 
 .hud-tool--help {
+  font-family: var(--font-body);
   font-size: 15px;
-  font-weight: 800;
+  font-weight: 700;
+}
+
+/*
+ * The overflow button.
+ *
+ * Hidden by default and shown only on a phone, where four buttons in the top-right would
+ * run into the score capsule. It is the same slot either way — nothing is duplicated and
+ * nothing has to be kept in step — so all it does is toggle a class on the mount and let
+ * the stylesheet decide what "open" means at that width.
+ */
+.hud-tool--more {
+  display: none;
 }
 
 /**
  * The controls, opened on demand.
  *
  * These words were a line of text under the table. It is the same line, behind a question
- * mark, and it hangs from the top-left cluster over the frame's corner - the one part of a
- * top-down table no shot is read from, which is why it is the only thing in this screen
- * allowed to overlap the table at all, and only while it is open.
+ * mark, and it hangs from whichever corner the button is in - the one part of the screen no
+ * shot is read from, which is why it is the only thing in this HUD allowed to overlap the
+ * table at all, and only while it is open.
+ *
+ * The two anchors differ because the two corners do: the top-right group hangs its popover
+ * to the left edge of the viewport or it runs off the side of the screen, so that one is
+ * right-aligned and the top-left one is not.
  */
 .hud-pop {
   position: absolute;
@@ -1543,14 +1703,20 @@ th {
   left: 0;
   z-index: 8;
   width: max-content;
-  max-width: 250px;
+  max-width: min(250px, calc(100vw - 32px));
   padding: 10px 28px 10px 12px;
   border-radius: 14px;
   color: var(--text);
+  font-family: var(--font-body);
   font-size: 12px;
   line-height: 1.55;
   text-align: left;
   pointer-events: auto;
+}
+
+.hud-tools-right .hud-pop {
+  left: auto;
+  right: 0;
 }
 
 .hud-pop[hidden] {
@@ -1588,9 +1754,12 @@ th {
 /**
  * The two centre chips: reds left on the table, and what the ball on is worth.
  *
- * A number and a word, in that order, at 11px. This is the state a player reads between
- * shots, and it is the only thing in the middle of the row - the frame line sits under it,
- * unglazed, because a second pane under a pane is just a border.
+ * DEAD since the chips were taken out of the HUD. There is no `.hud-centre-chips` in the
+ * DOM any more and nothing mounts one, so this whole block — plus `.hud-break` and
+ * `.hud-meta` below — matches nothing. It is left here rather than deleted because this
+ * pass is about layout and not about pruning, and because `.hud-break` and `.hud-meta` are
+ * still named in the 620px block further down, so a reader is still pointed at them.
+ * Remove them in one deliberate pass, not piecemeal while restyling something else.
  */
 .hud-centre-chips {
   display: flex;
@@ -1648,8 +1817,7 @@ th {
 /**
  * The line under the chips: frame, stake, ball in hand.
  *
- * Unglazed on purpose. It is reference information rather than state, and a third pane in
- * the middle of the row would be the one that starts to feel like a panel over the table.
+ * DEAD with the rest of this block. Its replacement is `.hud-sub` and `.hud-toast` above.
  */
 .hud-meta {
   display: flex;
@@ -1679,6 +1847,52 @@ th {
   .hud-reds-label,
   .hud-ball-on-text {
     display: none;
+  }
+
+  /**
+   * The top-right group collapses behind one button.
+   *
+   * Four buttons in a row is fine on a desktop and unusable on a phone in landscape, where
+   * the score capsule has already claimed the middle third of the top edge. The same four
+   * elements become a vertical menu when the mount carries `hud-more-open`, so there is
+   * one set of buttons with one set of handlers at every width rather than a wide-screen
+   * layout and a narrow-screen one to keep in agreement.
+   */
+  .hud-tool--more {
+    display: grid;
+  }
+
+  .hud-tools-right {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 5px;
+  }
+
+  .hud-tools-right > .hud-tool:not(.hud-tool--more) {
+    display: none;
+  }
+
+  /* Open: a short column of glass, anchored under the button it belongs to. */
+  .hud-tools-right.hud-more-open {
+    padding: 5px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    backdrop-filter: blur(14px) saturate(130%);
+    -webkit-backdrop-filter: blur(14px) saturate(130%);
+    box-shadow:
+      0 4px 10px rgba(0, 0, 0, 0.25),
+      0 12px 28px rgba(0, 0, 0, 0.3);
+  }
+
+  .hud-tools-right.hud-more-open > .hud-tool:not(.hud-tool--more) {
+    display: grid;
+  }
+
+  /* A column hangs its popover to the left, or it runs off the right of the screen. */
+  .hud-tools-right .hud-pop {
+    top: 0;
+    right: calc(100% + 8px);
   }
 }
 
@@ -1879,11 +2093,13 @@ th {
   height: 10px;
   border-radius: 5px;
   /* Gold, to match the score: the thumb is the one part of the rail the hand is on, so
-     it is the part that gets the colour. Soft shadow rather than the hard black outline
-     it had, because a hard outline on a light cloth surround reads as a sticker. */
+     it is the part that gets the colour. The border has gone and the shadow has been
+     softened to a single drop: a hard 1px outline on a light cloth surround read as a
+     sticker sitting on the cloth rather than as a thumb on a groove. */
   background: linear-gradient(180deg, var(--gold-light), var(--gold));
-  border: 1px solid rgba(6, 10, 14, 0.45);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    0 2px 8px rgba(0, 0, 0, 0.3);
   transform: translate(-50%, 50%);
   pointer-events: none;
 }
@@ -1892,13 +2108,25 @@ th {
   background: var(--muted);
 }
 
+/*
+ * The percentage under the rail.
+ *
+ * 10px and `--muted`, where it was 11px in white with a hard text shadow. The number is
+ * useful while a power is being chosen and worth exactly nothing the rest of the time, so
+ * it stops being the second-brightest thing on the right of the screen; the fill colour is
+ * what a player actually reads mid-charge.
+ */
 .power-rail-value {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+.power-rail.is-charging .power-rail-value {
+  color: var(--text);
 }
 
 .power-rail-track {
@@ -1908,14 +2136,16 @@ th {
   border-radius: 999px;
   /* A soft glass channel: a light fill at low alpha with a blur behind it, over an inset
      shadow that keeps the rail reading as a groove. Same 14px blur as the HUD so the two
-     do not look like different materials. */
+     do not look like different materials, and the same two-part shadow, so the rail sits on
+     the cloth with the same weight as the capsule sits above it. */
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.14);
   backdrop-filter: blur(14px) saturate(130%);
   -webkit-backdrop-filter: blur(14px) saturate(130%);
   box-shadow:
-    inset 0 2px 6px rgba(0, 0, 0, 0.35),
-    0 4px 10px rgba(0, 0, 0, 0.25);
+    inset 0 2px 6px rgba(0, 0, 0, 0.3),
+    0 4px 10px rgba(0, 0, 0, 0.25),
+    0 12px 28px rgba(0, 0, 0, 0.28);
   /* Deliberately not overflow:hidden: the handle is wider than the track and
      overhangs it at both ends of its travel, and clipping it would cut the grip
      down to a sliver. The fill rounds itself. */
@@ -1950,18 +2180,23 @@ th {
  * control four hundred pixels away from it. It is absolutely positioned inside the dial
  * instead, and it takes no pointer events: the drag maths reads the ball's own rect, so
  * anything the caption covers would otherwise become a dead patch on the dial.
+ *
+ * Small and muted. The dial already shows the spin — the dot's position is the whole of it,
+ * and the crosshair is what the number was disambiguating — so this is a caption for a
+ * value that is already legible. It stays for the same reason the sub-line under the
+ * capsule stays: the mapping is not guessable, and a legend is cheaper than a tutorial.
  */
 .spin-label {
   position: absolute;
   left: 50%;
-  bottom: -20px;
+  bottom: -18px;
   transform: translateX(-50%);
-  font-size: 11px;
-  font-weight: 600;
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
-  color: var(--text);
+  color: var(--muted);
   white-space: nowrap;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
   pointer-events: none;
 }
 
@@ -3268,22 +3503,34 @@ button.mini {
  * toggles, rather than a keyframe on the element, means an unchanged score never
  * re-animates: the flash is tied to the update, not to the render.
  *
- * Only the scale and the glow are animated. Animating `color` toward `inherit`
- * would resolve against the *parent's* colour and land on the wrong value, so the
- * element keeps its own colour throughout and the motion alone carries the change.
+ * Only scale and opacity are animated. Animating `color` toward `inherit` would resolve
+ * against the *parent's* colour and land on the wrong value, so the element keeps its own
+ * colour throughout and the motion alone carries the change.
  */
 .tick-up {
   animation: tickFlash 0.5s ease;
 }
 
+/*
+ * Transform and opacity only.
+ *
+ * The score numbers are no longer gold, so the glow this used to animate was a halo around
+ * a colour that is not there any more — and a `text-shadow` animation repaints text on
+ * every frame of a shot for an effect nobody could see. The scale is the whole of it now,
+ * plus a short opacity dip: the number lifts, settles, and comes back. Both are the two
+ * properties that cost nothing and the two that reduced motion can switch off.
+ */
 @keyframes tickFlash {
   0% {
-    transform: scale(1.2);
-    text-shadow: 0 0 18px var(--gold-glow);
+    transform: scale(1.18);
+    opacity: 0.55;
+  }
+  40% {
+    opacity: 1;
   }
   100% {
     transform: scale(1);
-    text-shadow: 0 0 10px var(--gold-glow);
+    opacity: 1;
   }
 }
 
@@ -3400,10 +3647,25 @@ button.mini {
     transform: none;
   }
 
-  /* The tool buttons' press is a scale, and a scale is movement too. The global duration
-     floor above would only make it instant, which is the worst of both: still a jump,
-     just a sudden one. */
+  /**
+   * The HUD's own movements, collected.
+   *
+   * The global floor above already reduces the durations, which turns a lift into a jump —
+   * still a movement, just an abrupt one. So the two HUD transforms that exist purely to
+   * acknowledge a pointer are removed outright: the tool buttons' hover lift and their
+   * press scale, and the toast's slide-in. The opacity changes stay, because a fade is not
+   * motion and it is what carries the toast's arrival and its departure.
+   */
+  .hud-tool:hover {
+    transform: none;
+  }
+
   .hud-tool:active {
+    transform: none;
+  }
+
+  .event-banner.is-in,
+  .event-banner.is-out {
     transform: none;
   }
 }

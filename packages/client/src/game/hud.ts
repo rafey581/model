@@ -263,8 +263,8 @@ export function deriveHudState(input: HudInput): HudState {
     prize: showResult && input.prizeCredits > 0 ? formatCredits(input.prizeCredits) : null,
     frames: showResult ? `${framesWon[0]} : ${framesWon[1]}` : null,
     frameLabel: input.practice
-      ? `Practice · frame ${input.frameIndex}`
-      : `Frame ${input.frameIndex} · ${input.format}`,
+      ? `Practice - Frame ${input.frameIndex}`
+      : `Frame ${input.frameIndex} - ${input.format}`,
     breakLabel: snapshot && snapshot.breakScore > 0 ? `Break ${snapshot.breakScore}` : null,
     ballOnLabel: describeBallOn(snapshot?.ballOn),
     ballOnValue: onColour !== null ? (COLOR_VALUES[onColour] ?? null) : (snapshot?.ballOn ?? 'RED') === 'RED' ? 1 : null,
@@ -350,6 +350,15 @@ export interface Hud {
    * space and the caller fills it.
    */
   toolsRoot: HTMLElement
+  /**
+   * An empty slot in the top-right of the bar, for the rest of the session controls.
+   *
+   * Sound, finish, fullscreen and the controls popover. Separate from `toolsRoot` because
+   * they are grouped by how often they are wanted rather than by what they act on: leaving
+   * is once a session, these are occasionally, and a top-left column has no room for four
+   * more buttons beside a score capsule.
+   */
+  sessionToolsRoot: HTMLElement
   /** Mounted inside the table frame: the power rail, which overlays the table. */
   overlayRoot: HTMLElement
   /** The spin dial, mounted inside the table frame on the side opposite the rail. */
@@ -416,72 +425,89 @@ export function createHud(): Hud {
   const oppNames = sideNodes('hud-opp', 'hud-points-opp')
 
   /**
-   * A player, as one pill in a top corner.
+   * A player, as one end of the score capsule.
    *
-   * Avatar, name and frame points in a single small capsule. The turn highlight and the
-   * shot clock both live on the avatar frame, so the pill is the smallest box that can
-   * carry all three without the timer having to be drawn somewhere else. The points keep
-   * the ids they have always had: they were built for the ends of the centre scoreline
-   * and have only moved.
+   * Avatar, name and the frame's points, with the turn highlight and the shot clock both
+   * living on the avatar frame. The points keep the ids they have always had: they were
+   * built for the two ends of a scoreline and have only moved, so anything reading them by
+   * id still finds them.
+   *
+   * The order is reversed for the opponent, so the capsule reads avatar-name | score |
+   * name-avatar: each player is nearest their own number, which is the only arrangement
+   * where a swapped score is visible rather than merely possible.
    */
-  function playerPill(
+  function capsuleSide(
     avatar: AvatarSlot,
-    side: { name: HTMLElement; points: HTMLElement },
+    side: { name: HTMLElement },
     modifier: string
   ): HTMLElement {
-    const pill = el('div', `hud-player ${modifier}`)
-    pill.append(avatar.frame, side.name, side.points)
-    return pill
+    const node = el('div', `hud-capsule-side ${modifier}`)
+    node.append(avatar.frame, side.name)
+    return node
   }
 
   const left = el('div', 'hud-side hud-left')
   /*
-   * The session tools mount in this slot and are built by the caller, not here: leaving,
-   * sound, conceding, fullscreen and help all belong to the session rather than to the
-   * frame, and the HUD is not allowed to know how to end a match. An empty box the
-   * caller fills keeps that dependency pointing one way.
+   * The session tools mount in this slot and are built by the caller, not here: leaving and
+   * the camera toggle act on the session rather than on the frame, and the HUD is not
+   * allowed to know how to end a match. An empty box the caller fills keeps that dependency
+   * pointing one way. It is a column, not a row: these are the two controls a player reaches
+   * for between shots, and a column keeps them clear of the score capsule in the middle.
    */
-  const tools = el('div', 'hud-tools')
+  const tools = el('div', 'hud-tools hud-tools--left')
   tools.id = 'hud-tools'
-  left.append(tools, playerPill(youAvatar, youNames, 'hud-player--you'))
+  left.appendChild(tools)
+
+  /**
+   * The other session tools, top right.
+   *
+   * A second mount rather than a continuation of the first because these are grouped by
+   * how often they are used, not by what they act on: leaving is once a session, the rest
+   * are occasionally, and putting them in one row put five buttons in the corner nearest
+   * the score. Sound, finish, fullscreen and the controls popover are here instead, and the
+   * caller fills them in the same way it fills the top-left slot.
+   */
+  const sessionTools = el('div', 'hud-tools hud-tools--right')
+  sessionTools.id = 'hud-tools-right'
   const right = el('div', 'hud-side hud-right')
-  right.append(playerPill(oppAvatar, oppNames, 'hud-player--opponent'))
+  right.appendChild(sessionTools)
 
   const centre = el('div', 'hud-centre')
-  const centreChips = el('div', 'hud-centre-chips')
 
   /**
-   * The ball on: what this shot is for, and what it is worth.
+   * The score capsule: the one pane in the middle of the top edge.
    *
-   * The one piece of the old centre readout that has to stay central, because it is about
-   * the table rather than about either player. The dot is the ball itself (fed as
-   * --badge-dot), the number is the stake, and the chip keeps to the glass language of
-   * the pills either side of it.
+   * One glass pill holding both players and the scoreline between them, rather than two
+   * player pills either side of a separate score. Three reasons, all of them about the
+   * table being the subject: the two names stop being the largest thing on the screen, the
+   * scoreline cannot drift out of step with the names it belongs to, and one pill over the
+   * cloth is one thing to look past rather than three.
+   *
+   * The two points keep the ids and the `tick-up` flash they have always had, so a score
+   * that moves is still announced by the number itself moving.
    */
-  const ballOn = el('div', 'hud-ball-on hud-glass')
-  ballOn.id = 'hud-ball-on'
-  const ballOnText = el('span', 'hud-ball-on-text')
-  const ballOnValue = el('span', 'hud-ball-on-value')
-  ballOnValue.id = 'hud-ball-on-value'
-  ballOnValue.hidden = true
-  const brk = el('span', 'hud-break')
-  brk.id = 'hud-break'
-  ballOn.append(ballOnText, ballOnValue, brk)
+  const capsule = el('div', 'hud-capsule hud-glass')
+  capsule.id = 'hud-capsule'
+  const youSide = capsuleSide(youAvatar, youNames, 'hud-capsule-side--you')
+  const oppSide = capsuleSide(oppAvatar, oppNames, 'hud-capsule-side--opponent')
+  const score = el('div', 'hud-score')
+  const sep = el('div', 'hud-score-sep')
+  sep.setAttribute('aria-hidden', 'true')
+  sep.textContent = ':'
+  score.append(youNames.points, sep, oppNames.points)
+  capsule.append(youSide, score, oppSide)
 
   /**
-   * The reds still on the table, as a number.
+   * What the ball on is, and how many reds are left, are gone.
    *
-   * This used to be fifteen dots that went out one at a time. The count is the same fact,
-   * and the only part of it that is read rather than counted, so the dots are gone and
-   * the number stays: a chip beside the ball on, carrying the dot that stands for a red.
+   * Both were chips in the middle of the top edge: a red dot with a count, and a "Ball on:
+   * red +1" with a coloured dot. Neither is on the screen any more, and nothing has taken
+   * their place — a HUD that names the next ball is a HUD telling the player what to think
+   * about instead of what to see. The facts themselves are untouched: `deriveHudState`
+   * still computes `reds`, `colours`, `redsOn`, `ballOnLabel`, `ballOnValue` and
+   * `ballOnDot`, and they are still part of the state, because that is a description of the
+   * table and not a decision about what to draw.
    */
-  const reds = el('div', 'hud-reds hud-glass')
-  const redCount = el('span', 'hud-red-count')
-  redCount.id = 'hud-reds-count'
-  const redDot = el('span', 'hud-red-mark')
-  redDot.setAttribute('aria-hidden', 'true')
-  reds.append(redDot, redCount)
-  centreChips.append(reds, ballOn)
 
   const prize = el('div', 'hud-prize')
   prize.id = 'hud-prize'
@@ -492,11 +518,38 @@ export function createHud(): Hud {
   const inHand = el('div', 'hud-inhand')
   inHand.id = 'hud-inhand'
   inHand.hidden = true
-  // One quiet line under the chips: which frame this is, what it is worth, and the two
-  // things that are only true for a moment (a break, an in-hand).
-  const meta = el('div', 'hud-meta')
-  meta.append(frameLabel, frames, prize, inHand)
-  centre.append(centreChips, meta)
+  // One very quiet line under the capsule: which frame this is, and — in a staked match —
+  // what it is worth and where the frames stand. These are facts about the session rather
+  // than about the table, so they are reference text and get none of the capsule's weight.
+  const sub = el('div', 'hud-sub')
+  sub.append(frameLabel, frames, prize)
+
+  /**
+   * The one line of gameplay state that is still on the screen.
+   *
+   * Ball in hand is the whole of it, and it is genuinely transient: it is true for exactly
+   * as long as the cue ball is in a player's hand. It sits directly under the capsule as a
+   * small glass toast rather than in the row beside the frame label, because it is the only
+   * thing on this screen that changes what the player is allowed to do next.
+   *
+   * The event messages go into the same stack, underneath it. They were absolutely
+   * positioned across the middle of the table, which meant a foul covered the cloth while
+   * it was being read, and every message on the screen competed with the table. Here they
+   * queue under the capsule in the one place a HUD should be talking from, and the layer is
+   * still just a container: nothing about how a message is announced has changed, only
+   * where it appears.
+   */
+  const toast = el('div', 'hud-toast')
+  toast.id = 'hud-toast'
+  toast.appendChild(inHand)
+
+  // Built once, reused; each flash appends a short-lived child that animates itself in and
+  // out. Still driven by the same three classes and the same timers as before.
+  const eventLayer = el('div', 'event-banner-layer')
+  eventLayer.id = 'event-banner-layer'
+  toast.appendChild(eventLayer)
+
+  centre.append(capsule, sub, toast)
 
   top.append(left, centre, right)
 
@@ -507,11 +560,6 @@ export function createHud(): Hud {
   live.id = 'hud-turn'
   live.setAttribute('role', 'status')
   live.setAttribute('aria-live', 'polite')
-
-  // Center-screen event banners: fouls, pots, ball in hand. Built once, reused;
-  // each flash appends a short-lived child that animates itself in and out.
-  const eventLayer = el('div', 'event-banner-layer')
-  eventLayer.id = 'event-banner-layer'
 
   /**
    * The power rail, laid over the side of the table.
@@ -803,6 +851,7 @@ export function createHud(): Hud {
   return {
     root,
     toolsRoot: tools,
+    sessionToolsRoot: sessionTools,
     overlayRoot: overlay,
     spinDialRoot: spinDial,
     update: (state: HudState) => {
@@ -822,19 +871,6 @@ export function createHud(): Hud {
       setText(frameLabel, state.frameLabel)
       setHidden(inHand, !state.cueInHand)
       setText(inHand, state.cueInHandInD ? 'Ball in hand - place the cue in the D' : 'Ball in hand - place the cue anywhere on the table')
-      setText(ballOnText, state.ballOnLabel)
-      setText(brk, state.breakLabel ?? '')
-      setHidden(brk, state.breakLabel === null)
-      if (state.ballOnValue !== null && state.ballOnDot !== null) {
-        setText(ballOnValue, `+${state.ballOnValue}`)
-        ballOnValue.style.setProperty('--badge-dot', state.ballOnDot)
-        setHidden(ballOnValue, false)
-      } else {
-        setHidden(ballOnValue, true)
-      }
-
-      setText(redCount, `${state.reds.remaining}`)
-      redCount.title = `${state.reds.remaining} of ${state.reds.total} reds left`
 
       const turnText = state.you.active ? 'Your turn' : state.opponent.active ? `${state.opponent.name} to play` : ''
       if (live.textContent !== turnText) live.textContent = turnText
