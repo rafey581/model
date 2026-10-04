@@ -1,4 +1,4 @@
-﻿import { BALL_IDS, COLOR_NAMES, COLOR_ORDER, COLOR_VALUES, TOTAL_REDS } from '@snooker/shared'
+import { BALL_IDS, COLOR_NAMES, COLOR_ORDER, COLOR_VALUES, TOTAL_REDS } from '@snooker/shared'
 import { ballColorHex } from './palette.js'
 import { createAvatarSlot, updateAvatarSubject } from './avatar.js'
 import type { AvatarSlot } from './avatar.js'
