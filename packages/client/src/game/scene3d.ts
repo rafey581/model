@@ -1917,68 +1917,148 @@ const outerL = APRON_OUTER_L
     if ((globalThis as any).__DEBUG_POLES__) {
       this.__debugPoles()
     }
+    this.__installDebugHandles()
   }
 
-  /** TEMP DEBUG - count tall objects > 100mm above cloth, excluding stick */
-  private __debugPoles(): void {
+  /**
+   * TEMP DEBUG (Step E) — the pole census. Flag-gated and inert by default.
+   *
+   * Set `window.__DEBUG_POLES__ = true` before the scene is built (or just call
+   * `window.__debugPoles()` afterwards) and this prints every mesh whose world-space
+   * bounding box reaches `yMin` above the cloth, grouped by its nearest pocket. The point
+   * is to answer one question with numbers instead of guesses: *what is standing up on
+   * this table, and where.*
+   *
+   * Four things the first version of this got wrong, all of which changed its answer:
+   *
+   * - It ignored `visible`. `Box3.setFromObject` walks invisible objects happily, so the
+   *   two fixture meshes that are deliberately `visible = false` — the lamp shade at
+   *   y≈1900 and the bulb at y≈1790, both parked on the table's centre line — were
+   *   reported as the two tallest "poles" in the scene. They cannot be seen; they were
+   *   the top two rows of the table.
+   * - It excluded the cue with `m === this.stick`, which is a `Group`. `traverse` visits
+   *   the Group *and* its five cylinder children, and the shaft alone is 1200mm long, so
+   *   excluding the Group excluded none of the geometry. Membership is now decided by
+   *   walking ancestors, so a cue is a cue whichever of its parts is being measured.
+   * - It read `m.position` for the pocket-distance test, which is local. Anything parented
+   *   — every ball rig, the whole cue — was measured from the wrong place and attributed
+   *   to whichever pocket happened to be nearest the origin. World centres now.
+   * - It `break`ed out of the instanced loop on the first tall instance, so an
+   *   `InstancedMesh` could report at most one hit however many of its instances were
+   *   standing up. All instances are enumerated now.
+   *
+   * Everything it walks is a real world-space box, and every instance of an instanced mesh
+   * is measured rather than sampled, so a count from this can be trusted to be a count.
+   */
+  private __debugPoles(yMin = 100): void {
     const box = new THREE.Box3()
+    const centre = new THREE.Vector3()
     const m4 = new THREE.Matrix4()
-    const v = new THREE.Vector3()
-    let tallCount = 0
+    const rows: Array<Record<string, unknown>> = []
     const byPocket = new Map<string, number>()
-    const tallList: Array<{name?: string, yMax: number, dist: number, key: string}> = []
-    for (const p of POCKETS) {
-      byPocket.set(pocketKey(p), 0)
+    for (const p of POCKETS) byPocket.set(pocketKey(p), 0)
+
+    /** True when `obj` or any ancestor is the cue, or is not visible at all. */
+    const skip = (obj: THREE.Object3D): boolean => {
+      for (let o: THREE.Object3D | null = obj; o; o = o.parent) {
+        if (o === (this as unknown as { stick: THREE.Group }).stick) return true
+        if (o.visible === false) return true
+      }
+      return false
     }
-    this.scene.traverse((obj) => {
-      const m = obj as THREE.Mesh | THREE.InstancedMesh
-      if (m === (this as any).stick) return
-      if ((m as any).userData?.isStick) return
-      if (m.name === 'stick' || (m as any).name === 'cueStick') return
-      const isInst = (m as any).isInstancedMesh === true
-      const isMesh = (m as any).isMesh === true || (!isInst && (m as any).geometry)
-      if (isMesh && !isInst) {
-        box.setFromObject(m, true)
-        if (box.max.y > 100) {
-          tallCount++
-          let best = Infinity
-          let bestKey = 'other'
-          const cx = m.position.x
-          const cz = m.position.z
-          for (const p of POCKETS) {
-            const d = Math.hypot(tableX(p.x) - cx, tableZ(p.y) - cz)
-            if (d < best) { best = d; bestKey = pocketKey(p) }
-          }
-          byPocket.set(bestKey, (byPocket.get(bestKey) || 0) + 1)
-          tallList.push({ name: m.name, yMax: box.max.y, dist: best, key: bestKey })
-        }
-      } else if (isInst) {
-        const im = m as THREE.InstancedMesh
-        if (!im.geometry.boundingBox) im.geometry.computeBoundingBox()
-        const geoBox = im.geometry.boundingBox!
-        const tempBox = new THREE.Box3()
-        for (let i = 0; i < im.count; i++) {
-          im.getMatrixAt(i, m4)
-          tempBox.copy(geoBox).applyMatrix4(m4)
-          if (tempBox.max.y > 100) {
-            tallCount++
-            const cx = (tempBox.min.x + tempBox.max.x) / 2
-            const cz = (tempBox.min.z + tempBox.max.z) / 2
-            let best = Infinity
-            let bestKey = 'other'
-            for (const p of POCKETS) {
-              const d = Math.hypot(tableX(p.x) - cx, tableZ(p.y) - cz)
-              if (d < best) { best = d; bestKey = pocketKey(p) }
-            }
-            byPocket.set(bestKey, (byPocket.get(bestKey) || 0) + 1)
-            tallList.push({ name: im.name, yMax: tempBox.max.y, dist: best, key: bestKey })
-            break
-          }
+
+    const nearestPocket = (x: number, z: number): { key: string; dist: number } => {
+      let key = 'other'
+      let dist = Infinity
+      for (const p of POCKETS) {
+        const d = Math.hypot(tableX(p.x) - x, tableZ(p.y) - z)
+        if (d < dist) {
+          dist = d
+          key = pocketKey(p)
         }
       }
+      return { key, dist }
+    }
+
+    const record = (label: string, kind: string, b: THREE.Box3, instance: number | null): void => {
+      centre.addVectors(b.min, b.max).multiplyScalar(0.5)
+      const near = nearestPocket(centre.x, centre.z)
+      byPocket.set(near.key, (byPocket.get(near.key) ?? 0) + 1)
+      rows.push({
+        label,
+        kind,
+        instance,
+        yMin: Number(b.min.y.toFixed(1)),
+        yMax: Number(b.max.y.toFixed(1)),
+        x: Number(centre.x.toFixed(1)),
+        z: Number(centre.z.toFixed(1)),
+        nearestPocket: near.key,
+        distToPocket: Number(near.dist.toFixed(1))
+      })
+    }
+
+    this.scene.traverse((obj) => {
+      if (skip(obj)) return
+      const mesh = obj as THREE.Mesh & { isInstancedMesh?: boolean; isMesh?: boolean }
+      if (mesh.isInstancedMesh) {
+        const im = mesh as unknown as THREE.InstancedMesh
+        if (!im.geometry.boundingBox) im.geometry.computeBoundingBox()
+        const geoBox = im.geometry.boundingBox
+        if (!geoBox) return
+        const tmp = new THREE.Box3()
+        for (let i = 0; i < im.count; i++) {
+          im.getMatrixAt(i, m4)
+          tmp.copy(geoBox).applyMatrix4(m4)
+          tmp.applyMatrix4(im.matrixWorld)
+          if (tmp.max.y > yMin) record(im.name || 'instanced', (im.geometry as any).type, tmp, i)
+        }
+        return
+      }
+      if (!mesh.isMesh) return
+      box.setFromObject(mesh, true)
+      if (box.max.y > yMin) record(mesh.name || mesh.geometry.type, mesh.geometry.type, box, null)
     })
-    console.log('POLES total=' + tallCount, Object.fromEntries(byPocket))
-    console.table(tallList.slice(0, 30))
+
+    console.log(`POLES: ${rows.length} meshes reaching above y=${yMin}mm (invisible and cue excluded)`)
+    console.log('POLES by nearest pocket:', Object.fromEntries(byPocket))
+    console.table(rows)
+  }
+
+  /**
+   * TEMP DEBUG (Step E) — console handles for bisecting the scene by hand.
+   *
+   * `__debugScene` is the live scene graph, so anything can be inspected from the console.
+   * `__hide` takes a substring and hides every mesh whose name or geometry type contains
+   * it, which is how a suspect is isolated without a rebuild: hide the cue, look; hide the
+   * fixtures, look. `__showAll` puts everything back.
+   *
+   * Gated on the same flag as the census so a normal match never pays for the traversal.
+   */
+  private __installDebugHandles(): void {
+    const g = globalThis as any
+    if (!g.__DEBUG_POLES__) return
+    g.__debugScene = this.scene
+    g.__debugPoles = (yMin?: number) => this.__debugPoles(yMin)
+    g.__hide = (needle: string): number => {
+      let n = 0
+      this.scene.traverse((o) => {
+        const m = o as THREE.Mesh & { isMesh?: boolean; isInstancedMesh?: boolean }
+        const hay = `${m.name ?? ''} ${m.geometry?.type ?? ''}`
+        if ((m.isMesh || m.isInstancedMesh) && hay.includes(needle)) {
+          o.visible = false
+          n++
+        }
+      })
+      console.log(`__hide(${needle}): hid ${n}`)
+      return n
+    }
+    g.__showAll = (): void => {
+      this.scene.traverse((o) => {
+        o.visible = true
+      })
+      console.log('__showAll: every object visible again (note: this also un-hides the lamp shade)')
+    }
+    console.log('debug handles: __debugScene, __debugPoles(yMin?), __hide(needle), __showAll()')
   }
 
   private buildAim(): void {
