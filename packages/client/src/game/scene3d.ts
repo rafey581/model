@@ -127,6 +127,38 @@ const POCKETS = pocketPositions()
  */
 let MAX_ANISO = 4
 
+/*
+ * The room and its palette. Every colour the light lands on, in one place.
+ *
+ * The look is the bright broadcast one: a saturated green bed under one strong warm
+ * lamp, dark polished rails around it, and behind all that a blue room that falls
+ * away to navy. The table is the subject of the picture; the room is its backdrop.
+ */
+/** The scene's clear colour: dark navy, the top of the room's gradient. */
+const ROOM_BG_COLOR = '#0a1128'
+/** Gentle exponential fog in the room's own colour, per millimetre. Nothing at gameplay distances, a fade at the far wall. */
+const ROOM_FOG_DENSITY = 0.00004
+/** The blue the wall is painted at its brightest. */
+const ROOM_WALL_COLOR = '#123a8a'
+/** The navy the wall fades to at the top. */
+const ROOM_WALL_TOP_COLOR = '#0c1c46'
+/** The floor: dark, so the lit table is the subject of the picture. */
+const ROOM_FLOOR_COLOR = '#0d1220'
+/** The bed's colour: bright, saturated tournament green. */
+const CLOTH_COLOR = '#1a9a2e'
+/** How much of the cloth's woven normal map is left standing. Nearly zero: the weave stays as micro-detail, the visible pattern goes. */
+const CLOTH_NORMAL_STRENGTH = 0.06
+/** How much of the cushions' shared normal map is left standing. */
+const CUSHION_NORMAL_STRENGTH = 0.12
+/** The rail wood's light figure colour (earlywood), a dark polished brown. */
+const RAIL_EARLY = { r: 92, g: 45, b: 24 }
+/** The rail wood's dark stripe colour (latewood). */
+const RAIL_LATE = { r: 74, g: 34, b: 20 }
+/** Cushion cloth: a brighter green than the bed so the raised edge reads. */
+const CUSHION_COLOR = 0x1fae4a
+/** The cushion nose strip: brighter still, catching the lamp. */
+const NOSE_COLOR = 0x2bc75a
+
 function feltTexture(): THREE.CanvasTexture {
   return cachedTexture('felt', () => {
     // 512×512, one tile across the whole bed. The old 2048×1024 canvas cost VRAM and
@@ -138,11 +170,10 @@ function feltTexture(): THREE.CanvasTexture {
     canvas.width = size
     canvas.height = size
     const ctx = canvas.getContext('2d')!
-    // Tournament baize: a slightly deep, slightly blue green. The earlier #1ea838 was
-    // brighter and more yellow, which under the warm lamp tone-mapping pushed toward
-    // a flat lime. Real Strachan-style cloth sits darker so the white and the yellow
-    // have something to read against.
-    ctx.fillStyle = '#1b9430'
+    // Tournament baize, tuned bright and saturated: the broadcast look has the bed
+    // as the colour anchor of the picture, holding its green under the warm lamp
+    // rather than darkening down toward it.
+    ctx.fillStyle = CLOTH_COLOR
     ctx.fillRect(0, 0, size, size)
 
     // Seamless baize: wrap-around noise, four offset copies, so a mip edge never
@@ -460,12 +491,12 @@ function woodGrain(): { color: HTMLCanvasElement; rough: HTMLCanvasElement } {
   const cy = size * 2.6
   const squash = 0.55
   const ringFreq = 13
-  const EARLY_R = 126
-  const EARLY_G = 60
-  const EARLY_B = 38
-  const LATE_R = 46
-  const LATE_G = 18
-  const LATE_B = 11
+  const EARLY_R = RAIL_EARLY.r
+  const EARLY_G = RAIL_EARLY.g
+  const EARLY_B = RAIL_EARLY.b
+  const LATE_R = RAIL_LATE.r
+  const LATE_G = RAIL_LATE.g
+  const LATE_B = RAIL_LATE.b
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -638,11 +669,11 @@ function envTexture(): THREE.CanvasTexture {
     canvas.height = h
     const ctx = canvas.getContext('2d')!
     const grad = ctx.createLinearGradient(0, 0, 0, h)
-    grad.addColorStop(0, '#0d1117')
-    grad.addColorStop(0.42, '#262c36')
+    grad.addColorStop(0, ROOM_BG_COLOR)
+    grad.addColorStop(0.42, ROOM_WALL_COLOR)
     grad.addColorStop(0.5, '#b8a57f')
     grad.addColorStop(0.58, '#3f2f20')
-    grad.addColorStop(1, '#15181d')
+    grad.addColorStop(1, ROOM_FLOOR_COLOR)
     ctx.fillStyle = grad
     ctx.fillRect(0, 0, w, h)
     // The overhead lamp as a bright soft-edged band. This is the single most important
@@ -668,6 +699,43 @@ function envTexture(): THREE.CanvasTexture {
     const texture = new THREE.CanvasTexture(canvas)
     texture.colorSpace = THREE.SRGBColorSpace
     texture.mapping = THREE.EquirectangularReflectionMapping
+    return texture
+  })
+}
+
+/**
+ * The back wall: blue paint, brightest at the height the lamp reaches, falling to
+ * navy at the top, with the pool of light the table throws behind it.
+ *
+ * One small canvas rather than geometry: the gradient and the pool are the whole
+ * look of the room, and a texture costs one draw call and no extra meshes.
+ */
+function wallTexture(): THREE.CanvasTexture {
+  return cachedTexture('wall', () => {
+    const w = 512
+    const h = 256
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')!
+    // Vertical: navy at the ceiling fading into the blue below, so the room reads
+    // as lit from the table rather than from the sky.
+    const grad = ctx.createLinearGradient(0, 0, 0, h)
+    grad.addColorStop(0, ROOM_WALL_TOP_COLOR)
+    grad.addColorStop(0.55, ROOM_WALL_COLOR)
+    grad.addColorStop(1, ROOM_WALL_COLOR)
+    ctx.fillStyle = grad
+    ctx.fillRect(0, 0, w, h)
+    // The pool of light the table's lamp throws on the wall: one soft ellipse
+    // behind the table, brighter than the paint but never a blown highlight.
+    const pool = ctx.createRadialGradient(w / 2, h * 0.62, 10, w / 2, h * 0.62, w * 0.34)
+    pool.addColorStop(0, 'rgba(190,215,255,0.5)')
+    pool.addColorStop(0.5, 'rgba(120,160,240,0.22)')
+    pool.addColorStop(1, 'rgba(120,160,240,0)')
+    ctx.fillStyle = pool
+    ctx.fillRect(0, 0, w, h)
+    const texture = new THREE.CanvasTexture(canvas)
+    texture.colorSpace = THREE.SRGBColorSpace
     return texture
   })
 }
@@ -898,7 +966,10 @@ export class Scene3D {
     // One query, one clamp, shared by every texture built after this line.
     MAX_ANISO = Math.min(this.renderer.capabilities.getMaxAnisotropy(), 4)
     this.renderer.shadowMap.enabled = true
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    // PCFSoftShadowMap was deprecated in r186; PCFShadowMap with a radius is the
+    // supported soft look, and the map is baked once so the filter costs per frame
+    // nothing anyway.
+    this.renderer.shadowMap.type = THREE.PCFShadowMap
     // Everything this light can see is static, so the map is rendered exactly once —
     // the flag is raised after the scene is fully built and never touched again.
     this.renderer.shadowMap.autoUpdate = false
@@ -907,7 +978,11 @@ export class Scene3D {
     // sRGB output, by its current name (outputEncoding was retired in r152).
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
 
-    this.scene.background = new THREE.Color('#161d27')
+    this.scene.background = new THREE.Color(ROOM_BG_COLOR)
+    // A whisper of the room's own colour in the far distance: enough that the wall
+    // and the floor fade out at their extremes instead of ending on a hard plane
+    // edge, and nothing at gameplay distances.
+    this.scene.fog = new THREE.FogExp2(ROOM_BG_COLOR, ROOM_FOG_DENSITY)
 
     // Near plane at CAMERA_NEAR_MM (20), not 0.1 — that constant's comment carries the
     // depth-precision argument. A camera pulled close to a cushion nose or over a pocket
@@ -1045,7 +1120,7 @@ export class Scene3D {
     // spotlights with 1024² maps — three shadow renders every frame for pools of light
     // that baked textures and contact blobs already supply — which is exactly the
     // overhead a low-end GPU does not have to spend.
-    const lamp = (this.lamp = new THREE.SpotLight(0xffd9a0, 4600000, 0, Math.PI / 4.6, 0.6, 2))
+    const lamp = (this.lamp = new THREE.SpotLight(0xffd9a0, 5400000, 0, Math.PI / 4.6, 0.6, 2))
     lamp.position.set(0, 1750, 0)
     lamp.target.position.set(0, 0, 0)
     lamp.castShadow = true
@@ -1085,12 +1160,12 @@ export class Scene3D {
     // the wood's figure by flooding the same value into both the lit and unlit sides,
     // which is exactly the "evenly lit, nothing has form" failure. A directional
     // contrast is what makes a bevel read as a bevel.
-    const ambient = new THREE.AmbientLight(0xdfe8ff, 0.28)
+    const ambient = new THREE.AmbientLight(0xdfe8ff, 0.34)
     this.scene.add(ambient)
 
     // Hemisphere keeps the room warm from above and dark at the floor, so the underside
     // of the rails picks up bounce rather than reading as a black void.
-    const hemi = new THREE.HemisphereLight(0xffe2b8, 0x2e2419, 0.42)
+    const hemi = new THREE.HemisphereLight(0xfff1d8, 0x2e2419, 0.5)
     this.scene.add(hemi)
 
     // Cool fill from one side, warm key-side fill from the other, so every visible
@@ -1142,7 +1217,7 @@ export class Scene3D {
         // Normal map at 60— so the weave threads land near a millimetre apart on the bed,
         // which is the real pitch of worsted cloth. Any coarser and it reads as canvas.
         normalMap: feltNormalTexture(),
-        normalScale: new THREE.Vector2(0.35, 0.35),
+        normalScale: new THREE.Vector2(CLOTH_NORMAL_STRENGTH, CLOTH_NORMAL_STRENGTH),
         color: 0xffffff,
         roughness: 0.94,
         metalness: 0,
@@ -1614,9 +1689,9 @@ const outerL = APRON_OUTER_L
     // only if the caller closes it, and this one's ends are swept open at the pocket
     // jaws where the segment is cut to length.
     const cushionMat = new THREE.MeshPhysicalMaterial({
-      color: 0x157a33,
+      color: CUSHION_COLOR,
       normalMap: feltNormalTexture(),
-      normalScale: new THREE.Vector2(0.3, 0.3),
+      normalScale: new THREE.Vector2(CUSHION_NORMAL_STRENGTH, CUSHION_NORMAL_STRENGTH),
       roughness: 0.62,
       metalness: 0,
       side: THREE.DoubleSide,
@@ -1631,9 +1706,9 @@ const outerL = APRON_OUTER_L
 // eye where the cushion is. With the profile below carrying the shape, this is now a
 // thin capping strip on the nose shoulder instead of a separate box beside it.
     const noseMat = new THREE.MeshPhysicalMaterial({
-      color: 0x1d9e43,
+      color: NOSE_COLOR,
       normalMap: feltNormalTexture(),
-      normalScale: new THREE.Vector2(0.22, 0.22),
+      normalScale: new THREE.Vector2(CUSHION_NORMAL_STRENGTH, CUSHION_NORMAL_STRENGTH),
       roughness: 0.42,
       metalness: 0,
       side: THREE.DoubleSide,
@@ -1879,19 +1954,20 @@ const outerL = APRON_OUTER_L
       this.scene.add(stitches)
     }
 
-    // Burgundy arena carpet, bright enough to read as a lit floor rather than a void.
+    // Dark floor, so the lit table is the subject of the picture.
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(16000, 9000),
-      new THREE.MeshStandardMaterial({ color: 0x6b2731, roughness: 0.55, metalness: 0.0, envMapIntensity: 0.5 })
+      new THREE.MeshStandardMaterial({ color: new THREE.Color(ROOM_FLOOR_COLOR), roughness: 0.55, metalness: 0.0, envMapIntensity: 0.5 })
     )
     floor.rotation.x = -Math.PI / 2
     floor.position.y = -790
     floor.receiveShadow = true
     this.scene.add(floor)
 
+    // Blue wall, gradient to navy at the top, with the lamp's pool of light on it.
     const backWall = new THREE.Mesh(
       new THREE.PlaneGeometry(14000, 7000),
-      new THREE.MeshStandardMaterial({ color: 0x27344a, roughness: 0.9 })
+      new THREE.MeshStandardMaterial({ map: wallTexture(), roughness: 0.9 })
     )
     backWall.position.set(0, 500, -4600)
     this.scene.add(backWall)
