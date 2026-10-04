@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { POCKET_RADIUS_CORNER, TABLE_LENGTH, TABLE_WIDTH } from '@snooker/shared'
+import { BALL_RADIUS, POCKET_RADIUS_CORNER, TABLE_LENGTH, TABLE_WIDTH } from '@snooker/shared'
+import { pickCameraAt, projectToNdc } from './cameraPick.js'
 import {
   AIM_BACK_MM,
+  AIM_FOV_DEG,
   AIM_HEIGHT_MM,
   AIM_LOOK_AHEAD_MM,
+  AIM_PORTRAIT_MAX_EXTRA_DEG,
+  AIM_RAIL_CLEARANCE_MM,
   CAMERA_REACH_MM,
   MAX_CAMERA_HEIGHT_MM,
   MIN_CAMERA_HEIGHT_MM,
@@ -11,12 +15,14 @@ import {
   PLACEMENT_TRANSITION_MIN_SECONDS,
   PLACEMENT_TRANSITION_SECONDS,
   TOP_DOWN_MIN_HEIGHT_MM,
+  aimFovDeg,
   beginPlacementTransition,
   clampPlacementTransitionSeconds,
   initialHeadingLatch,
   stepHeadingLatch,
   latchedCameraYaw,
   addOrbit,
+  followHeadingLatch,
   MAX_ORBIT_RAD,
   noPlacementTransition,
   stepPlacementTransition,
@@ -83,9 +89,10 @@ describe('the heading latch', () => {
 
   it('never lets a sweeping aim turn the camera', () => {
     // The bug this rig exists to fix: the player sweeps their aim across the whole
-    // table with the pointer and the camera used to follow every degree of it. With
-    // the latch in place the rig's heading is taken from the latch, so an aim that
-    // moves without a shot being played leaves the camera exactly where it was.
+    // table with the pointer and the camera used to follow every degree of it. The
+    // rig's heading comes only through the latch, so the bare angle on the request
+    // cannot turn anything by itself — the scene decides when the latch follows
+    // the aim, and only through followHeadingLatch.
     let state = run(initialRigState(ASPECT_2_TO_1), request({ aimAngle: 0 }), 3)
     const settledYaw = state.yaw
     for (const angle of [0.4, 1.2, 2.4, -1.6, 3.0]) {
@@ -103,6 +110,54 @@ describe('the heading latch', () => {
     // Drag the look-around: the rig eases there too, via the same latch.
     state = run(state, request({ aimAngle: Math.PI / 2, latch: addOrbit(initialHeadingLatch(Math.PI / 2), 0.5) }), 2)
     expect(state.yaw).toBeCloseTo(Math.PI / 2 + 0.5, 4)
+  })
+})
+
+describe('following the aim with the camera', () => {
+  it('keeps the lens behind the cue ball while the aim sweeps', () => {
+    let latch = initialHeadingLatch(0)
+    for (const angle of [0.2, 0.5, 0.9]) {
+      latch = followHeadingLatch(latch, angle)
+      expect(latchedCameraYaw(latch)).toBeCloseTo(angle, 12)
+    }
+  })
+
+  it('carries the look-around along rather than cancelling it', () => {
+    let latch = addOrbit(initialHeadingLatch(0), 0.4)
+    latch = followHeadingLatch(latch, 0.3)
+    expect(latch.heading).toBeCloseTo(0.3, 12)
+    expect(latch.orbit).toBeCloseTo(0.4, 12)
+  })
+
+  it('holds when the aim flips into the half of the world behind the lens', () => {
+    // The drag-back that sets power picks cloth behind the cue ball, which reads as
+    // an aim a half turn from the camera. Chasing it would spin the lens round and
+    // round; the camera waits for the aim to come back in front instead.
+    let latch = initialHeadingLatch(0)
+    latch = followHeadingLatch(latch, Math.PI * 0.75)
+    expect(latchedCameraYaw(latch)).toBe(0)
+    latch = followHeadingLatch(latch, Math.PI)
+    expect(latchedCameraYaw(latch)).toBe(0)
+    latch = followHeadingLatch(latch, 1.2)
+    expect(latchedCameraYaw(latch)).toBeCloseTo(1.2, 12)
+  })
+
+  it('follows across the wrap the short way, with no jump', () => {
+    let latch = initialHeadingLatch(179 * DEG)
+    latch = followHeadingLatch(latch, -179 * DEG)
+    expect(latchedCameraYaw(latch)).toBeCloseTo(-179 * DEG, 9)
+  })
+
+  it('puts the rig behind the cue ball on the aim line, once eased', () => {
+    let latch = initialHeadingLatch(0)
+    let state = run(initialRigState(ASPECT_2_TO_1), request({ latch }), 3)
+    for (const angle of [0.5, 1.0, 1.6]) {
+      latch = followHeadingLatch(latch, angle)
+      state = run(state, request({ latch }), 3)
+      // Behind the ball on the line: the settled pose's own heading is the aim's,
+      // to well under a tenth of a degree.
+      expect(shortestAngleDelta(angle, poseHeading(state.pose))).toBeCloseTo(0, 5)
+    }
   })
 })
 
@@ -202,9 +257,9 @@ describe('the aim camera', () => {
     const pose = aimPose({ x: 1000, y: 900 }, 0)
     expect(pose.lookHeight).toBeLessThan(pose.height)
     const pitch = Math.atan2(pose.height - pose.lookHeight, AIM_LOOK_AHEAD_MM + AIM_BACK_MM)
-    // A shallow downward tilt: enough to see the bed of the table, not a plan view.
-    expect(pitch).toBeGreaterThan(5 * DEG)
-    expect(pitch).toBeLessThan(30 * DEG)
+    // A player-like pitch: enough to see the bed of the table, not a plan view.
+    expect(pitch).toBeGreaterThan(10 * DEG)
+    expect(pitch).toBeLessThan(18 * DEG)
   })
 
   it('stays above the cushions and clear of the cloth however it is turned', () => {
@@ -216,6 +271,52 @@ describe('the aim camera', () => {
       ]) {
         const pose = clampPose(aimPose(cue, degrees * DEG))
         expect(pose.height).toBeGreaterThanOrEqual(MIN_CAMERA_HEIGHT_MM)
+      }
+    }
+  })
+
+  it('frames the cue ball low and centred, like a player bent over the shot', () => {
+    const cue = { x: 900, y: 900 }
+    const pose = aimPose(cue, 0)
+    const cam = pickCameraAt(
+      { x: pose.x, y: pose.y, height: pose.height },
+      { x: pose.lookX, y: pose.lookY, height: pose.lookHeight },
+      pose.fov,
+      ASPECT_2_TO_1
+    )
+    const ball = projectToNdc(cue, BALL_RADIUS, cam)
+    expect(ball).not.toBeNull()
+    // Roughly three quarters of the way down the frame: near enough to feel bent
+    // over the shot, far enough that the line ahead is the subject of the picture.
+    expect(ball!.y).toBeLessThan(-0.35)
+    expect(ball!.y).toBeGreaterThan(-0.75)
+    // Dead centre across: the lens sits on the shot line, so the line runs up the
+    // middle of the screen rather than across a corner of it.
+    expect(Math.abs(ball!.x)).toBeLessThan(0.08)
+  })
+
+  it('widens for a narrow portrait canvas without touching the landscape view', () => {
+    expect(aimFovDeg(2)).toBeCloseTo(AIM_FOV_DEG, 12)
+    expect(aimFovDeg(1)).toBeCloseTo(AIM_FOV_DEG, 12)
+    expect(aimFovDeg(0.5)).toBeGreaterThan(AIM_FOV_DEG)
+    expect(aimFovDeg(0.1)).toBeLessThanOrEqual(AIM_FOV_DEG + AIM_PORTRAIT_MAX_EXTRA_DEG)
+  })
+
+  it('never puts the lens inside the rail when the cue ball is frozen on a cushion', () => {
+    const frozenCues = [
+      { x: BALL_RADIUS + 2, y: HALF_W },
+      { x: TABLE_LENGTH - BALL_RADIUS - 2, y: HALF_W },
+      { x: HALF_L, y: BALL_RADIUS + 2 },
+      { x: HALF_L, y: TABLE_WIDTH - BALL_RADIUS - 2 }
+    ]
+    for (const degrees of [0, 45, 90, 135, 180, -90, -135]) {
+      for (const cue of frozenCues) {
+        const pose = aimPose(cue, degrees * DEG)
+        const overRail = pose.x < 0 || pose.x > TABLE_LENGTH || pose.y < 0 || pose.y > TABLE_WIDTH
+        // Backed over the rail the lens keeps the clearance floor; on the cloth it
+        // keeps the shot height, so the guard changes nothing about the view.
+        if (overRail) expect(pose.height).toBeGreaterThanOrEqual(AIM_RAIL_CLEARANCE_MM)
+        else expect(pose.height).toBe(AIM_HEIGHT_MM)
       }
     }
   })

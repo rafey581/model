@@ -25,11 +25,11 @@ const HALF_W = TABLE_WIDTH / 2
  * ------------------------------------------------------------------ */
 
 /** Vertical field of view for the aim camera, in degrees. */
-export const AIM_FOV_DEG = 50
+export const AIM_FOV_DEG = 55
 /** How far behind the cue ball the aim camera sits, in millimetres. */
-export const AIM_BACK_MM = 800
+export const AIM_BACK_MM = 540
 /** How far above the cloth the aim camera sits, in millimetres. */
-export const AIM_HEIGHT_MM = 350
+export const AIM_HEIGHT_MM = 320
 /**
  * How far ahead of the cue ball the aim camera looks, in millimetres.
  *
@@ -37,9 +37,38 @@ export const AIM_HEIGHT_MM = 350
  * itself puts the horizon above the shot line, so the table runs away toward the top of
  * the screen and the cue ball sits low and near, the way a cue view actually looks.
  */
-export const AIM_LOOK_AHEAD_MM = 700
+export const AIM_LOOK_AHEAD_MM = 950
 /** The height the aim camera looks at: the cloth, not the ball. */
 export const AIM_LOOK_HEIGHT_MM = 0
+
+/**
+ * The height the aim camera keeps whenever it is pushed back over the rail, in millimetres.
+ *
+ * The aim height already clears everything on the table by a wide margin, so this floor is
+ * a guard rather than a constraint the modes feel: it holds if the height is ever tuned
+ * down, so a cue ball frozen on a cushion can never put the lens inside the frame. Only
+ * the lens is raised; the look target is never touched.
+ */
+export const AIM_RAIL_CLEARANCE_MM = 200
+
+/**
+ * The aspect ratio below which the aim camera starts widening for a narrow portrait screen.
+ *
+ * A landscape frame holds the whole shot line with the base FOV; a phone held upright does
+ * not, and the widening is what keeps the far cushion and the shot line framed when the
+ * canvas is tall rather than wide.
+ */
+export const AIM_PORTRAIT_FROM_ASPECT = 1
+/** Extra degrees of vertical FOV per unit of aspect below the portrait threshold. */
+export const AIM_PORTRAIT_FOV_PER_ASPECT = 14
+/** The most the portrait widening can ever add, in degrees. */
+export const AIM_PORTRAIT_MAX_EXTRA_DEG = 12
+
+/** The aim camera's vertical FOV for a canvas shape, widened on narrow portrait screens. */
+export function aimFovDeg(aspect: number): number {
+  const narrow = Math.max(0, AIM_PORTRAIT_FROM_ASPECT - aspect)
+  return AIM_FOV_DEG + Math.min(AIM_PORTRAIT_MAX_EXTRA_DEG, narrow * AIM_PORTRAIT_FOV_PER_ASPECT)
+}
 
 /** Vertical field of view for the overhead camera, in degrees. */
 export const TOP_DOWN_FOV_DEG = 50
@@ -122,8 +151,8 @@ export const MAX_CAMERA_HEIGHT_MM = 6000
 /**
  * The furthest from the table's centre the lens may sit, in millimetres.
  *
- * Has to clear the aim camera's 800mm setback when the cue ball is in a corner and the
- * shot is played back down the table — 2600mm from centre at worst — and the tracking
+ * Has to clear the aim camera's 540mm setback when the cue ball is in a corner and the
+ * shot is played back down the table — 2140mm from centre at worst — and the tracking
  * camera's 950mm from a focus at the far rail, with room over both. It is a backstop
  * against a bad pose, not a constraint the modes feel.
  */
@@ -175,14 +204,14 @@ export const MAX_ORBIT_RAD = Math.PI
  * Where the camera is pointed, kept apart from where the cue is pointed.
  *
  * These are two different questions and the rig is not allowed to answer one with the
- * other. Aiming sweeps the cue the whole length of the table, and a camera bolted to that
- * angle swings round behind the cue ball with it, so sweeping out a shot line turns the
- * room over rather than turning the cue. The heading is therefore latched when a shot
- * starts and held for as long as the player spends on that shot, and the player's own
- * look-around is kept as a separate offset that only a deliberate drag can move.
+ * other. The heading follows the live aim while the player is free to aim — gated to
+ * the half-plane in front of the lens, so the drag-back that sets power cannot spin the
+ * camera — and is latched for the length of a played shot, so watching the balls move
+ * does not turn the room over. The player's own look-around is a separate offset that
+ * only a deliberate drag can move, and it rides on top of whichever heading is current.
  */
 export interface HeadingLatch {
-  /** The heading the camera was last pointed at. Fixed for the length of a shot. */
+  /** The heading the camera was last pointed at. Follows the aim, or latched for a shot. */
   heading: number
   /** The player's look-around from the current heading. Right-drag only. */
   orbit: number
@@ -195,14 +224,10 @@ export function initialHeadingLatch(aimAngle: number = 0): HeadingLatch {
 /**
  * Carries the latch from one frame to the next.
  *
- * `startingShot` is the signal that a new shot is being set up. While it is false nothing
- * about the aim can reach the camera, which is what keeps a moving cursor from turning
- * anything: however far the player's aim travels in between, the heading and the orbit
- * come back out of here untouched.
- *
- * A new shot re-latches from the aim it starts with and drops the look-around, because
- * that aim is the direction the player just played, so the camera comes back to the view
- * the shot was taken from rather than to wherever they had wandered.
+ * `startingShot` is the signal that a shot is going out: the heading is latched to the
+ * aim it is being played along and the look-around is dropped, and for as long as the
+ * shot lasts nothing about a moving pointer can reach the camera. Between shots the
+ * heading is owned by {@link followHeadingLatch} instead, which chases the live aim.
  */
 export function stepHeadingLatch(
   latch: HeadingLatch,
@@ -221,6 +246,26 @@ export function addOrbit(latch: HeadingLatch, delta: number): HeadingLatch {
 /** The heading the camera is actually pointed along: the latched one, plus the look-around. */
 export function latchedCameraYaw(latch: HeadingLatch): number {
   return latch.heading + latch.orbit
+}
+
+/** The furthest the aim may turn from the camera's heading before the camera stops following it, in radians. */
+export const AIM_FOLLOW_MAX_DELTA_RAD = Math.PI / 2
+
+/**
+ * Follows the live aim with the camera's heading, while the aim camera is the view.
+ *
+ * The heading chases the aim so the lens stays directly behind the cue ball on the shot
+ * line, and the rig's own easing is what makes the chase feel damped rather than snapped.
+ * The gate is a half-plane: an aim more than a quarter turn from where the lens is
+ * pointed is not a turn but the pick landing behind the ball — the drag-back that sets
+ * power — and chasing that would spin the camera round and round, so the camera holds
+ * until the aim comes back in front of it.
+ */
+export function followHeadingLatch(latch: HeadingLatch, aimAngle: number): HeadingLatch {
+  if (Math.abs(shortestAngleDelta(latchedCameraYaw(latch), aimAngle)) > AIM_FOLLOW_MAX_DELTA_RAD) {
+    return latch
+  }
+  return { heading: aimAngle, orbit: latch.orbit }
 }
 
 /** What the rig is being asked to do this frame. */
@@ -324,9 +369,11 @@ export function topDownHeight(aspect: number, fovDeg: number = TOP_DOWN_FOV_DEG)
 /**
  * The aim camera's pose for a cue ball and a heading.
  *
- * Placed along the line behind the cue ball, so the cue ball is dead centre of the frame
- * and the shot line runs away from the viewer, which is the view that makes the object
- * ball the far thing rather than the near one.
+ * Placed along the line behind the cue ball, so the cue ball is low and centred of the
+ * frame and the shot line runs away from the viewer up the middle of the screen, which
+ * is the view that makes the object ball the far thing rather than the near one. When
+ * the cue ball is close enough to a cushion to push the lens out over the rail, the
+ * height is floored at the rail clearance rather than the shot being pulled in.
  */
 export function aimPose(
   cue: { x: number; y: number },
@@ -335,10 +382,13 @@ export function aimPose(
 ): CameraPose {
   const dx = Math.cos(yaw)
   const dy = Math.sin(yaw)
+  const x = cue.x - dx * AIM_BACK_MM
+  const y = cue.y - dy * AIM_BACK_MM
+  const overRail = x < 0 || x > TABLE_LENGTH || y < 0 || y > TABLE_WIDTH
   return {
-    x: cue.x - dx * AIM_BACK_MM,
-    y: cue.y - dy * AIM_BACK_MM,
-    height: AIM_HEIGHT_MM,
+    x,
+    y,
+    height: overRail ? Math.max(AIM_HEIGHT_MM, AIM_RAIL_CLEARANCE_MM) : AIM_HEIGHT_MM,
     lookX: cue.x + dx * AIM_LOOK_AHEAD_MM,
     lookY: cue.y + dy * AIM_LOOK_AHEAD_MM,
     lookHeight: AIM_LOOK_HEIGHT_MM,
@@ -423,7 +473,9 @@ export function resolveCameraTarget(request: CameraRequest): CameraPose {
   }
   // With no cue ball there is nothing to sit behind, and a camera that invented one
   // would swing across the table on the first frame. It waits overhead until there is.
-  return request.cue ? aimPose(request.cue, request.aimAngle) : topDownPose(request.aspect)
+  return request.cue
+    ? aimPose(request.cue, request.aimAngle, aimFovDeg(request.aspect))
+    : topDownPose(request.aspect)
 }
 
 /** A rig parked in the overhead view, which is where every match starts. */
@@ -465,7 +517,7 @@ export function stepCameraRig(state: CameraRigState, request: CameraRequest, dt:
   // The other modes resolve normally: their headings come out of their geometry.
   const target =
     request.mode === 'AIM' && request.cue
-      ? aimPose(request.cue, yaw)
+      ? aimPose(request.cue, yaw, aimFovDeg(request.aspect))
       : resolveCameraTarget({ ...request, aimAngle: yaw })
 
   const pose = clampPose(

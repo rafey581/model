@@ -19,6 +19,8 @@ import {
   placementTransitionEndPose,
   topDownPose,
   aimPose,
+  aimFovDeg,
+  followHeadingLatch,
   PLACEMENT_TRANSITION_SECONDS
 } from './camera.js'
 import {
@@ -812,13 +814,14 @@ export class Scene3D {
   /** The snapshot last handed to `update`, which is what the camera reads its cue ball from. */
   private lastSnapshot: FrameSnapshotData | null = null
   /**
-   * The aim the player is setting right now. It turns the cue; it never turns the
-   * camera, which is what the latch below is for.
+   * The aim the player is setting right now. It turns the cue, and through the
+   * latch below it turns the camera with it while the player is free to aim.
    */
   private lastAimAngle = 0
   /**
-   * Where the camera is pointed: the heading latched when the last shot was played,
-   * plus the player's own look-around. Aiming does not touch it.
+   * Where the camera is pointed: the heading following the live aim while the
+   * player is free to aim, latched to the played shot while one is on screen,
+   * plus the player's own look-around on top of either.
    */
   private latch: HeadingLatch = initialHeadingLatch()
   /** Ring + baulk line segment marking the D during break-off placement. Built once, shown on demand. */
@@ -2367,7 +2370,7 @@ const outerL = APRON_OUTER_L
     // the camera is supposed to end up behind where it actually is.
     this.placementTransition = beginPlacementTransition(
       this.rig.pose,
-      aimPose(landing, this.rig.yaw),
+      aimPose(landing, this.rig.yaw, aimFovDeg(this.cvw / Math.max(1, this.cvh))),
       seconds
     )
   }
@@ -2419,10 +2422,14 @@ const outerL = APRON_OUTER_L
     this.lastSnapshot = snapshot
     if (options.aim) {
       this.lastAimAngle = options.aim.angle
-      // The aim is free to swing all it likes while the player hovers; the latch only
-      // takes a new heading when a shot is actually played, so between shots the
-      // camera stands exactly where it was.
-      this.latch = stepHeadingLatch(this.latch, this.lastAimAngle, this.tracking)
+      // While the player is free to aim, the heading follows the aim itself so the
+      // lens stays directly behind the cue ball on the shot line — gated to the
+      // half-plane the camera can see, so the drag-back that sets power cannot
+      // spin it. While a shot is on screen the heading is latched to the line that
+      // shot was played along, which is the view the tracking camera holds.
+      this.latch = this.tracking
+        ? stepHeadingLatch(this.latch, this.lastAimAngle, true)
+        : followHeadingLatch(this.latch, this.lastAimAngle)
     }
     if (!snapshot) {
       for (const rig of this.balls.values()) rig.setVisible(false)
