@@ -253,31 +253,38 @@ body.game-mode {
 }
 
 /**
- * The game screen: a full-height shell.
+ * The game screen: the table, and nothing else, in one viewport.
  *
- * The table is fitted to whatever is left after the header, the HUD and the controls
- * have taken their space (see applyCanvasSize), so a laptop window and a phone both
- * show the whole table without the page scrolling and without the rails being cut off.
- * `minmax(0, 1fr)` on the stage row is what lets the stage actually shrink below its
- * content height instead of pushing the controls off the bottom.
+ * There is no app header here any more, and no controls bar under the table. The shell used
+ * to be a header, a HUD strip, the stage and a bar of buttons, and every one of those took
+ * height the table did not get. What is left is the page: the HUD, which is a row of small
+ * glass items, and the stage, which takes everything else.
+ *
+ * The table is still fitted to whatever is left after the HUD has taken its space (see
+ * applyCanvasSize), so a laptop window and a phone both show the whole table without the
+ * page scrolling and without the rails being cut off. `minmax(0, 1fr)` on the stage row is
+ * what lets the stage actually shrink below its content height.
  */
 .app-game {
   max-width: none;
   height: 100dvh;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  padding: 10px 14px;
+  grid-template-rows: minmax(0, 1fr);
+  padding: 8px;
 }
 
-.app-game header {
-  padding: 4px 0;
-  margin-bottom: 8px;
-}
-
+/*
+ * Two rows: the HUD, then the table.
+ *
+ * The HUD stays in the flow above the stage rather than floating over it. An overlay would
+ * have bought the table a few more pixels, but every item in it - the pills, the chips, the
+ * tool cluster - would then be sitting on the cloth, and nothing is allowed to do that. The
+ * row is sized by its content, so it costs the table only the height of the pills.
+ */
 .game-page {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: var(--hud-gap);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
   min-height: 0;
 }
 
@@ -286,7 +293,7 @@ body.game-mode {
   align-items: center;
   justify-content: center;
   min-height: 0;
-  padding: 8px;
+  padding: 4px;
 }
 
 /**
@@ -346,7 +353,7 @@ header {
 
 /**
  * The brand is a link so it is reachable and announced, but it deliberately goes
- * nowhere ΓÇö the app is a single page and the logo is not a route.
+ * nowhere — the app is a single page and the logo is not a route.
  */
 .brand {
   display: flex;
@@ -381,15 +388,17 @@ header {
 }
 
 /* The chip groups who you are with whether the socket is up, so a reconnect is
-   visible without hunting for a separate badge. */
+   visible without hunting for a separate badge.
+
+   It is a row now, not a pill. A panel behind the avatar and the name put a second
+   surface inside a bar that already carries two glass controls, and the badge lost its
+   corners to it: with a container round them, the mount read as decoration on a chip
+   rather than as the frame itself. The badge stands on the lobby picture with its own
+   corners, and the name beside it is the only thing left here. */
 .user-chip {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px 6px 6px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 999px;
   font-size: 14px;
 }
 
@@ -413,6 +422,9 @@ header {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 140px;
+  /* The name is on the photograph now, with no panel behind it, so it carries its own
+     shadow rather than borrowing contrast from a surface. */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
 }
 
 .wallet-chip {
@@ -507,7 +519,7 @@ button:active {
 }
 
 /**
- * A disabled button must not still run its hover shine or lift ΓÇö it reads as broken
+ * A disabled button must not still run its hover shine or lift — it reads as broken
  * rather than unavailable, and the sweep is the loudest hint that it is clickable.
  */
 button:disabled {
@@ -653,65 +665,6 @@ th {
   display: block;
 }
 
-.controls-bar {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  align-items: center;
-  padding: 2px 0 4px;
-}
-
-.control-gauges {
-  display: flex;
-  gap: 14px;
-  align-items: center;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.control-actions {  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-left: auto;
-}
-
-button.small {
-  padding: 4px 10px;
-  font-size: 12px;
-  border-radius: 6px;
-}
-
-/**
- * The control hints used to be a full-width line of text under the table, which is
- * the widest thing on the page and the only thing that could push it past one screen.
- * They are now a quiet line beside the gauges that can be dismissed for the session.
- */
-.controls-hint {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1 1 100%;
-  min-width: 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.3;
-}
-
-.hint-close {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  border-radius: 6px;
-  padding: 0 6px;
-  font-size: 14px;
-  line-height: 1.4;
-  flex: 0 0 auto;
-}
-
-.hint-close:hover {
-  color: var(--text);
-}
-
 /**
  * The view toggle.
  *
@@ -759,7 +712,7 @@ button.small {
 /**
  * Placement guidance, under the table. Same quiet one-liner style as the controls
  * hint: muted text that appears while a placement is being rejected and says why,
- * then disappears. Not a toast ΓÇö this is continuous state, not an event.
+ * then disappears. Not a toast — this is continuous state, not an event.
  */
 .placement-hint {
   text-align: center;
@@ -812,11 +765,7 @@ button.small {
 
 @media (max-width: 640px) {
   .app-game {
-    padding: 8px;
-  }
-
-  .controls-bar {
-    justify-content: center;
+    padding: 6px;
   }
 }
 
@@ -920,26 +869,19 @@ button.small {
 }
 
 /*
- * Glassmorphism top bar.
+ * The top row: three clusters and no panel.
  *
- * A translucent dark gradient with a backdrop blur ΓÇö the score sits on the table
- * like a pane over it rather than a panel above it. The blur is the whole effect:
- * the cloth and the balls moving behind the bar show through as soft colour, and
- * the fine top border catches the light so the pane reads as glass.
+ * This used to be one glass bar with the score on it, and then a second strip under it with
+ * fifteen red dots and six colour circles. Both are gone: the row is now a transparent grid
+ * whose items carry their own glass, so the cloth is visible in the gaps between them and
+ * each pill can be read on its own. `align-items: start` puts the three clusters on one line
+ * rather than stretching them to the tallest, which keeps the row exactly as tall as a pill.
  */
 .hud-top {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
-  align-items: center;
+  align-items: start;
   gap: 10px;
-  background: var(--glass-fill);
-  border: 1px solid var(--glass-border);
-  border-top-color: var(--glass-border-strong);
-  border-radius: 14px;
-  padding: 6px 10px;
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  box-shadow: var(--glass-shadow);
 }
 
 /**
@@ -980,10 +922,11 @@ button.small {
 }
 
 /*
- * The ball-on badge: what the shot is worth, in points.
+ * What the ball on is worth.
  *
- * The dot is the ball itself (fed as --badge-dot), the number is the stake, and
- * the pill keeps to the glass language of the bar behind it.
+ * The dot is the ball itself (fed as --badge-dot) and the number is the stake. It sits
+ * inside the glass chip rather than being one: a pill inside a pill is glass on glass, and
+ * the chip above it is already saying "ball on".
  */
 .hud-ball-on-value {
   display: inline-flex;
@@ -993,10 +936,6 @@ button.small {
   font-weight: 800;
   letter-spacing: 0.04em;
   color: #f0f6fc;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 999px;
-  padding: 1px 8px 1px 6px;
 }
 
 .hud-ball-on-value::before {
@@ -1011,7 +950,7 @@ button.small {
 /*
  * Centre-screen event banners.
  *
- * Key moments ΓÇö fouls, pots, ball in hand ΓÇö announce themselves once, big, in the
+ * Key moments — fouls, pots, ball in hand — announce themselves once, big, in the
  * middle of the table, then get out of the way. Enter and exit are the same keyframe
  * played forwards and backwards: scale up with a fade and a slight upward drift.
  * The blur pass behind each banner is the motion-blur overlay.
@@ -1405,91 +1344,215 @@ button.small {
 }
 
 /**
- * The balls strip: fifteen reds, the ball on, and the six colours in value order.
+ * The HUD's glass, in one class.
  *
- * This is now the secondary row ΓÇö the frame's score is the bar above it ΓÇö so it is drawn
- * a step quieter: smaller dots, tighter padding, and muted text. Nothing here is less
- * available for it, only less loud.
- *
- * The three groups are centred as one cluster, and that is load-bearing rather than
- * decorative. The strip spans the full width of the HUD, so with the groups spread edge
- * to edge the six colours would sit under whichever player the bar puts at that end and
- * read as that player's balls ΓÇö which is precisely the 8-ball mistake the strip exists to
- * avoid: in snooker every ball on the table belongs to both players. Centring leaves
- * equal empty space on both sides, so the colours are as far from one player's end as
- * from the other's.
+ * Every item in the top row - a tool button, a player pill, a centre chip - is this and
+ * nothing else, so a frame reads as one material instead of three greys that only look
+ * related. One blur layer per item, and none on the row itself: a blur behind a blur is
+ * what turns a HUD into grey soup over a table that is still moving underneath it.
  */
-.hud-balls {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 4px 10px;
-  font-size: 10px;
-  color: var(--muted);
-  opacity: 0.86;
-  min-width: 0;
+.hud-glass {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  backdrop-filter: blur(14px) saturate(130%);
+  -webkit-backdrop-filter: blur(14px) saturate(130%);
+  box-shadow:
+    0 4px 10px rgba(0, 0, 0, 0.25),
+    0 12px 28px rgba(0, 0, 0, 0.3);
 }
 
-.hud-reds {
+/**
+ * A player, as one pill: avatar, name, score.
+ *
+ * The avatar frame is the pill's left cap, so the shot clock still hangs off its rim and
+ * the turn is still readable from the colour of that rim alone. `min-width: 0` on the name
+ * is what lets a long name clip instead of widening the pill into the middle of the row.
+ */
+.hud-player {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 12px 4px 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  backdrop-filter: blur(14px) saturate(130%);
+  -webkit-backdrop-filter: blur(14px) saturate(130%);
+  box-shadow:
+    0 4px 10px rgba(0, 0, 0, 0.25),
+    0 12px 28px rgba(0, 0, 0, 0.3);
+}
+
+/*
+ * Inside a pill the score is a label, not a headline: the same gold, one step smaller, so
+ * the avatar and the name keep their weight.
+ */
+.hud-player .hud-name {
+  font-size: clamp(11px, 1.7vh, 14px);
+}
+
+.hud-player .hud-points {
+  font-size: clamp(13px, 1.9vh, 17px);
+}
+
+/**
+ * The session tools, and the question mark that opens the controls.
+ *
+ * This is the mount point the game screen fills in. `position: relative` is what anchors
+ * the popover to the button rather than to the viewport, and `pointer-events: auto` is the
+ * one thing the HUD row has to opt back into: the row is transparent to the pointer so the
+ * table underneath stays draggable, and a control that cannot be clicked is not a control.
+ */
+.hud-tools {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
-  flex: 0 1 auto;
-  min-width: 0;
+  pointer-events: auto;
 }
 
-.hud-red-dots {
+.hud-tool {
   display: grid;
-  grid-template-rows: repeat(3, 1fr);
-  grid-auto-flow: column;
-  gap: 2px;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  color: #eaf2fb;
+  cursor: pointer;
+  /* Transform only: the press is a scale, and the hover tint is a colour change left
+     instant on purpose so the one animated property on this control is the one reduced
+     motion can switch off. */
+  transition: transform 140ms ease;
 }
 
-.hud-red-dot {
-  width: 6px;
-  aspect-ratio: 1;
+.hud-tool:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.hud-tool:active {
+  transform: scale(0.94);
+}
+
+.hud-tool:focus-visible {
+  outline: 2px solid #8fd0ff;
+  outline-offset: 2px;
+}
+
+.hud-tool-icon {
+  display: block;
+}
+
+.hud-tool--help {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+/**
+ * The controls, opened on demand.
+ *
+ * These words were a line of text under the table. It is the same line, behind a question
+ * mark, and it hangs from the top-left cluster over the frame's corner - the one part of a
+ * top-down table no shot is read from, which is why it is the only thing in this screen
+ * allowed to overlap the table at all, and only while it is open.
+ */
+.hud-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 8;
+  width: max-content;
+  max-width: 250px;
+  padding: 10px 28px 10px 12px;
+  border-radius: 14px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: left;
+  pointer-events: auto;
+}
+
+.hud-pop[hidden] {
+  display: none;
+}
+
+.hud-pop p {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.hud-pop-close {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.hud-pop-close:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text);
+}
+
+/**
+ * The two centre chips: reds left on the table, and what the ball on is worth.
+ *
+ * A number and a word, in that order, at 11px. This is the state a player reads between
+ * shots, and it is the only thing in the middle of the row - the frame line sits under it,
+ * unglazed, because a second pane under a pane is just a border.
+ */
+.hud-centre-chips {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.hud-reds,
+.hud-ball-on {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.hud-reds-label {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.hud-red-mark {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: #d62828;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
-}
-
-/** A red the server has said is potted. */
-.hud-red-dot.is-potted,
-.hud-ball.is-potted {
-  opacity: 0.2;
-}
-
-/** The ball on is ringed, so the strip answers "what am I shooting at" at a glance. */
-.hud-reds.reds-on .hud-red-dot:not(.is-potted) {
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--turn);
-}
-
-.hud-ball.is-on {
-  box-shadow: inset -2px -2px 3px rgba(0, 0, 0, 0.35), inset 2px 2px 3px rgba(255, 255, 255, 0.25), 0 0 0 2px var(--turn);
+  box-shadow: inset 0 -1px 2px rgba(0, 0, 0, 0.55), 0 0 4px rgba(255, 255, 255, 0.22);
 }
 
 .hud-red-count {
   font-variant-numeric: tabular-nums;
+  font-weight: 800;
 }
 
-.hud-ball-on {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  /*
-   * Sized to its own text, not to the leftover space. This group used to take all the
-   * free width, which is what pushed the colours to the right-hand edge while the reds
-   * sat on the left: a full-width strip with the three groups spread across it. Taking
-   * only the room it needs is what lets the strip centre them. Still allowed to shrink,
-   * so a narrow window clips the label rather than pushing the colours off the panel.
-   */
-  flex: 0 1 auto;
-  justify-content: center;
-  color: var(--text);
+.hud-ball-on-text {
+  color: var(--muted);
   font-weight: 600;
 }
 
@@ -1499,22 +1562,45 @@ button.small {
   font-variant-numeric: tabular-nums;
 }
 
-.hud-colours {
-  display: flex;
-  gap: 4px;
-  flex: 0 0 auto;
-}
-
-.hud-ball {
-  width: 15px;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  background: var(--ball, #888);
-  box-shadow: inset -2px -2px 3px rgba(0, 0, 0, 0.35), inset 2px 2px 3px rgba(255, 255, 255, 0.25);
-}
-
 .hud-break[hidden] {
   display: none;
+}
+
+/**
+ * The line under the chips: frame, stake, ball in hand.
+ *
+ * Unglazed on purpose. It is reference information rather than state, and a third pane in
+ * the middle of the row would be the one that starts to feel like a panel over the table.
+ */
+.hud-meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/**
+ * Narrow windows.
+ *
+ * The three clusters share one row at every width, so the middle column is what gives way,
+ * and it gives way in order of how much it matters: the stake and the frame's name first,
+ * then the words in the two chips, leaving the numbers. Nothing wraps - a wrapped pill
+ * makes the row taller and the table shorter, which is the opposite of the point.
+ */
+@media (max-width: 620px) {
+  .hud-top {
+    gap: 6px;
+  }
+
+  .hud-prize,
+  .hud-frame-label,
+  .hud-reds-label,
+  .hud-ball-on-text {
+    display: none;
+  }
 }
 
 /* The quiet line under a lobby or tournament card. */
@@ -1592,7 +1678,7 @@ button.small {
  *
  * A cue ball face-on: white disc, faint crosshair marking the dead-centre strike,
  * and a dot the player drags off centre. Up is topspin, down backspin, the sides
- * are english, and diagonals blend the two ΓÇö the dot's rim distance is exactly the
+ * are english, and diagonals blend the two — the dot's rim distance is exactly the
  * engine's maximum legal spin, because the mapping is one linear scale with no
  * safety margin of its own. Same glass-and-border language as the camera toggle.
  */
@@ -1606,13 +1692,21 @@ button.small {
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: rgba(22, 27, 34, 0.72);
-  border: 1px solid var(--border);
-  backdrop-filter: blur(3px);
+  /* The same glass as the HUD, at the same strength: this control sits on the table's
+     surround, so it has to read as the same material as the pills above it. One blur
+     layer, and the dial's own ball is opaque, so there is nothing behind it to double up
+     on. */
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(14px) saturate(130%);
+  -webkit-backdrop-filter: blur(14px) saturate(130%);
+  box-shadow:
+    0 4px 10px rgba(0, 0, 0, 0.25),
+    0 12px 28px rgba(0, 0, 0, 0.3);
   cursor: pointer;
   touch-action: none;
   z-index: 4;
-  opacity: 0.85;
+  opacity: 0.92;
   transition: opacity 220ms ease;
   pointer-events: auto;
 }
@@ -1680,7 +1774,7 @@ button.small {
  * The accessible slider itself.
  *
  * It covers the track and is the focus target; the visuals stay on the rail below.
- * Zero own painting ΓÇö just a focus ring so keyboard players can find it ΓÇö and the
+ * Zero own painting — just a focus ring so keyboard players can find it — and the
  * pointer events pass through to the track, which is the hit target for the drag.
  */
 .power-slider {
@@ -1705,9 +1799,12 @@ button.small {
   width: 18px;
   height: 10px;
   border-radius: 5px;
-  background: #f0f6fc;
-  border: 1px solid rgba(6, 10, 14, 0.7);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+  /* Gold, to match the score: the thumb is the one part of the rail the hand is on, so
+     it is the part that gets the colour. Soft shadow rather than the hard black outline
+     it had, because a hard outline on a light cloth surround reads as a sticker. */
+  background: linear-gradient(180deg, var(--gold-light), var(--gold));
+  border: 1px solid rgba(6, 10, 14, 0.45);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
   transform: translate(-50%, 50%);
   pointer-events: none;
 }
@@ -1730,9 +1827,16 @@ button.small {
   width: 12px;
   height: clamp(90px, 22vh, 190px);
   border-radius: 999px;
-  background: rgba(6, 10, 14, 0.55);
-  border: 1px solid var(--border);
-  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.6);
+  /* A soft glass channel: a light fill at low alpha with a blur behind it, over an inset
+     shadow that keeps the rail reading as a groove. Same 14px blur as the HUD so the two
+     do not look like different materials. */
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(14px) saturate(130%);
+  -webkit-backdrop-filter: blur(14px) saturate(130%);
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.35),
+    0 4px 10px rgba(0, 0, 0, 0.25);
   /* Deliberately not overflow:hidden: the handle is wider than the track and
      overhangs it at both ends of its travel, and clipping it would cut the grip
      down to a sliver. The fill rounds itself. */
@@ -1760,11 +1864,26 @@ button.small {
   border-radius: 999px;
 }
 
+/**
+ * The spin readout, under the dial it belongs to.
+ *
+ * It was the last item in the controls bar under the table, which put a number about a
+ * control four hundred pixels away from it. It is absolutely positioned inside the dial
+ * instead, and it takes no pointer events: the drag maths reads the ball's own rect, so
+ * anything the caption covers would otherwise become a dead patch on the dial.
+ */
 .spin-label {
-  font-size: 12px;
-  color: var(--muted);
-  min-width: 130px;
-  text-align: center;
+  position: absolute;
+  left: 50%;
+  bottom: -20px;
+  transform: translateX(-50%);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  white-space: nowrap;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+  pointer-events: none;
 }
 
 .chip-ok {
@@ -1796,16 +1915,32 @@ button.small {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px 8px;
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0;
+  /* Glass like the identity pill beside it, so the three chips on this row are visibly
+     one family. Only the tint is different: the bell is the one gold thing here that is
+     not a link, so its icon carries the gold instead of the frame. */
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.04) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
   cursor: pointer;
-  color: var(--text);
+  color: #ffd98a;
 }
 
 .bell:hover {
-  border-color: var(--accent);
+  border-color: rgba(255, 201, 76, 0.55);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+}
+
+/* The shine is the app's call-to-action flourish, and it belongs to the buttons that go
+   somewhere. A chip that sits there does not sweep. */
+button.bell::after {
+  display: none;
 }
 
 .bell-icon {
@@ -2404,7 +2539,7 @@ button.mini {
 }
 
 /* ============================================
-   AUTH SCREEN ΓÇö "Welcome to the Arena"
+   AUTH SCREEN — "Welcome to the Arena"
    ============================================ */
 
 .auth-screen {
@@ -2851,7 +2986,7 @@ button.mini {
 }
 
 /* ============================================
-   LOBBY ΓÇö "The Venue"
+   LOBBY — "The Venue"
    ============================================ */
 
 .lobby-hero {
@@ -3044,7 +3179,7 @@ button.mini {
 }
 
 /* ============================================
-   SCORE TICK ΓÇö a changed number is a changed number
+   SCORE TICK — a changed number is a changed number
    ============================================ */
 
 /**
@@ -3077,7 +3212,7 @@ button.mini {
 }
 
 /* ============================================
-   SKELETON ΓÇö shown while a lobby section is still fetching
+   SKELETON — shown while a lobby section is still fetching
    ============================================ */
 
 .skeleton {
@@ -3146,7 +3281,7 @@ button.mini {
 }
 
 /* ============================================
-   REDUCED MOTION ΓÇö honoured globally, not per-widget
+   REDUCED MOTION — honoured globally, not per-widget
    ============================================ */
 
 /**
@@ -3181,6 +3316,13 @@ button.mini {
   .card:hover,
   .lobby-card:hover,
   button:hover {
+    transform: none;
+  }
+
+  /* The tool buttons' press is a scale, and a scale is movement too. The global duration
+     floor above would only make it instant, which is the worst of both: still a jump,
+     just a sudden one. */
+  .hud-tool:active {
     transform: none;
   }
 }
@@ -3326,6 +3468,149 @@ button.mini {
 }
 
 /* ============================================
+   U1 · LOBBY HEADER CHIPS
+   ============================================ */
+
+/**
+ * The badge the identity pill wears.
+ *
+ * The avatar inside it is the shared HUD component and stays untouched; only the mount
+ * around it is the lobby's, which is why the mount is a wrapper element rather than a
+ * class on the avatar. Rounded square rather than the HUD's circle, because this sits in
+ * a row of rounded pills and a circle inside a pill reads as two shapes competing.
+ *
+ * The frame is four corners, not a ring: no border runs the full way round, so the
+ * corners have to carry the whole outline and the portrait is left with a lip in front of
+ * it. What rim is left is a single dark hairline, there to hold the square's silhouette
+ * against the lobby photograph and nothing more.
+ */
+.profile-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06), 0 4px 12px rgba(0, 0, 0, 0.45),
+    0 0 14px rgba(255, 176, 46, 0.14);
+}
+
+/* Above the letter, but it never takes a click: the whole badge is inside the identity
+   pill, and a control that swallows taps is a bug waiting for a tap. */
+.profile-badge-frame {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  filter: drop-shadow(0 0 3px rgba(255, 176, 46, 0.3));
+}
+
+/* The HUD frame's own circle and rim are for the table, where it has to read at a glance
+   across the room. Here it is 32px of a chip, so it is square to its wrapper and sunk
+   into it: a near-black well with the light falling from above, and a shadow under the
+   top lip, so the letter sits in the mount rather than on the mount. The letter keeps the
+   hue it is given, so two players are still told apart by colour. */
+.profile-badge .hud-frame {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 10px;
+  background: radial-gradient(130% 130% at 50% 16%, rgba(255, 233, 186, 0.1) 0%, rgba(0, 0, 0, 0) 55%),
+    linear-gradient(180deg, rgba(9, 8, 6, 0.94) 0%, rgba(3, 4, 6, 0.98) 100%);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.8), inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.profile-badge .hud-avatar-glyph,
+.profile-badge .hud-avatar-img {
+  border-radius: 10px;
+}
+
+.profile-badge .hud-avatar-glyph[data-mode='letter'] {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+
+/**
+ * The connection state, as a dot on the badge's corner.
+ *
+ * A status that is worth seeing at a glance does not need to be written out, and one dot
+ * on the frame says it without taking a second pill's width beside the name. It sits on
+ * the top-right corner, overhanging by a couple of pixels the way a notification badge
+ * does, with a dark ring so it stays legible where it crosses the gold.
+ *
+ * The socket still writes this element's text and swaps its class, and `role="status"`
+ * still announces it; only the pixels are given up. Zero font-size takes the word off the
+ * screen without taking it out of the accessibility tree, which is also why the dot is
+ * painted on the element itself rather than on a child the update would overwrite.
+ */
+.profile-badge .chip-ok,
+.profile-badge .chip-bad {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  z-index: 2;
+  width: 11px;
+  height: 11px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 0;
+  line-height: 0;
+  overflow: hidden;
+}
+
+.profile-badge .chip-ok {
+  background: var(--ok);
+  border: 2px solid rgba(6, 8, 11, 0.92);
+  box-shadow: 0 0 8px rgba(39, 174, 96, 0.55);
+}
+
+.profile-badge .chip-bad {
+  background: var(--danger);
+  border: 2px solid rgba(6, 8, 11, 0.92);
+  box-shadow: 0 0 8px rgba(231, 76, 60, 0.5);
+}
+
+/**
+ * Sign out.
+ *
+ * The one destructive control on the screen, so it is quieter than a call to action but
+ * not a flat outline: same glass as its neighbours, with a hairline of gold to mark what
+ * it does. `ghost` is kept on the element for its layout and hit area; every value that
+ * decides how it looks is restated here.
+ */
+.header-logout {
+  height: 40px;
+  min-height: 40px;
+  padding: 0 18px;
+  border-radius: 999px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gold-light);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.04) 100%);
+  border: 1px solid rgba(255, 201, 76, 0.38);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.header-logout::after {
+  display: none;
+}
+
+/* `ghost`'s own hover is written to kill the shadow on a flat outline, which is the
+   opposite of what a raised glass pill wants. */
+button.ghost.header-logout:hover {
+  color: #fff3d6;
+  border-color: rgba(255, 201, 76, 0.72);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4), 0 0 16px rgba(255, 176, 46, 0.14);
+}
+
+/* ============================================
    U1 · HOME SCREEN — full-height shell
    ============================================ */
 
@@ -3407,6 +3692,11 @@ gap: clamp(10px, 2vh, 20px);
   gap: 2px;
   text-align: center;
   min-height: 0;
+  /* A display face at this size puts roughly a tenth of its line box above the capitals,
+     so the wordmark reads as floating below the header even though the box is directly
+     under it. Pulling the block up by that much closes the gap optically without taking
+     a row out of the page or touching the wordmark's own size. */
+  margin-top: -10px;
 }
 
 /**
@@ -3448,256 +3738,614 @@ gap: clamp(10px, 2vh, 20px);
 /**
  * The three cards.
  *
- * A row of three, no wider than 1220px and centred, so the cards sit together in the
- * middle of the screen instead of drifting to the edges of a 1200px column with two empty
- * gutters either side of them. The row is centred in the space it has rather than
- * stretched to fill it: `align-items` stops each card stretching to the tallest of the
- * three, and `align-content` centres the row itself in the `1fr` track above.
+ * A row of three, no wider than 1100px and centred, so the cards sit together in the middle
+ * of the screen instead of drifting to the edges of a 1200px column with two empty gutters
+ * either side of them. `align-items: stretch` is what makes the three the same height: each
+ * card is a fixed hit box filled by a face that grows to whatever the tallest of the three
+ * turned out to be, so all three tops and all three Play buttons land on the same lines.
+ * `align-content` centres the row itself in the `1fr` track above.
  *
- * The headroom on top is the artwork's: each picture stands 70px above its card's top
- * edge, and without this the row would start where the cards start and the pictures would
- * be cut off by whatever sits above them.
+ * The 28px gap is the whole clearance budget between neighbours. Nothing hangs out of a card
+ * any more - the artwork lives inside the face, which clips it - so the gap is air and never
+ * has to be measured against an overhang.
  */
 .home-cards {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: center;
+  align-items: stretch;
   align-content: center;
-  gap: 24px;
+  gap: 28px;
   width: 100%;
-  max-width: 1220px;
+  max-width: 1100px;
   margin-inline: auto;
   min-height: 0;
-  padding-top: 78px;
 }
 
 /**
- * A card is a glass pane with a picture standing on it.
+ * The card's hit box: a fixed, empty, untransformed wrapper.
  *
- * 360 x 400, glass over the venue photograph rather than the darker `--glass-*` recipe the
- * HUD uses, because the thing behind this pane is a lit photograph instead of a dimmed
- * table: the pane has to knock the photograph back before the label on it is readable,
- * and a dark fill over a dark scrim would just be a hole.
+ * This is the button, and it is deliberately not the thing you see. It is a plain box the
+ * size of the card that exists to receive a hover and to be clicked, and it never moves,
+ * never scales and never changes size - which is the whole point. An earlier version made
+ * the button itself the glass pane and lifted it on hover, so the surface moved 6px out from
+ * under a cursor that had not moved: the card the pointer was resting on could stop being the
+ * card the pointer was resting on. Here the visible card is a child, and the parent's
+ * geometry is constant whatever the child does.
  *
- * Three numbers carry the whole design and they are related, so they are set together
- * rather than tuned one at a time:
- *
- *   - the artwork hangs `70px` above this box and its base reaches `170px` down inside it,
- *     so `.home-card-art` is a `240px` well hung off `top: -70px`;
- *   - `padding-top: 200px` puts the words `30px` below the picture's base, which is the
- *     clearance that stops a tall portrait like `tournament.png` from landing on the text;
- *   - `space-between` drops the pill to the bottom of the card, so the height is spent on
- *     the picture and the breathing room rather than on a gap under the button.
- *
- * `overflow: visible` is not an oversight: it is the reason the picture can break the top
- * edge at all. Nothing inside the card relies on being clipped.
+ * Everything the button rule in this file would otherwise hand it is taken back, because
+ * the global `button` rule is a gold pill and this is not a pill.
  */
 button.home-card {
   position: relative;
-  /* Its own stacking context, so the artwork's `z-index` beats the card's glass without
-     putting the card into the page's stacking order. */
+  /* Its own stacking context, so the face's lift and its glow cannot reach a neighbour. */
   isolation: isolate;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  filter: none;
+  /* The face lifts inside this box; clipping it here would cut the top off the lifted card. */
+  overflow: visible;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: none;
+  transform: none;
+}
+
+/* The global shine sweep (`button::after`) is off on the cards. It is a rectangle that runs
+   from one side of the button to the other, and a card is not a pill: the sweep belongs to
+   the small buttons it was written for. The card's own light is the gradient border and the
+   mesh glow, both inside the face. */
+button.home-card::after {
+  display: none;
+}
+
+/* One theme per category, chosen by the class the model gives the card. Five values each:
+   the pair the gradients are made from, the bright stop for the top of the border, and the
+   two tints the badge, the chip border and the halo are mixed from. The theme lives on the
+   wrapper so the face and every layer inside it can read it without knowing which card it
+   is on. */
+.home-card--practice {
+  --theme-a: #2f7bff;
+  --theme-b: #19c3b2;
+  --theme-bright: #9fd8ff;
+  --theme-ink: #cfe6ff;
+  --theme-line: rgba(159, 216, 255, 0.34);
+  --theme-halo: rgba(47, 123, 255, 0.3);
+  --theme-halo-2: rgba(25, 195, 178, 0.26);
+  --theme-cast: 0 22px 46px rgba(47, 123, 255, 0.2);
+}
+
+.home-card--multiplayer {
+  --theme-a: #ff3b4e;
+  --theme-b: #c01c7a;
+  --theme-bright: #ffa3b0;
+  --theme-ink: #ffd3dc;
+  --theme-line: rgba(255, 138, 156, 0.34);
+  --theme-halo: rgba(255, 59, 78, 0.3);
+  --theme-halo-2: rgba(192, 28, 122, 0.26);
+  --theme-cast: 0 22px 46px rgba(255, 59, 78, 0.2);
+}
+
+.home-card--tournament {
+  --theme-a: #ffb02e;
+  --theme-b: #ff6a1a;
+  --theme-bright: #ffd98a;
+  --theme-ink: #ffe6bd;
+  --theme-line: rgba(255, 190, 92, 0.34);
+  --theme-halo: rgba(255, 176, 46, 0.3);
+  --theme-halo-2: rgba(255, 106, 26, 0.24);
+  --theme-cast: 0 22px 46px rgba(255, 176, 46, 0.2);
+}
+
+/**
+ * The card face: the pane you actually look at.
+ *
+ * One dark glass surface over the venue photograph - light at the top where the light is,
+ * dark at the bottom where the words and the button are - with the theme's own light inside
+ * it. Three things are deliberate here:
+ *
+ *   - `overflow: hidden` with a 22px radius. Nothing in this card may leave it: the pattern,
+ *     the sweep, the grain and the border all end at the rounded corner, so a card can never
+ *     reach over the 28px gap and touch its neighbour.
+ *   - `position: relative`, so the skin, the grain and the border are laid out against the
+ *     face and travel with it when it lifts. Anchored to the wrapper instead they would stay
+ *     behind while the card moved out from under them.
+ *   - `isolation: isolate`, so the grain's blend mode is blended with the card and not with
+ *     the page behind it.
+ *   - `min-height` in `clamp()` rather than a height. The row's own height decides the real
+ *     one, and this is only the floor: a short window gets a shorter card and a tall one gets
+ *     a taller card without a second number to keep in step with this one.
+ */
+.home-card-face {
+  flex: 1;
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  justify-content: space-between;
-  width: 100%;
-  min-width: 0;
-  max-width: 360px;
-  height: 400px;
-  margin-inline: auto;
-  padding: 200px 26px 26px;
-  overflow: visible;
-  text-align: left;
-  color: var(--text);
-  font-family: var(--font-body);
-  cursor: pointer;
-
-  /* One light source, from above: the pane is brightest along its top edge and picks up
-     the photograph's darkness toward the bottom, where the words and the pill sit. */
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.16) 0%,
-    rgba(255, 255, 255, 0.07) 46%,
-    rgba(6, 20, 15, 0.34) 100%
-  );
-  border: 1px solid rgba(232, 200, 114, 0.42);
+  gap: clamp(6px, 0.9vh, 10px);
+  min-height: clamp(288px, 42vh, 360px);
+  padding: clamp(16px, 1.9vw, 24px);
   border-radius: 22px;
-  backdrop-filter: blur(16px) saturate(130%);
-  -webkit-backdrop-filter: blur(16px) saturate(130%);
+  overflow: hidden;
+  isolation: isolate;
+
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.12) 0%, rgba(0, 0, 0, 0.3) 100%);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  /* Four shadows doing four jobs, tightest first: the card's own edge against whatever is
+     behind it, then the mass of it, then the room it is standing in, then the theme's own
+     colour thrown back off the surface. The tinted one is what keeps a gold card from
+     looking like a grey card with a gold button. */
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.2),
-    inset 0 -22px 44px rgba(4, 12, 9, 0.3),
-    0 26px 54px rgba(0, 0, 0, 0.44);
-  transition:
-    transform 260ms ease,
-    box-shadow 260ms ease,
-    border-color 260ms ease;
-}
-
-/* One glow colour per card, held as a variable so the halo behind the picture and the
-   glow along its silhouette are the same colour and only have to be chosen once. Amber for
-   the bot, blue for a real table, red for the bracket. */
-button.home-card:nth-of-type(1) {
-  --card-glow: rgba(232, 178, 84, 0.55);
-}
-
-button.home-card:nth-of-type(2) {
-  --card-glow: rgba(96, 186, 224, 0.5);
-}
-
-button.home-card:nth-of-type(3) {
-  --card-glow: rgba(224, 104, 96, 0.5);
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 6px 12px rgba(0, 0, 0, 0.25),
+    0 18px 36px rgba(0, 0, 0, 0.3),
+    0 36px 70px rgba(0, 0, 0, 0.35),
+    var(--theme-cast);
+  transition: transform 250ms ease;
 }
 
 /**
- * The picture, standing on the card.
+ * The card's shadow on the floor.
  *
- * Absolute, and that is the fix for the thing that was wrong before: in flow, the band
- * that held the picture had to be tall enough for the tallest of the three, and
- * `tournament.png` is a 558x800 portrait where the other two are square - so the portrait
- * grew past its band and landed on the description. Out of flow it cannot do that. The box
- * is a fixed 240px well hung 70px above the card, and the image inside it is contained, so
- * the height is a ceiling rather than a forecast: a square bot and a portrait bracket end
- * up the same size on screen, and neither can grow into the words.
+ * On the wrapper, not the face, and that is deliberate: the face lifts 6px on hover and this
+ * stays where it was put, so the gap that opens between a raised card and its own shadow is
+ * what makes the card read as raised rather than as having been nudged. Behind the face
+ * (`z-index: -1` inside the wrapper's own stacking context) and inset from the sides, so it
+ * is a pool of light under a card and never a rectangle wider than the card it belongs to.
  */
-.home-card-art {
+button.home-card::before {
+  content: '';
   position: absolute;
-  top: -70px;
+  z-index: -1;
+  left: 6%;
+  right: 6%;
+  bottom: -16px;
+  height: 32px;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 50%, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0.26) 46%, rgba(0, 0, 0, 0) 74%);
+  filter: blur(20px);
+}
+
+/**
+ * The card's border, as a gradient rather than a colour.
+ *
+ * Bright at the top, gone by the bottom, which is what a lit edge looks like; a flat 1px ring
+ * would read as an outline drawn round the card. The mask technique is the only way to paint
+ * a gradient *border*: the pseudo paints a full-bleed gradient with a 1px padding box, and the
+ * mask keeps only the ring between the two boxes. The opacity is what hover changes, because
+ * opacity is the one property that can brighten a gradient without repainting it.
+ */
+.home-card-face::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  padding: 1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    var(--theme-bright) 0%,
+    var(--theme-a) 30%,
+    rgba(255, 255, 255, 0.08) 68%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0.82;
+  transition: opacity 250ms ease;
+}
+
+/**
+ * The skin: scrim, pattern and light, as one background stack.
+ *
+ * One element rather than three, for the same reason the earlier card needed a fixed well for
+ * its picture: a layer per effect is a layer per effect to composite. Listed top to bottom as
+ * they paint: the text scrim, then this card's pattern, then the two large soft radial glows
+ * that put the theme's colour into the corners. The glows are gradients rather than blurred
+ * boxes, so the whole card spends exactly one filter - the glass - and nothing here costs a
+ * second one.
+ *
+ * The scrim is a gradient *inside* the surface rather than a rectangle of its own, because a
+ * rectangle would have an edge, and an edge across the middle of a card is the one thing that
+ * gives a glass panel away.
+ */
+.home-card-skin {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 100% 100%;
+}
+
+/* Training: a dotted range floor. The radar arm used to be the third layer of this stack,
+   which is exactly why it could not turn - a gradient painted as a background has no way to
+   move that is not `background-position`, and moving that walks the stops rather than the arm.
+   It is its own layer now (`.home-card-sweep`), which is a thing a transform can turn. */
+.home-card--practice .home-card-skin {
+  background-image:
+    linear-gradient(180deg, rgba(3, 10, 16, 0) 0%, rgba(3, 10, 16, 0.08) 40%, rgba(2, 7, 13, 0.58) 100%),
+    radial-gradient(rgba(159, 216, 255, 0.16) 1px, rgba(0, 0, 0, 0) 1.3px),
+    radial-gradient(72% 52% at 10% 4%, var(--theme-halo) 0%, rgba(0, 0, 0, 0) 70%),
+    radial-gradient(66% 48% at 94% 98%, var(--theme-halo-2) 0%, rgba(0, 0, 0, 0) 72%);
+  background-size: 100% 100%, 22px 22px, 100% 100%, 100% 100%;
+}
+
+/* Versus: the card split down the middle into two halves that meet. The line where they meet
+   is its own layer now (`.home-card-spark`), because that is the one part of this card that
+   is supposed to pulse. */
+.home-card--multiplayer .home-card-skin {
+  background-image:
+    linear-gradient(180deg, rgba(10, 4, 10, 0) 0%, rgba(8, 4, 10, 0.1) 40%, rgba(6, 3, 8, 0.58) 100%),
+    linear-gradient(
+      118deg,
+      rgba(255, 59, 78, 0.16) 0%,
+      rgba(255, 59, 78, 0.16) 44%,
+      rgba(192, 28, 122, 0.16) 44%,
+      rgba(192, 28, 122, 0.16) 56%,
+      rgba(255, 59, 78, 0.08) 56%,
+      rgba(255, 59, 78, 0.08) 100%
+    ),
+    radial-gradient(70% 50% at 8% 6%, var(--theme-halo) 0%, rgba(0, 0, 0, 0) 70%),
+    radial-gradient(64% 46% at 96% 96%, var(--theme-halo-2) 0%, rgba(0, 0, 0, 0) 72%);
+}
+
+/* Championship: the bracket's own grid, drawn as two sets of hairlines, with the trophy's
+   light sitting in the middle of it. Both line sets are far too faint to read as a grid and
+   just enough to stop the middle of the card being empty. */
+.home-card--tournament .home-card-skin {
+  background-image:
+    linear-gradient(180deg, rgba(10, 6, 2, 0) 0%, rgba(9, 6, 3, 0.08) 40%, rgba(7, 5, 2, 0.58) 100%),
+    repeating-linear-gradient(90deg, var(--theme-line) 0 1px, rgba(0, 0, 0, 0) 1px 62px),
+    repeating-linear-gradient(0deg, rgba(255, 214, 140, 0.2) 0 1px, rgba(0, 0, 0, 0) 1px 46px),
+    radial-gradient(58% 42% at 50% 32%, var(--theme-halo) 0%, rgba(0, 0, 0, 0) 72%),
+    radial-gradient(66% 48% at 12% 100%, var(--theme-halo-2) 0%, rgba(0, 0, 0, 0) 74%);
+  background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 100% 100%;
+}
+
+/**
+ * The grain.
+ *
+ * Film grain, at the lowest opacity that still does something: 5%. Blended rather than laid
+ * on top, so it darkens and lightens with the surface instead of sitting over it as a veil,
+ * and `isolation: isolate` on the face is what keeps it from blending with the photograph.
+ */
+.home-card-grain {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23g)'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
+}
+
+/**
+ * The shine: one band of light crossing the glass, on its own clock per card.
+ *
+ * The band is 45% of the card wide, twice the card tall and skewed out of square, so it
+ * crosses corner to corner rather than sliding down the middle like a wipe. It is a child of
+ * the face, which clips at 22px, so whatever it does there is no rectangle anyone can see:
+ * there is nothing to bound it, because the card's own corner is the bound.
+ *
+ * Only `transform` moves, from far enough left to be off the card to far enough right to be
+ * off the card again, and the travel is finished a third of the way through the cycle - the
+ * rest of the time is the card sitting still. A shine that never stops is a light in the room
+ * that keeps getting switched on; one that crosses and then waits reads as glass.
+ *
+ * The resting position is further left than the first keyframe. It is what the band shows
+ * during a card's delay, before the animation has started: parked on the card for three and
+ * a half seconds would be a bright diagonal parked on the card for three and a half seconds.
+ */
+.home-card-shine {
+  position: absolute;
+  z-index: 1;
+  top: -50%;
   left: 0;
-  right: 0;
-  height: 240px;
+  width: 45%;
+  height: 200%;
+  pointer-events: none;
+  transform: translateX(-260%) skewX(-18deg);
+  background: linear-gradient(105deg, rgba(255, 255, 255, 0) 0%, rgba(255, 235, 170, 0.22) 50%, rgba(255, 255, 255, 0) 100%);
+  will-change: transform;
+  animation: card-shine-sweep 5s ease-in-out infinite;
+}
+
+@keyframes card-shine-sweep {
+  0% {
+    transform: translateX(-150%) skewX(-18deg);
+  }
+
+  35% {
+    transform: translateX(350%) skewX(-18deg);
+  }
+
+  100% {
+    transform: translateX(350%) skewX(-18deg);
+  }
+}
+
+/* Three cards, three clocks, and no two of them in step: the gaps between them are what
+   make a row of cards look like three objects rather than one loop played three times. */
+.home-card--multiplayer .home-card-shine {
+  animation-duration: 6.5s;
+  animation-delay: 1.8s;
+}
+
+.home-card--tournament .home-card-shine {
+  animation-duration: 8s;
+  animation-delay: 3.5s;
+}
+
+/**
+ * The two ambient layers, and the trophy's aura.
+ *
+ * All three are on every card and switched on by the card's theme, so the decision about
+ * which card gets which light lives in one stylesheet next to the rest of that card's light
+ * rather than in a branch of the render loop. An ambient layer that is switched off costs
+ * nothing: `display: none` takes it out of the layout and stops its animation.
+ *
+ * Between them they are the only things on a card that move without being touched, so each
+ * one moves on `transform` or `opacity` and nothing else, and each carries `will-change` only
+ * because it is genuinely animating.
+ */
+.home-card-sweep,
+.home-card-spark,
+.home-card-emblem-aura {
+  display: none;
+}
+
+/**
+ * Practice: the radar arm.
+ *
+ * A layer a third larger than the card on every side, so its centre *is* the card's centre
+ * and the arm turns about that point rather than about its own corner, and so the arm is
+ * still crossing the whole card at any angle. One degree-twelfth of a turn per frame is not
+ * fast enough to read as a sweep and not slow enough to look switched off: twelve seconds is
+ * a full turn, which is the tempo of an instrument that is measuring something.
+ */
+.home-card--practice .home-card-sweep {
+  display: block;
+  position: absolute;
+  z-index: 0;
+  inset: -30%;
+  pointer-events: none;
+  background: conic-gradient(
+    from 0deg at 50% 50%,
+    rgba(47, 123, 255, 0.24) 0deg,
+    rgba(25, 195, 178, 0.13) 34deg,
+    rgba(25, 195, 178, 0) 78deg,
+    rgba(0, 0, 0, 0) 360deg
+  );
+  will-change: transform;
+  animation: card-radar-sweep 12s linear infinite;
+}
+
+@keyframes card-radar-sweep {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/**
+ * Multiplayer: the spark on the centre line.
+ *
+ * Two pixels of light standing between the two halves, faded out at both ends so it has no
+ * ends. It pulses rather than blinks - up and down over two and a half seconds, which is slow
+ * enough to read as something breathing next to you and fast enough to be alive. Opacity only,
+ * and centred with a margin rather than a translate so the animation has nothing to fight.
+ */
+.home-card--multiplayer .home-card-spark {
+  display: block;
+  position: absolute;
+  z-index: 1;
+  top: 9%;
+  bottom: 9%;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 2px;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 214, 224, 0) 0%, rgba(255, 226, 232, 0.9) 50%, rgba(255, 214, 224, 0) 100%);
+  /* Resting dim, not resting bright: the value the animation starts and ends from, so a
+     card that is not being animated - including one whose motion has been switched off - is
+     a card with a faint line in it rather than a card with a lit one. */
+  opacity: 0.16;
+  will-change: opacity;
+  animation: card-spark-pulse 2.5s ease-in-out infinite;
+}
+
+@keyframes card-spark-pulse {
+  0%,
+  100% {
+    opacity: 0.16;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+/**
+ * Tournament: the trophy's own light, breathing.
+ *
+ * Inside the emblem rather than over it, so the gold sits behind the cup instead of washing
+ * it, and so it travels with the emblem when the emblem grows on hover. `alternate` is the
+ * whole trick: it plays the cycle forwards and then backwards, so the light swells and
+ * ebbs instead of jumping from full to empty every four seconds.
+ */
+.home-card--tournament .home-card-emblem-aura {
+  display: block;
+  position: absolute;
+  z-index: 0;
+  inset: -26%;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(255, 176, 46, 0.5) 0%,
+    rgba(255, 106, 26, 0.2) 44%,
+    rgba(255, 106, 26, 0) 72%
+  );
+  /* Low at rest, for the same reason as the spark: the animation's `from` is this value, so
+     cancelling it leaves the card as it was drawn. */
+  opacity: 0.2;
+  will-change: opacity;
+  animation: card-trophy-breath 4s ease-in-out infinite alternate;
+}
+
+@keyframes card-trophy-breath {
+  from {
+    opacity: 0.2;
+  }
+
+  to {
+    opacity: 0.7;
+  }
+}
+
+/**
+ * The top row: what this card is, and what state it is in.
+ *
+ * A category word on the left and the mode's own state on the right, with the row between
+ * them taking the space. Both are pills because both are labels; they are tinted with the
+ * theme rather than gold, so a screen of three cards reads as three modes rather than one
+ * screen with a colour on it.
+ */
+.home-card-top {
+  position: relative;
   z-index: 2;
   display: flex;
-  align-items: flex-end;
-  justify-content: center;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 22px;
   pointer-events: none;
 }
 
-/* The coloured light behind the picture: a wide ellipse on the card's own surface, so it
-   reads as the card lit from behind the object rather than as a halo stuck to the image. */
-.home-card-art::before {
-  content: '';
-  position: absolute;
-  left: 50%;
-  bottom: -10px;
-  width: 82%;
-  height: 72%;
-  transform: translateX(-50%);
-  background: radial-gradient(ellipse at 50% 58%, var(--card-glow) 0%, transparent 70%);
-  filter: blur(12px);
+.home-card-badge,
+.home-card-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
-/* The contact shadow, in the opposite direction: this is what stops the picture looking
-   pasted on. Dark, tight, and sitting right where the object meets the glass. */
-.home-card-art::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  bottom: 14px;
-  width: 54%;
-  height: 20px;
-  transform: translateX(-50%);
-  background: radial-gradient(ellipse at 50% 50%, rgba(2, 10, 7, 0.6), transparent 72%);
-  filter: blur(6px);
+.home-card-badge {
+  border: 1px solid var(--theme-line);
+  background: rgba(6, 16, 24, 0.44);
+  color: var(--theme-ink);
+}
+
+/* The state is a fact, so it is set in sentence case at a readable size rather than as a
+   shout: "No credits" and "8 players" are not labels, they are answers. */
+.home-card-status {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(6, 16, 24, 0.5);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
 }
 
 /**
- * The picture itself, contained.
+ * The emblem.
  *
- * The image fills the well and `object-fit: contain` decides what happens inside it: the
- * artwork is scaled to fit whole and letterboxed against whatever is left over, so nothing
- * is ever cropped and nothing is ever stretched. The inline SVG is held to the same box by
- * its own viewBox, which does the same job.
- *
- * The two `drop-shadow`s are the 3D: a soft dark one for weight, and one in the card's own
- * glow colour so the light wraps the silhouette. Because a filter is applied to what the
- * element actually painted, both follow the artwork's outline rather than the box's
- * rectangle - which is why `object-fit: contain` and a glow shaped like the object are the
- * same decision.
+ * Centred, and sized in `clamp()` against the card rather than in pixels, because it is the
+ * one part of the card that has to look deliberate at 1100px wide and at 420px. The scale on
+ * hover is the only thing about it that moves, and it moves inside its own box: a transform
+ * on a decorative layer cannot shift a hit area, which is the whole reason the hit area is
+ * not this element.
  */
-.home-card-art-img,
-.home-card-art-svg {
+.home-card-emblem {
   position: relative;
-  z-index: 1;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  filter:
-    drop-shadow(0 18px 22px rgba(0, 0, 0, 0.5)) drop-shadow(0 0 20px var(--card-glow));
-  transition: scale 260ms ease;
-}
-
-.home-card-art-svg {
+  z-index: 2;
   display: block;
+  width: clamp(84px, 8.6vw, 112px);
+  height: clamp(84px, 8.6vw, 112px);
+  margin: clamp(2px, 0.8vh, 10px) auto;
+  pointer-events: none;
+  transition: transform 250ms ease;
 }
 
-.home-card-art-svg svg {
+.home-card-emblem svg {
   display: block;
   width: 100%;
   height: 100%;
 }
 
-button.home-card:hover {
-  transform: translateY(-6px);
-  border-color: rgba(232, 200, 114, 0.8);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.22),
-    inset 0 -22px 44px rgba(4, 12, 9, 0.3),
-    0 0 0 1px rgba(201, 168, 76, 0.3),
-    0 0 30px rgba(201, 168, 76, 0.32),
-    0 34px 60px rgba(0, 0, 0, 0.48);
-}
-
-/* On hover the picture comes up to meet the card and its glow opens out. Scoped to the
-   image, so the well keeps holding the layout while the picture moves inside it. */
-button.home-card:hover .home-card-art-img,
-button.home-card:hover .home-card-art-svg {
-  scale: 1.06;
-}
-
-/* The label and the one line under it, in a column of their own between the artwork and
-   the pill. `space-between` on the card puts this block at the top of that space and the
-   pill at the bottom, so the height between them is deliberate air rather than a gap. */
-.home-card-body {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  min-width: 0;
-}
-
-.home-card-label {
+/* The title and the one line under it. Inter, not the display serif: this screen is a menu of
+   modes and the wordmark above is already the only serif on it. The description is held to one
+   line by an ellipsis rather than allowed to wrap, because a card that grows a second line
+   pushes its own button down and the three buttons stop lining up. */
+.home-card-title {
+  position: relative;
+  z-index: 2;
   font-family: var(--font-body);
-  font-weight: 600;
-  font-size: clamp(17px, 2.2vh, 21px);
-  letter-spacing: 0.03em;
+  font-weight: 700;
+  font-size: clamp(19px, 2.1vw, 24px);
+  letter-spacing: 0.04em;
   line-height: 1.15;
-}
-
-/* One line, guaranteed. The copy is written to fit, and this is what keeps it one line if
-   it is ever rewritten: an ellipsis is a fair answer, a second line is not, because the
-   card's height is fixed and the second line would land on the pill. */
-.home-card-blurb {
-  font-family: var(--font-body);
-  font-weight: 400;
-  font-size: clamp(11px, 1.4vh, 13px);
-  letter-spacing: 0.01em;
-  color: var(--muted);
-  line-height: 1.4;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+}
+
+.home-card-desc {
+  position: relative;
+  z-index: 2;
+  font-family: var(--font-body);
+  font-weight: 500;
+  font-size: 14px;
+  letter-spacing: 0.01em;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.95);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
 }
 
 /**
- * The two facts under the description.
+ * The facts that are not the state.
  *
- * Small pills rather than another line of text: they are attributes of the mode, not part
- * of the sentence, and a second sentence on the card is the first thing that makes a card
- * read as a paragraph. The words come from the lobby model and are things the app already
- * knows - no price, no prize, both of which the server decides at runtime.
+ * Small pills rather than another line of text: they are attributes of the mode, not part of
+ * the sentence, and a second sentence on the card is the first thing that makes a card read as
+ * a paragraph. The words come from the lobby model and are things the app already knows - no
+ * price, no prize, both of which the server decides at runtime.
  */
 .home-card-chips {
+  position: relative;
+  z-index: 2;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -3705,16 +4353,16 @@ button.home-card:hover .home-card-art-svg {
 }
 
 .home-chip {
-  padding: 3px 9px;
-  border: 1px solid rgba(232, 200, 114, 0.28);
+  padding: 4px 9px;
+  border: 1px solid var(--theme-line, rgba(232, 200, 114, 0.28));
   border-radius: 999px;
-  background: rgba(8, 24, 18, 0.42);
-  color: var(--gold-light);
+  background: rgba(6, 16, 24, 0.46);
+  color: var(--theme-ink, var(--gold-light));
   font-family: var(--font-body);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  line-height: 1.5;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
   white-space: nowrap;
 }
 
@@ -3722,26 +4370,91 @@ button.home-card:hover .home-card-art-svg {
  * The card's affordance, as a gold pill.
  *
  * Present from the first paint rather than appearing on hover: a control that only exists
- * while the pointer is over it is a control that pops in, and this screen is built to
- * hold still while it loads and once it has. Gold on the pill and near-black text inside
- * it, because gold on white glass at 11px is not a contrast anyone can read.
+ * while the pointer is over it is a control that pops in, and this screen is built to hold
+ * still while it loads and once it has. `margin-top: auto` is what pins it to the bottom of
+ * whatever height the row turned out to be, which is why all three Play buttons sit on one
+ * baseline. Gold on the pill and near-black text inside it, because gold on white glass at
+ * 12px is not a contrast anyone can read.
+ *
+ * The hover brightness is a white overlay fading in rather than a change of background: the
+ * card's transitions are on transform and opacity only, so nothing here repaints.
  */
 .home-card-cta {
-  margin-top: 0;
-  padding: 12px 18px;
+  position: relative;
+  z-index: 2;
+  display: block;
+  margin-top: auto;
+  padding: 14px 18px;
   border-radius: 999px;
   background: linear-gradient(135deg, var(--gold-light) 0%, var(--gold) 100%);
   color: #14100a;
   font-family: var(--font-body);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.18em;
   line-height: 1.3;
   text-transform: uppercase;
   text-align: center;
   box-shadow:
     0 6px 18px rgba(201, 168, 76, 0.32),
     inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.home-card-cta::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0) 60%);
+  opacity: 0;
+  transition: opacity 250ms ease;
+}
+
+.home-card-cta-label {
+  position: relative;
+  z-index: 1;
+}
+
+/**
+ * Hover, driven by the wrapper.
+ *
+ * The wrapper never changes; the face inside it lifts, the border comes up to full, the emblem
+ * grows 6% inside its own box and the pill lights. Four transitions, all on `transform` or
+ * `opacity`, all 250ms: nothing here changes a size, so no neighbour moves and nothing
+ * reflows. The lift is on the face because the face is disposable - if it is being animated,
+ * the element under the pointer is not the thing that is moving.
+ *
+ * The `filter: none` and `box-shadow: none` are not decoration: the global `button:hover`
+ * rule puts a brightness filter and a gold glow on every button in the app, and a card that
+ * kept them would jump in contrast as well as in height.
+ */
+button.home-card:hover {
+  transform: none;
+  filter: none;
+  box-shadow: none;
+}
+
+button.home-card:hover .home-card-face {
+  transform: translateY(-6px);
+}
+
+button.home-card:hover .home-card-face::after {
+  opacity: 1;
+}
+
+button.home-card:hover .home-card-emblem {
+  transform: scale(1.06);
+}
+
+button.home-card:hover .home-card-cta::after {
+  opacity: 1;
+}
+
+/* Pressing is not hovering. The face comes down 3px so a click has an answer, and the wrapper
+   under it does not move, so the click lands on the same pixels it was aimed at. */
+button.home-card:active .home-card-face {
+  transform: translateY(-3px);
 }
 
 /**
@@ -4049,15 +4762,14 @@ button.difficulty[aria-checked='true'] {
   /**
    * The lobby scrolls on a phone, and that is the honest answer rather than a compromise.
    *
-   * Three cards with pictures standing above them is around 1000px of column whatever the
-   * card is sized, so on an 844px phone one of the three has to go somewhere. Clipping the
-   * third card behind `overflow: hidden` would hide a mode with no way to reach it, so the
-   * page is allowed to scroll instead and the shell stops claiming to be one viewport tall.
+   * Three cards of this height are more than one phone screen whatever they are sized, so on
+   * an 844px phone one of the three has to go somewhere. Clipping the third card behind
+   * `overflow: hidden` would hide a mode with no way to reach it, so the page is allowed to
+   * scroll instead and the shell stops claiming to be one viewport tall.
    *
-   * The card itself keeps the desktop design and only shrinks: the picture still stands on
-   * top of the card and still clears the text by the same 30px, because the relationship
-   * between the three numbers is the design. At 46px of overhang and a 156px well, the
-   * picture's base reaches 110px down a 340px card and the words start at 176px.
+   * The card itself keeps the desktop design and only shrinks, because the design is now a
+   * `clamp()` and a stacking order rather than three numbers that had to agree: one column,
+   * and the gap is the 28px it is everywhere else.
    */
   .app-home {
     height: auto;
@@ -4072,37 +4784,17 @@ button.difficulty[aria-checked='true'] {
 
   .home-cards {
     grid-template-columns: minmax(0, 1fr);
-    /* Wider than the 46px the picture stands out by, so one card's picture never lands on
-       the card above it. */
-    gap: 58px;
+    gap: 28px;
     max-width: 460px;
-    padding-top: 30px;
   }
 
-  button.home-card {
-    max-width: none;
-    height: 340px;
-    padding: 176px 22px 22px;
-  }
-
-  .home-card-art {
-    top: -46px;
-    height: 156px;
-  }
-
-  /* The picture still lights the card, just less of it on a smaller card. */
-  .home-card-art::before {
-    bottom: -6px;
-    filter: blur(9px);
-  }
-
-  .home-card-art::after {
-    bottom: 10px;
-    height: 16px;
+  .home-card-face {
+    min-height: 300px;
+    padding: 18px;
   }
 
   .home-card-cta {
-    padding: 11px 18px;
+    padding: 13px 18px;
   }
 
   .home-bar-item {
@@ -4130,8 +4822,8 @@ button.difficulty[aria-checked='true'] {
   }
 
   .home-chip {
-    font-size: 9px;
-    padding: 3px 7px;
+    font-size: 11px;
+    padding: 3px 8px;
   }
 
   .practice-matchup {
@@ -4143,51 +4835,23 @@ button.difficulty[aria-checked='true'] {
   }
 }
 
-/* The hover lift is movement, and this screen is mostly tapped. */
+/* The hover lift is movement, and this screen is mostly tapped. The bar still drops it; the
+   cards get nothing here, because their hover state is the wrapper's and the wrapper was
+   never the thing that moved. */
 @media (pointer: coarse) {
-  button.home-card:hover,
   .home-bar-item:hover {
     transform: none;
-  }
-
-  /* The picture does not scale up on a tap either: there is no hover to earn it. */
-  button.home-card:hover .home-card-art-img,
-  button.home-card:hover .home-card-art-svg {
-    scale: 1;
   }
 }
 
 /**
  * A short desktop window.
  *
- * The card is a fixed 400px, which is right down to about a 700px-tall window and too tall
- * below that: the row would be pushed under the bottom bar, and the shell hides its
- * overflow rather than scrolling. Under 720px of height the whole card is scaled by one
- * ratio - well, overhang, padding and height together - so the three numbers that make the
- * design hold their relationship instead of the artwork landing on the words. The threshold
- * is 720 rather than something higher because the row has slack to spare well below it:
- * the words, the pill and the bar are fixed, so a 400px card still fits a 768px window with
- * room to spare.
+ * Nothing to do any more. The card used to need a second, smaller set of numbers here
+ * because its height, its top padding and its artwork overhang were three separate values
+ * that had to be kept in agreement by hand; `clamp(288px, 42vh, 360px)` on the face is
+ * already short-window-aware, and the row around it is `1fr` of what the header leaves.
  */
-@media (min-width: 769px) and (max-height: 720px) {
-  .home-cards {
-    padding-top: 60px;
-  }
-
-  button.home-card {
-    height: 340px;
-    padding: 178px 24px 22px;
-  }
-
-  .home-card-art {
-    top: -52px;
-    height: 200px;
-  }
-
-  .home-card-art::after {
-    bottom: 12px;
-  }
-}
 
 /**
  * Motion off, properly.
@@ -4202,5 +4866,44 @@ button.difficulty[aria-checked='true'] {
   body.practice-mode::after {
     animation: none;
     background-position: 50% 42%, -60% 0;
+  }
+
+  /**
+   * The card's lift, cancelled.
+   *
+   * The global block's `button:hover { transform: none }` does not reach these: the hover
+   * rule that moves the card is more specific than it, so with the setting on, the card
+   * would still jump 6px - instantly rather than smoothly, which is the worst of both. These
+   * two selectors repeat the hover ones exactly, so they weigh exactly the same, and being
+   * later in the file is all it takes to win. The emblem's scale goes with the lift, since it
+   * is the same movement.
+   *
+   * What is left standing is the two opacity changes - the border coming up to full and the
+   * pill lighting. Neither moves anything, and the global block has already floored their
+   * duration, so with the setting on they still answer a hover without animating.
+   */
+  button.home-card:hover .home-card-face,
+  button.home-card:active .home-card-face {
+    transform: none;
+  }
+
+  button.home-card:hover .home-card-emblem {
+    transform: none;
+  }
+
+  /**
+   * The shine and the ambient light, off rather than instant.
+   *
+   * The global block floors the duration and runs one iteration, which would park the band
+   * at the end of its travel and then snap it back - a flash of light for one frame on a
+   * screen that asked for no light - and would leave the radar arm and the spark frozen
+   * wherever the floored cycle happened to stop. Cancelled, every one of them rests where it
+   * was drawn: the band off the card, the arm at zero degrees, the spark dim, the aura low.
+   */
+  button.home-card .home-card-shine,
+  button.home-card .home-card-sweep,
+  button.home-card .home-card-spark,
+  button.home-card .home-card-emblem-aura {
+    animation: none;
   }
 }

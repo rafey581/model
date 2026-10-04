@@ -204,7 +204,7 @@ let hintDismissed = false
 let matchPrizeCredits = 0
 /**
  * The ceiling for the canvas backing store's device pixel ratio. 1.5 keeps a
- * high-DPI screen sharper than plain 1├ù while capping the fragment load that 4K
+ * high-DPI screen sharper than plain 1× while capping the fragment load that 4K
  * panels (DPR 2+) would otherwise put on a weak GPU; the adaptive ladder below
  * steps between 1 and this, and never above it.
  */
@@ -228,6 +228,32 @@ function el(tag: string, className?: string, text?: string): HTMLElement {
   if (className) node.className = className
   if (text !== undefined) node.textContent = text
   return node
+}
+
+/**
+ * The gold corner brackets around the identity badge.
+ *
+ * Four angles and nothing else. The frame they belong to is drawn by the corners rather
+ * than by a ring, because a ring reads as an outline of whatever it happens to be
+ * holding, whereas four corners read as a mount: the eye joins them across the middle and
+ * the portrait is left with a lip to sit behind. The stroke is one gradient in the page's
+ * gold, run diagonally, so the bracket nearest the brand is the brightest and the one
+ * opposite it is the deepest — the frame is lit rather than filled.
+ */
+function profileBadgeFrameSvg(): string {
+  return (
+    '<svg class="profile-badge-frame" viewBox="0 0 34 34" width="34" height="34" fill="none" aria-hidden="true">' +
+    '<defs>' +
+    '<linearGradient id="profile-badge-gold" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="34" y2="34">' +
+    '<stop offset="0" stop-color="#ffe6b0"/>' +
+    '<stop offset="0.45" stop-color="#ffb02e"/>' +
+    '<stop offset="1" stop-color="#b87613"/>' +
+    '</linearGradient>' +
+    '</defs>' +
+    '<path d="M2.5 10.5V5.5A3 3 0 0 1 5.5 2.5h5M23.5 2.5h5a3 3 0 0 1 3 3v5M31.5 23.5v5a3 3 0 0 1-3 3h-5M10.5 31.5h-5a3 3 0 0 1-3-3v-5" ' +
+    'stroke="url(#profile-badge-gold)" stroke-width="1.6" stroke-linecap="round"/>' +
+    '</svg>'
+  )
 }
 
 /**
@@ -259,15 +285,25 @@ function header(options: { home?: boolean } = {}): HTMLElement {
     // and the two names in a scoreboard are told apart without reading them. It is the
     // same component the match HUD draws, so the face here is the face at the table.
     const chip = el('div', 'user-chip')
-    chip.appendChild(createAvatarBadge({ name: currentUser.username, isBot: false }))
+    // The avatar itself is the shared component the HUD draws, so it is left exactly as it
+    // is; the frame around it is this screen's. A wrapper rather than a new class on the
+    // avatar, because that class belongs to the match HUD as well and the two frames are
+    // meant to look different.
+    const badge = el('span', 'profile-badge')
+    badge.innerHTML = profileBadgeFrameSvg()
+    badge.appendChild(createAvatarBadge({ name: currentUser.username, isBot: false }))
+    // The socket state rides on the badge's corner now instead of sitting beside it as a
+    // word. It is still the same element the connection update has always written to, with
+    // the same id, the same classes and the same live-region role, so what changed is only
+    // where it is drawn.
+    const conn = el('span', connected ? 'chip-ok' : 'chip-bad', connected ? 'online' : 'reconnecting…')
+    conn.id = 'conn-chip'
+    conn.setAttribute('role', 'status')
+    badge.appendChild(conn)
+    chip.appendChild(badge)
     const name = el('span', 'user-name')
     name.appendChild(el('strong', undefined, currentUser.username))
     chip.appendChild(name)
-
-    const conn = el('span', connected ? 'chip-ok' : 'chip-bad', connected ? 'online' : 'reconnectingâ€¦')
-    conn.id = 'conn-chip'
-    conn.setAttribute('role', 'status')
-    chip.appendChild(conn)
     right.appendChild(chip)
 
 // The balance is its own chip so it is the thing that reads as a number, rather
@@ -299,7 +335,7 @@ function header(options: { home?: boolean } = {}): HTMLElement {
       }
       right.appendChild(adminBtn)
     }
-    const logout = el('button', 'ghost', 'Logout') as HTMLButtonElement
+    const logout = el('button', 'ghost header-logout', 'Logout') as HTMLButtonElement
     logout.type = 'button'
     logout.onclick = () => {
       token = ''
@@ -375,7 +411,7 @@ function setCameraMode(mode: 'AIM' | 'TOP_DOWN'): void {
   if (!btn) return
   const switchingTo = mode === 'AIM' ? 'behind the cue ball' : 'overhead'
   btn.innerHTML = cameraSvg(mode)
-  btn.title = `Camera: ${mode === 'AIM' ? 'behind the cue ball' : 'overhead'} ΓÇö switch to ${switchingTo}`
+  btn.title = `Camera: ${mode === 'AIM' ? 'behind the cue ball' : 'overhead'} — switch to ${switchingTo}`
   btn.setAttribute('aria-label', btn.title)
   btn.setAttribute('aria-pressed', mode === 'TOP_DOWN' ? 'true' : 'false')
 }
@@ -665,15 +701,15 @@ function seatName(seat: number | undefined): string {
 function updateConnChip(): void {
   const chip = document.getElementById('conn-chip')
   if (!chip) return
-  chip.textContent = connected ? 'online' : 'reconnectingâ€¦'
+  chip.textContent = connected ? 'online' : 'reconnecting…'
   chip.className = connected ? 'chip-ok' : 'chip-bad'
 }
 
 /**
  * Feeds the HUD overlay from the authoritative frame state.
  *
- * Called on state changes only â€” a snapshot landing, a frame changing hands, the
- * replay finishing â€” and never from the render loop. The component diffs every write
+ * Called on state changes only — a snapshot landing, a frame changing hands, the
+ * replay finishing — and never from the render loop. The component diffs every write
  * before it makes it, so a call that changes nothing costs nothing.
  */
 function updateHud(): void {
@@ -685,7 +721,14 @@ function updateHud(): void {
     deriveHudState({
       snapshot: hudFrame,
       you: { name: currentUser?.username ?? 'You', isBot: false },
-      opponent: { name: opponentName(), isBot: activeMatchIsPractice },
+      // The robot gets the same face as the lobby's robot card rather than the letter
+      // fallback: a practice opponent you can pick out of the corner of your eye is the
+      // whole point of an avatar on a pill this small.
+      opponent: {
+        name: opponentName(),
+        isBot: activeMatchIsPractice,
+        avatarUrl: activeMatchIsPractice ? '/bot.png' : null
+      },
       mySeat,
       showMatchResult: matchPrizeCredits > 0,
       prizeCredits: matchPrizeCredits,
@@ -701,7 +744,7 @@ function updateOpponentGone(): void {
   const holder = document.getElementById('opp-holder')
   holder?.replaceChildren()
   if (opponentGone && !activeMatchIsPractice) {
-    holder?.appendChild(el('div', 'opp-gone', 'Opponent disconnected â€” waiting for them to return'))
+    holder?.appendChild(el('div', 'opp-gone', 'Opponent disconnected — waiting for them to return'))
   }
 }
 
@@ -845,7 +888,7 @@ async function renderTournament(): Promise<void> {
   const top = el('div', 'row t-top')
   const title = el('div')
   title.appendChild(el('h3', undefined, data.name))
-  title.appendChild(el('div', 'meta-line', `${data.players.length}/${data.size} players Â· ${statusLabel(data.status)} Â· BO${data.format.replace('BO', '')}`))
+  title.appendChild(el('div', 'meta-line', `${data.players.length}/${data.size} players · ${statusLabel(data.status)} · BO${data.format.replace('BO', '')}`))
   top.appendChild(title)
   const actions = el('div', 'row')
   const refreshBtn = el('button', 'ghost', 'Refresh')
@@ -863,9 +906,9 @@ async function renderTournament(): Promise<void> {
 
   if (data.status === 'OPEN' || data.status === 'DRAFT' || data.status === 'FULL') {
     if (data.players.length >= data.size) {
-      box.appendChild(el('div', 'muted', 'Everyone has joined â€” matches are starting.'))
+      box.appendChild(el('div', 'muted', 'Everyone has joined — matches are starting.'))
     } else {
-      box.appendChild(el('div', 'muted', `Waiting for ${data.size - data.players.length} more player${data.size - data.players.length === 1 ? '' : 's'} â€” bracket fills from the top seed down.`))
+      box.appendChild(el('div', 'muted', `Waiting for ${data.size - data.players.length} more player${data.size - data.players.length === 1 ? '' : 's'} — bracket fills from the top seed down.`))
     }
   }
 
@@ -875,9 +918,9 @@ async function renderTournament(): Promise<void> {
     const banner = el('div', 'champion-banner')
     banner.appendChild(el('div', 'crown', 'CHAMPION'))
     banner.appendChild(el('div', 'champ-name', champion?.user.username ?? '?'))
-    banner.appendChild(el('div', 'meta-line', runnerUp ? `runner-up: ${runnerUp.user.username}` : 'runner-up: â€”'))
+    banner.appendChild(el('div', 'meta-line', runnerUp ? `runner-up: ${runnerUp.user.username}` : 'runner-up: —'))
     const mine = data.players.find((p) => p.userId === currentUser?.id)
-    banner.appendChild(el('div', 'meta-line', mine?.status === 'CHAMPION' ? 'This is you â€” take a bow.' : 'Free tournament Â· all 8 players started on even credits'))
+    banner.appendChild(el('div', 'meta-line', mine?.status === 'CHAMPION' ? 'This is you — take a bow.' : 'Free tournament · all 8 players started on even credits'))
     box.appendChild(banner)
   }
 
@@ -946,7 +989,7 @@ function bracketNode(slot: BracketSlotData, data: TournamentData): HTMLElement {
       node.appendChild(play)
     }
   }
-  node.title = match ? `${match.status} Â· round ${match.round ?? '?'}` : ''
+  node.title = match ? `${match.status} · round ${match.round ?? '?'}` : ''
   return node
 }
 
@@ -977,14 +1020,14 @@ async function finishMatch(winnerSeat: number, reason?: string): Promise<void> {
   const box = card('Match finished')
   box.appendChild(el('div', 'end-winner', `${winnerName} wins`))
   if (activeMatchIsPractice) {
-    box.appendChild(el('div', 'muted', 'Practice session â€” no credits involved'))
+    box.appendChild(el('div', 'muted', 'Practice session — no credits involved'))
   } else {
     box.appendChild(el('div', 'muted', `Frames: ${framesWon[0]}-${framesWon[1]}`))
     const prize = meta?.resultJson?.prize
     if (typeof prize === 'number' && prize > 0) {
       box.appendChild(el('div', 'end-prize', `Winner receives ${prize} CR`))
     } else {
-      box.appendChild(el('div', 'muted', 'Settlement pendingâ€¦'))
+      box.appendChild(el('div', 'muted', 'Settlement pending…'))
     }
   }
   if (reason === 'concede') box.appendChild(el('div', 'muted', 'by concession'))
@@ -1061,38 +1104,54 @@ function renderHome(): void {
 
   const cards = el('div', 'home-cards')
   for (const spec of HOME_CARDS) {
-    // The card is a column of three bands: the art band, which the picture hangs out of
-    // at the top, then the words, then the button. The picture is a sibling of the card's
-    // content rather than part of it so that `overflow: visible` on the card is what lets
-    // it break the top edge — a picture inside the button would be clipped by the button.
-    const card = el('button', 'home-card glass glass-edge') as HTMLButtonElement
+    // Two elements, not one. The button is the hit area and never moves: it is a fixed box
+    // that receives the hover and hands it down. The card face inside it is what lifts, so a
+    // pointer resting on the Play button keeps hitting the same pixels for as long as it
+    // rests there - the surface moving out from under a stationary cursor is what used to
+    // make these cards feel like they were dodging the mouse.
+    const card = el('button', `home-card home-card--${spec.id}`) as HTMLButtonElement
     card.type = 'button'
 
-    const art = el('div', 'home-card-art')
-    if (spec.artSvg) {
-      const svg = el('div', 'home-card-art-svg')
-      svg.innerHTML = spec.artSvg
-      art.appendChild(svg)
-    } else {
-      const img = el('img', 'home-card-art-img') as HTMLImageElement
-      img.src = spec.artUrl
-      img.alt = ''
-      img.loading = 'eager'
-      img.decoding = 'async'
-      img.draggable = false
-      art.appendChild(img)
-    }
+    const face = el('span', 'home-card-face')
+    // Five flat layers under the words: one carries the scrim, the pattern and the mesh glow
+    // as a single background stack (fewer layers than one element each, and the same paint),
+    // then the grain, then the shine, then the two ambient layers - the radar sweep and the
+    // centre spark. Which of them a card shows is the stylesheet's decision, not this loop's.
+    // None of them takes a pointer event.
+    face.appendChild(el('span', 'home-card-skin'))
+    face.appendChild(el('span', 'home-card-grain'))
+    face.appendChild(el('span', 'home-card-shine'))
+    face.appendChild(el('span', 'home-card-sweep'))
+    face.appendChild(el('span', 'home-card-spark'))
 
-    const body = el('div', 'home-card-body')
-    body.appendChild(el('div', 'home-card-label', spec.label))
-    body.appendChild(el('div', 'home-card-blurb', spec.blurb))
-    const chips = el('div', 'home-card-chips')
-    for (const chip of spec.chips) chips.appendChild(el('span', 'home-chip', chip))
-    body.appendChild(chips)
+    const top = el('span', 'home-card-top')
+    top.appendChild(el('span', 'home-card-badge', spec.badge))
+    // The state is one of the two facts, promoted: a claim about right now gets the corner,
+    // and the chip row below the description keeps the claims about the format.
+    top.appendChild(el('span', 'home-card-status', spec.chips[spec.statusIndex] ?? ''))
+    face.appendChild(top)
 
-    const cta = el('div', 'home-card-cta')
-    cta.appendChild(el('span', undefined, 'Play'))
-    card.append(art, body, cta)
+    const emblem = el('span', 'home-card-emblem')
+    emblem.innerHTML = spec.emblem
+    // Behind the drawing, not in front of it: the trophy's aura. It goes in first so the
+    // strokes the emblem is made of stay on top of its own light.
+    emblem.insertBefore(el('span', 'home-card-emblem-aura'), emblem.firstChild)
+    face.appendChild(emblem)
+
+    face.appendChild(el('span', 'home-card-title', spec.label))
+    face.appendChild(el('span', 'home-card-desc', spec.blurb))
+
+    const chips = el('span', 'home-card-chips')
+    spec.chips.forEach((chip, index) => {
+      if (index !== spec.statusIndex) chips.appendChild(el('span', 'home-chip', chip))
+    })
+    face.appendChild(chips)
+
+    const cta = el('span', 'home-card-cta')
+    cta.appendChild(el('span', 'home-card-cta-label', 'Play'))
+    face.appendChild(cta)
+
+    card.appendChild(face)
     card.onclick = () => {
       const target = cardDestination(spec.id)
       if (!target) return
@@ -1413,8 +1472,8 @@ async function featuredTournamentHero(): Promise<HTMLElement> {
       el(
         'p',
         undefined,
-        `${featured._count?.players ?? 0}/${featured.size} players signed up Â· ` +
-          `${fee > 0 ? `${fee} CR entry` : 'free entry'} Â· ${statusLabel(featured.status)}`
+        `${featured._count?.players ?? 0}/${featured.size} players signed up · ` +
+          `${fee > 0 ? `${fee} CR entry` : 'free entry'} · ${statusLabel(featured.status)}`
       )
     )
 
@@ -1432,7 +1491,7 @@ async function featuredTournamentHero(): Promise<HTMLElement> {
       joinBtn.onclick = () => {
         // Disable before the request so a double click cannot burn two entries.
         joinBtn.disabled = true
-        joinBtn.textContent = 'JOININGâ€¦'
+        joinBtn.textContent = 'JOINING…'
         void api<{ joined: boolean }>('/tournaments/join', {
           method: 'POST',
           body: { tournamentId: featured.id }
@@ -1451,7 +1510,7 @@ async function featuredTournamentHero(): Promise<HTMLElement> {
     }
   } else {
     content.appendChild(el('h2', undefined, 'No tournament open yet'))
-    content.appendChild(el('p', undefined, 'Be the first to put a bracket on the board â€” 8 players, seeded by join order.'))
+    content.appendChild(el('p', undefined, 'Be the first to put a bracket on the board — 8 players, seeded by join order.'))
     const createBtn = el('button', undefined, 'CREATE ONE') as HTMLButtonElement
     createBtn.type = 'button'
     createBtn.onclick = () => {
@@ -1511,7 +1570,7 @@ async function openTablesStrip(): Promise<HTMLElement> {
 function openTableCard(match: LobbyMatch, isMine: boolean): HTMLElement {
   const c = el('div', 'live-table-card')
   const host = match.players[0]?.user.username ?? 'Unknown'
-  c.appendChild(el('div', 'table-name', isMine ? 'Your table' : `${host} Â· ${match.format}`))
+  c.appendChild(el('div', 'table-name', isMine ? 'Your table' : `${host} · ${match.format}`))
   c.appendChild(el('div', 'table-players', isMine ? 'Waiting for an opponent' : 'Open seat'))
   c.appendChild(el('div', 'table-score', `${match.stakePerPlayer} CR`))
 
@@ -1557,7 +1616,7 @@ function createMatchCard(): HTMLElement {
   c.appendChild(balance)
 
   for (const tier of tiers) {
-    const chip = el('button', 'tier-chip', `${tier.label} Â· ${tier.credits} CR`)
+    const chip = el('button', 'tier-chip', `${tier.label} · ${tier.credits} CR`)
     chip.dataset.tier = tier.id
     if (tier.id === createTier) chip.classList.add('active')
     chip.onclick = () => {
@@ -1596,7 +1655,7 @@ function createMatchCard(): HTMLElement {
  * Creates a tournament, takes the first seat in it and opens the bracket.
  *
  * Shared by the tournament card and the lobby banner's empty state, so the two
- * cannot drift apart â€” and so the banner does not have to build a whole card (and
+ * cannot drift apart — and so the banner does not have to build a whole card (and
  * the tournament list request behind it) just to click one button on it.
  */
 function startTournament(): Promise<void> {
@@ -1614,7 +1673,7 @@ function startTournament(): Promise<void> {
 }
 
 function createTournamentCard(): HTMLElement {
-  const c = card('8-Player Tournament â€” free')
+  const c = card('8-Player Tournament — free')
   c.appendChild(el('div', 'muted', 'Single-elimination, best-of-3 frames. 8 players, seeded by join order. Winner takes the crown.'))
   const createBtn = el('button', undefined, 'Create Tournament') as HTMLButtonElement
   createBtn.type = 'button'
@@ -1628,7 +1687,7 @@ function createTournamentCard(): HTMLElement {
 }
 
 async function loadTournamentLists(c: HTMLElement): Promise<void> {
-  const loading = el('div', 'muted', 'Loading tournamentsâ€¦')
+  const loading = el('div', 'muted', 'Loading tournaments…')
   c.appendChild(loading)
   let open: OpenTournament[] = []
   let mine: OpenTournament[] = []
@@ -1648,7 +1707,7 @@ async function loadTournamentLists(c: HTMLElement): Promise<void> {
   const openHead = el('div', 'subhead', 'Open tournaments')
   c.appendChild(openHead)
   if (!open.length) {
-    c.appendChild(el('div', 'muted', 'None. Create one above â€” first to join takes seed 1.'))
+    c.appendChild(el('div', 'muted', 'None. Create one above — first to join takes seed 1.'))
   } else {
     for (const t of open) {
       const inMine = mine.some((m) => m.id === t.id)
@@ -1656,7 +1715,7 @@ async function loadTournamentLists(c: HTMLElement): Promise<void> {
       const rowEl = el('div', 'table-row')
       const info = el('div')
       info.appendChild(el('div', undefined, t.name))
-      info.appendChild(el('div', 'meta', `${count}/${t.size ?? 8} players Â· ${statusLabel(t.status)} Â· ${timeAgo(t.createdAt)}`))
+      info.appendChild(el('div', 'meta', `${count}/${t.size ?? 8} players · ${statusLabel(t.status)} · ${timeAgo(t.createdAt)}`))
       rowEl.appendChild(info)
       if (inMine) {
         rowEl.appendChild(el('span', 'badge', 'joined'))
@@ -1682,7 +1741,7 @@ async function loadTournamentLists(c: HTMLElement): Promise<void> {
       const rowEl = el('div', 'table-row')
       const info = el('div')
       info.appendChild(el('div', undefined, t.name))
-      info.appendChild(el('div', 'meta', `${t._count?.players ?? 8}/${t.size ?? 8} players Â· ${statusLabel(t.status)}`))
+      info.appendChild(el('div', 'meta', `${t._count?.players ?? 8}/${t.size ?? 8} players · ${statusLabel(t.status)}`))
       rowEl.appendChild(info)
       const viewBtn = el('button', 'ghost', 'Bracket')
       viewBtn.onclick = () => {
@@ -1700,8 +1759,8 @@ async function loadTournamentLists(c: HTMLElement): Promise<void> {
       const champion = t.players?.[0]?.user?.username
       const rowEl = el('div', 'table-row')
       const info = el('div')
-      info.appendChild(el('div', undefined, `${t.name} â€” winner: ${champion ?? '?'}`))
-      info.appendChild(el('div', 'meta', `${t._count?.players ?? 8} players Â· ${t.finishedAt ? new Date(t.finishedAt).toLocaleDateString() : ''}`))
+      info.appendChild(el('div', undefined, `${t.name} — winner: ${champion ?? '?'}`))
+      info.appendChild(el('div', 'meta', `${t._count?.players ?? 8} players · ${t.finishedAt ? new Date(t.finishedAt).toLocaleDateString() : ''}`))
       rowEl.appendChild(info)
       const viewBtn = el('button', 'ghost', 'Bracket')
       viewBtn.onclick = () => {
@@ -1715,7 +1774,7 @@ async function loadTournamentLists(c: HTMLElement): Promise<void> {
 }
 
 async function tablesCard(): Promise<HTMLElement> {
-  const c = card('Tables â€” pick your price')
+  const c = card('Tables — pick your price')
   const actions = el('div', 'row')
   const refreshBtn = el('button', 'ghost', 'Refresh tables')
   refreshBtn.onclick = () => void renderScreen('multiplayer')
@@ -1736,7 +1795,7 @@ async function tablesCard(): Promise<HTMLElement> {
     const tabRow = el('div', 'row tabs')
     for (const tier of tiers) {
       const count = counts.get(tier.id) ?? 0
-      const tab = el('button', 'tab', `${tier.label}${count ? ` Â· ${count}` : ''}`)
+      const tab = el('button', 'tab', `${tier.label}${count ? ` · ${count}` : ''}`)
       tab.dataset.tier = tier.id
       if (tier.id === activeTierId) tab.classList.add('active')
       tab.onclick = () => {
@@ -1757,7 +1816,7 @@ async function tablesCard(): Promise<HTMLElement> {
       const section = el('div', 'tier-section')
       section.dataset.tier = tier.id
       if (tier.id !== activeTierId) section.classList.add('hidden')
-      section.appendChild(el('div', 'muted', `${tier.usd} USD Â· ${tier.credits} CR stake per player`))
+      section.appendChild(el('div', 'muted', `${tier.usd} USD · ${tier.credits} CR stake per player`))
       if (!matches.length) {
         section.appendChild(el('div', 'muted', 'No tables waiting at this price. Create one above.'))
       } else {
@@ -1766,8 +1825,8 @@ async function tablesCard(): Promise<HTMLElement> {
           const host = match.players[0]
           const mine = host !== undefined && host.userId === currentUser?.id
           const info = el('div')
-          info.appendChild(el('div', undefined, `${mine ? 'You' : host?.user.username ?? '?'} Â· ${match.format}`))
-          info.appendChild(el('div', 'meta', `${match.stakePerPlayer} CR Â· waiting 1/2 Â· ${timeAgo(match.createdAt)}`))
+          info.appendChild(el('div', undefined, `${mine ? 'You' : host?.user.username ?? '?'} · ${match.format}`))
+          info.appendChild(el('div', 'meta', `${match.stakePerPlayer} CR · waiting 1/2 · ${timeAgo(match.createdAt)}`))
           wait.appendChild(info)
           if (mine) {
             wait.appendChild(el('span', 'badge', 'waiting for opponent'))
@@ -1878,12 +1937,12 @@ async function profileStatsCard(): Promise<HTMLElement> {
 
   const renderBoard = (period: string): void => {
     boardBox.innerHTML = ''
-    boardBox.appendChild(el('div', 'muted', 'Loading leaderboardâ€¦'))
+    boardBox.appendChild(el('div', 'muted', 'Loading leaderboard…'))
     void api<LeaderboardData>(`/leaderboard?period=${period}`)
       .then((data) => {
         boardBox.innerHTML = ''
         if (!data.rows.length) {
-          boardBox.appendChild(el('div', 'muted', 'No ranked matches yet â€” play a real match to get on the board.'))
+          boardBox.appendChild(el('div', 'muted', 'No ranked matches yet — play a real match to get on the board.'))
           return
         }
         const table = el('table')
@@ -1976,7 +2035,7 @@ function updateNetOverlay(): void {
   netOverlayEl.style.display = show ? 'flex' : 'none'
   const text = netOverlayEl.querySelector('p')
   if (text) {
-    text.textContent = !navigator.onLine ? 'You are offline â€” reconnectingâ€¦' : 'Connection lost â€” reconnectingâ€¦'
+    text.textContent = !navigator.onLine ? 'You are offline — reconnecting…' : 'Connection lost — reconnecting…'
   }
 }
 
@@ -1984,7 +2043,10 @@ function renderGame(): void {
   app.innerHTML = ''
   app.className = 'app-root app-game'
   document.body.classList.add('game-mode')
-  app.appendChild(header())
+  // No app header on this screen. It is a lobby control bar - brand, wallet, bell, sign
+  // out - and a match is one full viewport of table, so anything above the cloth is height
+  // the table does not get. The things a player needs mid-frame are the icon controls in
+  // the HUD's own top-left instead, and leaving is one of them.
   const page = el('div', 'game-page')
 
   // The HUD is mounted once and then only updated. Both renderers read from the same
@@ -1997,12 +2059,12 @@ function renderGame(): void {
   const canvas = el('canvas') as HTMLCanvasElement
   canvas.id = 'game-canvas'
   canvas.setAttribute('role', 'img')
-  canvas.setAttribute('aria-label', 'Snooker table â€” aim with pointer or touch, arrows for spin, Space to shoot')
+  canvas.setAttribute('aria-label', 'Snooker table — aim with pointer or touch, arrows for spin, Space to shoot')
   rgCanvas = canvas
   tableStageEl = stage
   tableFrame.appendChild(canvas)
   // Placement guidance sits under the table and speaks only while it has
-  // something to say ΓÇö a D restriction, a crowded spot ΓÇö then goes quiet.
+  // something to say — a D restriction, a crowded spot — then goes quiet.
   const placementHint = el('div', 'placement-hint')
   placementHint.id = 'placement-hint'
   placementHint.hidden = true
@@ -2030,7 +2092,7 @@ function renderGame(): void {
     e.preventDefault()
   })
   const overlay = el('div', 'net-overlay')
-  overlay.appendChild(el('p', undefined, 'Connection lost â€” reconnectingâ€¦'))
+  overlay.appendChild(el('p', undefined, 'Connection lost — reconnecting…'))
   tableFrame.appendChild(overlay)
   netOverlayEl = overlay
   updateNetOverlay()
@@ -2046,45 +2108,138 @@ function renderGame(): void {
   stage.appendChild(tableFrame)
   page.appendChild(stage)
 
-  const bar = el('div', 'controls-bar')
-  if (!hintDismissed) {
-    const hint = el('div', 'controls-hint')
-    hint.appendChild(
-      el('span', undefined, 'Aim: mouse or touch Â· Power: drag the slider, hold to charge, or â†‘/â†“ to trim Â· Spin: â†/â†’ side, W/S top-bottom Â· Shoot: release or Space')
-    )
-    const dismiss = el('button', 'hint-close', 'Ã—')
-    dismiss.title = 'Hide these controls for this session'
-    dismiss.setAttribute('aria-label', 'Hide the controls hint')
-    dismiss.onclick = () => {
-      hintDismissed = true
-      hint.remove()
-    }
-    hint.appendChild(dismiss)
-    bar.appendChild(hint)
+  /**
+   * The session tools, mounted in the HUD's own top-left slot.
+   *
+   * They are icon-only because they are needed occasionally, not per shot, and the row of
+   * words under the table was the one thing on the screen wide enough to change its layout.
+   * Each button keeps its label in `title` and `aria-label`, so nothing is lost by dropping
+   * the text, and these are the handlers those buttons already had: this changes how they
+   * are drawn, not what they do.
+   */
+  const tools = hud.toolsRoot
+  const tool = (label: string, mark: string) => {
+    const btn = el('button', 'hud-tool hud-glass') as HTMLButtonElement
+    btn.type = 'button'
+    btn.title = label
+    btn.setAttribute('aria-label', label)
+    btn.innerHTML = mark
+    tools.appendChild(btn)
+    return btn
   }
-  page.appendChild(bar)
+  // Inline strokes rather than glyphs: they inherit `currentColor`, so there is no icon font
+  // to load and nothing that can flash empty on the first frame of a match.
+  const stroke = (body: string) =>
+    `<svg class="hud-tool-icon" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`
+  const leaveMark = stroke(
+    '<path d="M12.5 3.5H7a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h5.5"/><path d="M9.5 10h7m0 0L14 7.5M16.5 10 14 12.5"/>'
+  )
+  const soundOnMark = stroke(
+    '<path d="M4 8.5v3h2.6L10 14.6V5.4L6.6 8.5H4z"/><path d="M12.4 8a3.4 3.4 0 0 1 0 4M14.7 5.8a6.5 6.5 0 0 1 0 8.4"/>'
+  )
+  const soundOffMark = stroke(
+    '<path d="M4 8.5v3h2.6L10 14.6V5.4L6.6 8.5H4z"/><path d="M12.6 8.4l4.2 3.2m0-3.2-4.2 3.2"/>'
+  )
+  const flagMark = stroke('<path d="M5.5 16.5v-13"/><path d="M5.5 4.5h8.5l-1.6 3.1 1.6 3.1h-8.5z"/>')
+  const expandMark = stroke(
+    '<path d="M3.5 7.6V3.5h4.1M16.5 7.6V3.5h-4.1M3.5 12.4v4.1h4.1M16.5 12.4v4.1h-4.1"/>'
+  )
 
-  const spinLabel = el('div', 'spin-label', 'Spin: 0.0 / 0.0')
-  bar.appendChild(spinLabel)
+  const leaveBtn = tool('Leave the match', leaveMark)
+  leaveBtn.onclick = () => leaveToLobby()
 
-  // The three session buttons, in one quiet cluster in the corner rather than the
-  // full-width bar they used to be: they are needed occasionally, not per shot.
-  const actions = el('div', 'control-actions')
-  const soundBtn = el('button', 'ghost small', isSoundMuted() ? 'Sound: off' : 'Sound: on')
+  const soundBtn = tool(
+    isSoundMuted() ? 'Sound: off' : 'Sound: on',
+    isSoundMuted() ? soundOffMark : soundOnMark
+  )
+  // `aria-pressed` carries the muted state, so the control reads as a toggle rather than as
+  // a button that happens to change its wording.
+  soundBtn.setAttribute('aria-pressed', String(isSoundMuted()))
   soundBtn.onclick = () => {
     const next = !isSoundMuted()
     setSoundMuted(next)
-    soundBtn.textContent = next ? 'Sound: off' : 'Sound: on'
+    soundBtn.innerHTML = next ? soundOffMark : soundOnMark
+    const label = next ? 'Sound: off' : 'Sound: on'
+    soundBtn.title = label
+    soundBtn.setAttribute('aria-label', label)
+    soundBtn.setAttribute('aria-pressed', String(next))
   }
-  const concedeBtn = el('button', 'ghost small', activeMatchIsPractice ? 'Finish' : 'Concede')
+
+  const concedeBtn = tool(
+    activeMatchIsPractice ? 'Finish the session' : 'Concede the match',
+    flagMark
+  )
   concedeBtn.onclick = () => {
     if (activeMatchIsPractice) void finishPractice()
     else askConcede()
   }
-  const leaveBtn = el('button', 'ghost small', 'Leave')
-  leaveBtn.onclick = () => leaveToLobby()
-  actions.append(soundBtn, concedeBtn, leaveBtn)
-  bar.appendChild(actions)
+
+  /**
+   * Fullscreen, entered only from this click. The API refuses a request that does not come
+   * from a gesture, so there is nothing to gain by asking earlier and a shot to lose by
+   * interrupting one.
+   */
+  const fullBtn = tool('Fullscreen', expandMark)
+  fullBtn.onclick = () => {
+    const leaving = document.fullscreenElement !== null
+    const change = leaving ? document.exitFullscreen() : document.documentElement.requestFullscreen()
+    // A refused request is not worth interrupting a shot over, and the label is corrected
+    // once the transition settles rather than guessed at before it does.
+    change
+      .then(() => {
+        const label = leaving ? 'Fullscreen' : 'Leave fullscreen'
+        fullBtn.title = label
+        fullBtn.setAttribute('aria-label', label)
+      })
+      .catch(() => {})
+  }
+
+  /**
+   * The controls, behind a question mark.
+   *
+   * This line of text used to sit under the table, where it was the widest thing on the
+   * screen and the only element that could push a match past one viewport. It is the same
+   * words, opened on demand, and the sticky dismissal is unchanged: closing it hides the
+   * control for the rest of the session, exactly as the × under the table did.
+   */
+  if (!hintDismissed) {
+    const helpBtn = el('button', 'hud-tool hud-tool--help hud-glass', '?') as HTMLButtonElement
+    helpBtn.type = 'button'
+    helpBtn.title = 'Controls'
+    helpBtn.setAttribute('aria-label', 'Controls')
+    helpBtn.setAttribute('aria-expanded', 'false')
+    const help = el('div', 'hud-pop hud-glass')
+    help.id = 'controls-help'
+    help.setAttribute('role', 'group')
+    help.hidden = true
+    helpBtn.setAttribute('aria-controls', help.id)
+    help.append(
+      el('p', undefined, 'Aim: mouse or touch'),
+      el('p', undefined, 'Power: drag the slider, hold to charge, or ↑/↓ to trim'),
+      el('p', undefined, 'Spin: ↑/↓ side, W/S top-bottom'),
+      el('p', undefined, 'Shoot: release or Space')
+    )
+    const closeHelp = el('button', 'hud-pop-close', '×')
+    closeHelp.title = 'Hide these controls for this session'
+    closeHelp.setAttribute('aria-label', 'Hide the controls hint')
+    closeHelp.onclick = () => {
+      hintDismissed = true
+      helpBtn.remove()
+      help.remove()
+    }
+    help.appendChild(closeHelp)
+    helpBtn.onclick = () => {
+      help.hidden = !help.hidden
+      helpBtn.setAttribute('aria-expanded', String(!help.hidden))
+    }
+    tools.append(helpBtn, help)
+  }
+
+  // The spin readout goes with the dial it describes: the number was the last item in the
+  // bar under the table, and the dial is the control it belongs to. The pointer maths reads
+  // the ball's own rect and the caption takes no pointer events, so the drag is unchanged.
+  const spinLabel = el('div', 'spin-label', 'Spin: 0.0 / 0.0')
+  hud.spinDialRoot.appendChild(spinLabel)
 
   app.appendChild(page)
   applyCanvasSize()
@@ -2127,7 +2282,7 @@ function renderGame(): void {
     // The 3D scene answers pointer questions by casting through the camera it is drawing
     // with, so the aim means the same thing from behind the cue ball as from overhead. Asked
     // for per gesture rather than captured once, because the camera is still easing towards
-    // its next position while the player is aiming ΓÇö and because a graphics error can take
+    // its next position while the player is aiming — and because a graphics error can take
     // the 3D scene away mid-game, leaving the flat renderer to answer instead.
     view: () =>
       scene3d
@@ -2138,7 +2293,7 @@ function renderGame(): void {
           }
         : undefined,
     // The only gesture that turns the camera between shots: a deliberate right- or
-    // middle-button drag. Hovering the pointer over the table never rotates anything ΓÇö
+    // middle-button drag. Hovering the pointer over the table never rotates anything —
     // it aims the cue, and the camera stands exactly where the last shot left it.
     onOrbit: (pixels) => scene3d?.orbitBy(pixels * CAMERA_ORBIT_PER_PIXEL),
     // The visit is only playable when the table has settled, which is the same
@@ -2152,7 +2307,7 @@ function renderGame(): void {
     },
     onChange: (aim) => {
       hud?.setPower(aim.power)
-      // The dial mirrors whatever wrote the spin ΓÇö arrows, its own drag, a reset ΓÇö
+      // The dial mirrors whatever wrote the spin — arrows, its own drag, a reset —
       // because both controls are views of this one pair of numbers.
       hud?.setSpin({ x: aim.spinX, y: aim.spinY })
       spinLabel.textContent = `Spin: ${aim.spinX.toFixed(1)} / ${aim.spinY.toFixed(1)}`
@@ -2210,7 +2365,7 @@ interface GameUpdatePayload {
  * counting on a view of a turn that is over. It is deliberately tolerant of a missing
  * field: a message with no timing attached means no clock, not a crash.
  *
- * Messages are also guarded against arriving out of order â€” a queued `frame:start`
+ * Messages are also guarded against arriving out of order — a queued `frame:start`
  * landing after a fresher `turn:clock` would otherwise rewind a clock that had already
  * been set. The server's own send time is the arbiter: an older message says nothing
  * about the clock that a newer one has not already said.
@@ -2257,7 +2412,7 @@ function isVisitPlayable(): boolean {
  *
  * A fresh visit starts with no spin applied, exactly as it starts with an empty
  * power bar: leftover english from a previous shot is a value the player is no
- * longer setting, and the one place it would still be visible ΓÇö the dial's dot ΓÇö
+ * longer setting, and the one place it would still be visible — the dial's dot —
  * would be lying about what the next shot will do. Fired wherever the visit's
  * power is reset, so both between-shot controls move together.
  */
@@ -2311,7 +2466,7 @@ function applyGameUpdate(data: GameUpdatePayload): void {
   // The clock is read here, alongside the score and the turn. A message carrying a
   // shot is the moment the timer freezes: the balls are moving, so no turn is being
   // timed, and the ring holds where it was rather than counting through an animation.
-  // Any other table message adopts the timing it carries â€” a fresh 30 when the table
+  // Any other table message adopts the timing it carries — a fresh 30 when the table
   // has settled on the same visit or a new one, nothing when the server has stopped
   // the clock outright.
   if (data.playback) shotTimer.freeze()
@@ -2365,8 +2520,8 @@ function applyGameUpdate(data: GameUpdatePayload): void {
       const d = ev.data as { winnerSeat: number }
       const show = (): void => {
         // The frames score moves with the verdict, not with the snapshot. It is the
-        // loudest spoiler in the game ΓÇö a frame won is a frame won, and there is no
-        // reading of an updated frame tally that is not the answer ΓÇö so it waits with
+        // loudest spoiler in the game — a frame won is a frame won, and there is no
+        // reading of an updated frame tally that is not the answer — so it waits with
         // the bell and the announcement. The HUD picks it up on the refresh that ends
         // the replay.
         framesWon = d.winnerSeat === 0 ? [framesWon[0] + 1, framesWon[1]] : [framesWon[0], framesWon[1] + 1]
@@ -2469,8 +2624,8 @@ function handleSocketEvents(socket: Socket): void {
   })
   socket.on('game:update', (data: GameUpdatePayload) => handleGameUpdate(data))
   // The clock's own channel. The room also changes its clock between table broadcasts
-  // â€” a fresh turn the moment a replay is released, a stop when the striker goes away
-  // â€” and those moments carry no frame of their own, so they are announced here and
+  // — a fresh turn the moment a replay is released, a stop when the striker goes away
+  // — and those moments carry no frame of their own, so they are announced here and
   // adopted like any other timing.
   socket.on('turn:clock', (data: { turn?: TurnTiming }) => {
     applyTurnTiming(data.turn ?? null)
@@ -2491,7 +2646,7 @@ function handleSocketEvents(socket: Socket): void {
     if (data.seat === mySeat) return
     opponentGone = true
     updateOpponentGone()
-    toast('Opponent disconnected â€” waiting for reconnect')
+    toast('Opponent disconnected — waiting for reconnect')
   })
   socket.on('opponent:reconnected', (data: { seat: number }) => {
     if (data.seat === mySeat) return
@@ -2503,14 +2658,14 @@ function handleSocketEvents(socket: Socket): void {
     'match:replay',
     (data: { events: Array<{ seq: number; type: string; data: unknown }> }) => {
       if (!data.events.length) return
-      toast(`Reconnected â€” missed ${data.events.length} event${data.events.length === 1 ? '' : 's'}`)
+      toast(`Reconnected — missed ${data.events.length} event${data.events.length === 1 ? '' : 's'}`)
       for (const ev of data.events) {
         if (ev.type === 'BALL_POTTED') {
           const d = ev.data as { ballId: number }
           toast(`Missed: potted ${ballName(d.ballId)}`)
         } else if (ev.type === 'FOUL') {
           const d = ev.data as { penalty: number; reason?: string }
-          toast(d.reason ? `Missed: foul â€” ${d.reason} (-${d.penalty})` : `Missed: foul (-${d.penalty})`, 'error')
+          toast(d.reason ? `Missed: foul — ${d.reason} (-${d.penalty})` : `Missed: foul (-${d.penalty})`, 'error')
         } else if (ev.type === 'FRAME_END') {
           const d = ev.data as { winnerSeat: number }
           toast(`Missed: frame won by ${seatName(d.winnerSeat)}`)
@@ -2546,15 +2701,15 @@ function handleSocketEvents(socket: Socket): void {
   socket.on('notification:new', (n: NotificationItem) => {
     notifications.unshift(n)
     if (panelOpen) panelEl?.classList.remove('open')
-    toast(`${n.title}${n.body && n.body !== n.title ? ' â€” ' + n.body : ''}`)
+    toast(`${n.title}${n.body && n.body !== n.title ? ' — ' + n.body : ''}`)
     refreshBell()
   })
 }
 
 /**
  * Whether this client is mid-placement: my visit, the cue ball in hand, and the
- * table settled. The frame's `cueInHandInD` says which restriction is in force ΓÇö
- * the D only at break-off, anywhere mid-frame ΓÇö and the whole presentation flow
+ * table settled. The frame's `cueInHandInD` says which restriction is in force —
+ * the D only at break-off, anywhere mid-frame — and the whole presentation flow
  * (camera, D overlay, ghost) keys off this one question.
  */
 function isPlacing(): boolean {
@@ -2844,7 +2999,7 @@ function loop(): void {
     if (scene3d) {
       scene3d?.dispose()
       scene3d = null
-      toast('Graphics error â€” switched to fallback renderer', 'error')
+      toast('Graphics error — switched to fallback renderer', 'error')
     }
     reportFatalError(error)
   }
@@ -2953,7 +3108,7 @@ function renderMaintenance(): void {
   el.className = isAdmin ? 'maintenance-banner' : 'maintenance-overlay'
   const p = document.createElement('p')
   p.textContent = isAdmin
-    ? 'Maintenance mode is ON â€” players are blocked. Turn it off in Admin â†’ Settings.'
+    ? 'Maintenance mode is ON - players are blocked. Turn it off in Admin -> Settings.'
     : 'The platform is briefly under maintenance. Please check back soon.'
   el.appendChild(p)
   document.body.appendChild(el)

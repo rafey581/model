@@ -31,16 +31,32 @@ describe('the home screen cards', () => {
     }
   })
 
-  it('gives every card exactly one piece of art, and it is either a file or a drawing', () => {
+  it('draws every card its own emblem, in code, with no image to fetch', () => {
     for (const card of HOME_CARDS) {
-      // One or the other, never both: the card renders whichever it is given, and two
-      // sources would mean one of them is a fallback nobody knows when it applies.
-      expect(Boolean(card.artUrl) !== Boolean(card.artSvg), `${card.id} has ${card.artUrl ? 'both' : 'no'} art source`).toBe(
-        true
-      )
-      if (card.artUrl) expect(card.artUrl.startsWith('/'), `${card.id} art is not served from the site root`).toBe(true)
-      if (card.artSvg) expect(card.artSvg.trimStart().startsWith('<?xml')).toBe(true)
+      // Drawn, not loaded: a card with a picture file in it is a request that can fail, a
+      // thing to letterbox and a second art slot to keep in step. One inline SVG, and the
+      // ids inside it are unique per card so three of them can share the page.
+      expect(card.emblem.startsWith('<svg'), `${card.id} has no emblem`).toBe(true)
+      expect(card.emblem.endsWith('</svg>'), `${card.id} emblem does not close`).toBe(true)
+      expect(card.emblem).not.toMatch(/<image\b|xlink:href|href=/)
+      expect(card.emblem, `${card.id} emblem is not hidden from a screen reader`).toContain('aria-hidden="true"')
+      expect(card.emblem, `${card.id} emblem has no gradient of its own`).toMatch(/<(linear|radial)Gradient/)
+      for (const id of card.emblem.match(/id="([^"]+)"/g) ?? []) {
+        expect(HOME_CARDS.filter((c) => c !== card).map((c) => c.emblem).join('')).not.toContain(id)
+      }
     }
+  })
+
+  it('gives every card a category badge and one fact promoted to its state', () => {
+    for (const card of HOME_CARDS) {
+      expect(card.badge.length).toBeGreaterThan(0)
+      // The state is one of the two facts rather than a third claim, so the card cannot end
+      // up printing the same words twice.
+      expect([0, 1]).toContain(card.statusIndex)
+      expect(card.chips[card.statusIndex]).toBeTruthy()
+    }
+    expect(HOME_CARDS.map((c) => c.badge)).toEqual(['Training', 'Online', 'Knockout'])
+    expect(HOME_CARDS.map((c) => c.chips[c.statusIndex])).toEqual(['No credits', 'Real players', '8 players'])
   })
 
   it('states two facts per card, and no price or prize among them', () => {
