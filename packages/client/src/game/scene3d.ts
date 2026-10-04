@@ -182,8 +182,12 @@ const STICK_SHAFT_BUTT_R = 13
 const STICK_BUTT_END_R = 15.5
 /** Chalk blue, bright enough to read as the tip at gameplay distance. */
 const STICK_TIP_COLOR = 0x5f92cf
-/** The stick's shadow strip on the cloth, in millimetres across. */
-const STICK_SHADOW_WIDTH = 26
+/** The stick's shadow strip on the cloth, in millimetres across. Thinner than cue butt (13mm vs 26mm). */
+const STICK_SHADOW_WIDTH = 13
+/** The stick's shadow color on the cloth (pure black). */
+const STICK_SHADOW_COLOR = 0x000000
+/** Opacity of the stick's shadow strip. */
+const STICK_SHADOW_OPACITY = 0.25
 /** How fast the stick's shadow fades in and out, per second. */
 const STICK_SHADOW_FADE_RATE = 14
 
@@ -192,24 +196,24 @@ const STICK_SHADOW_FADE_RATE = 14
  */
 /** The ribbons' height above the cloth, in millimetres. */
 const AIM_RIBBON_Y = 0.6
-/** LINE 1 — the shot line, from the cue ball's surface to the contact. */
+/** LINE 1 — the shot line, from the cue ball's surface to the contact or cushion. */
 const AIM_LINE1_COLOR = 0xffffff
-const AIM_LINE1_WIDTH = 3
+const AIM_LINE1_WIDTH = 5.5
 const AIM_LINE1_OPACITY = 0.9
-/** The contact ring — hollow, the size of the ball it wraps, nothing inside. */
+/** The contact ring — hollow, the size of the ball it wraps, nothing inside. Shown only when hitting NO ball. */
 const AIM_RING_COLOR = 0xffffff
 const AIM_RING_OPACITY = 0.85
 const AIM_RING_STROKE_MM = 1.5
 const AIM_RING_Y = 1.1
 /** LINE 2 — the object ball's line, away along the line of centres. */
 const AIM_LINE2_COLOR = 0x3bd16f
-const AIM_LINE2_WIDTH = 3
-const AIM_LINE2_LENGTH = 160
+const AIM_LINE2_WIDTH = 5.5
+const AIM_LINE2_LENGTH = BALL_RADIUS * 6
 const AIM_LINE2_OPACITY = 0.85
 /** LINE 3 — the cue ball's tangent after the contact, when one is worked out. */
 const AIM_LINE3_COLOR = 0xffffff
-const AIM_LINE3_WIDTH = 2.5
-const AIM_LINE3_LENGTH = 105
+const AIM_LINE3_WIDTH = 5.0
+const AIM_LINE3_LENGTH = BALL_RADIUS * 4
 const AIM_LINE3_OPACITY = 0.6
 
 function feltTexture(): THREE.CanvasTexture {
@@ -431,42 +435,49 @@ function contactShadowTexture(): THREE.CanvasTexture {
 }
 
 /**
- * The stick's shadow strip: dark at the centre of the cue's line, feathered to
- * nothing across its width, and out toward the butt along its length. u runs
- * along the stick (dark at the ball end), v across it.
+ * The stick's shadow strip: soft edges across width, fading along the length.
+ * Fades to nothing at the butt end (u=0) and dissolves before touching the cue ball (u=1).
+ * Black pixels with alpha channel doing all attenuation.
  */
 function stickShadowTexture(): THREE.CanvasTexture {
   return cachedTexture('stick-shadow', () => {
-    const w = 512
-    const h = 128
+    const w = 256
+    const h = 64
     const canvas = document.createElement('canvas')
     canvas.width = w
     canvas.height = h
     const ctx = canvas.getContext('2d')!
-    // Across the width: one soft band, darkest under the shaft's core.
-    const across = ctx.createLinearGradient(0, 0, 0, h)
-    across.addColorStop(0, 'rgba(0,0,0,0)')
-    across.addColorStop(0.5, 'rgba(0,0,0,0.5)')
-    across.addColorStop(1, 'rgba(0,0,0,0)')
-    ctx.fillStyle = across
-    ctx.fillRect(0, 0, w, h)
-    // Along the length: full at the tip end, thinning to nothing at the butt, so
-    // the strip dissolves behind the player's bridge hand rather than ending.
-    const along = ctx.createLinearGradient(0, 0, w, 0)
-    along.addColorStop(0, 'rgba(255,255,255,1)')
-    along.addColorStop(0.75, 'rgba(255,255,255,0.55)')
-    along.addColorStop(1, 'rgba(255,255,255,0)')
-    ctx.globalCompositeOperation = 'destination-out'
-    ctx.fillStyle = along
-    ctx.fillRect(0, 0, w, h)
+    const img = ctx.createImageData(w, h)
+    const d = img.data
+    for (let y = 0; y < h; y++) {
+      const v = y / (h - 1)
+      const across = Math.sin(v * Math.PI)
+      for (let x = 0; x < w; x++) {
+        const u = x / (w - 1)
+        let along = 0
+        if (u < 0.8) {
+          const t = u / 0.8
+          along = t * t * (3 - 2 * t)
+        } else {
+          const t = (1 - u) / 0.2
+          along = t * t * (3 - 2 * t)
+        }
+        const a = Math.round(255 * across * along)
+        const i = (y * w + x) * 4
+        d[i] = 0
+        d[i + 1] = 0
+        d[i + 2] = 0
+        d[i + 3] = a
+      }
+    }
+    ctx.putImageData(img, 0, 0)
     return new THREE.CanvasTexture(canvas)
   })
 }
 
 /**
- * The shared shape of every aim ribbon: feathered to nothing across its width,
- * solid along the first 70% of its length, dissolving at the far end. White, so
- * the material's tint is the only colour in it; alpha does all the work.
+ * Open-table aim ribbon: feathered across width, solid first 70%,
+ * last 30% fading to 0 toward the cushion.
  */
 function aimRibbonTexture(): THREE.CanvasTexture {
   return cachedTexture('aim-ribbon', () => {
@@ -480,13 +491,73 @@ function aimRibbonTexture(): THREE.CanvasTexture {
     const d = img.data
     for (let y = 0; y < h; y++) {
       const v = y / (h - 1)
-      // Feathered edges: full only across the middle of the strip, gone at the rims.
       const across = Math.min(1, Math.min(v, 1 - v) / 0.28)
       for (let x = 0; x < w; x++) {
         const u = x / (w - 1)
-        // Solid to 70% of the length, then a smooth fade to nothing at the end.
         const along = u < 0.7 ? 1 : 1 - (u - 0.7) / 0.3
         const a = Math.round(255 * across * along * along)
+        const i = (y * w + x) * 4
+        d[i] = 255
+        d[i + 1] = 255
+        d[i + 2] = 255
+        d[i + 3] = a
+      }
+    }
+    ctx.putImageData(img, 0, 0)
+    return new THREE.CanvasTexture(canvas)
+  })
+}
+
+/**
+ * Aim ribbon for ball contact: feathered across width, solid to the contact point.
+ */
+function aimRibbonSolidTexture(): THREE.CanvasTexture {
+  return cachedTexture('aim-ribbon-solid', () => {
+    const w = 256
+    const h = 64
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')!
+    const img = ctx.createImageData(w, h)
+    const d = img.data
+    for (let y = 0; y < h; y++) {
+      const v = y / (h - 1)
+      const across = Math.min(1, Math.min(v, 1 - v) / 0.28)
+      for (let x = 0; x < w; x++) {
+        const a = Math.round(255 * across)
+        const i = (y * w + x) * 4
+        d[i] = 255
+        d[i + 1] = 255
+        d[i + 2] = 255
+        d[i + 3] = a
+      }
+    }
+    ctx.putImageData(img, 0, 0)
+    return new THREE.CanvasTexture(canvas)
+  })
+}
+
+/**
+ * Aim ribbon trail: feathered across width, fading from 1 to 0 along its length.
+ */
+function aimRibbonTrailTexture(): THREE.CanvasTexture {
+  return cachedTexture('aim-ribbon-trail', () => {
+    const w = 256
+    const h = 64
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')!
+    const img = ctx.createImageData(w, h)
+    const d = img.data
+    for (let y = 0; y < h; y++) {
+      const v = y / (h - 1)
+      const across = Math.min(1, Math.min(v, 1 - v) / 0.28)
+      for (let x = 0; x < w; x++) {
+        const u = x / (w - 1)
+        const along = 1 - u
+        const a = Math.round(255 * across * along)
         const i = (y * w + x) * 4
         d[i] = 255
         d[i + 1] = 255
@@ -977,6 +1048,7 @@ export class Scene3D {
   private cvw: number
   private cvh: number
   private aimRibbon1!: THREE.Mesh
+  private aimRibbon1Open!: THREE.Mesh
   private aimRibbon2!: THREE.Mesh
   private aimRibbon3!: THREE.Mesh
   private contactRing!: THREE.Mesh
@@ -2279,13 +2351,16 @@ const outerL = APRON_OUTER_L
     // style: no dashes, no arrowheads, no dots, no glow — the lines themselves
     // carry the whole story. All of them are strips of cloth-level light sharing
     // one feathered, far-fading texture, re-pointed every frame.
-    const ribbonTex = aimRibbonTexture()
-    this.aimRibbon1 = this.buildRibbon(ribbonTex, AIM_LINE1_COLOR, AIM_LINE1_OPACITY, AIM_RIBBON_Y)
-    this.aimRibbon2 = this.buildRibbon(ribbonTex, AIM_LINE2_COLOR, AIM_LINE2_OPACITY, AIM_RIBBON_Y + 0.1)
-    this.aimRibbon3 = this.buildRibbon(ribbonTex, AIM_LINE3_COLOR, AIM_LINE3_OPACITY, AIM_RIBBON_Y + 0.2)
+    const ribbonTexSolid = aimRibbonSolidTexture()
+    const ribbonTexFade = aimRibbonTexture()
+    const ribbonTexTrail = aimRibbonTrailTexture()
+    this.aimRibbon1 = this.buildRibbon(ribbonTexSolid, AIM_LINE1_COLOR, AIM_LINE1_OPACITY, AIM_RIBBON_Y)
+    this.aimRibbon1Open = this.buildRibbon(ribbonTexFade, AIM_LINE1_COLOR, AIM_LINE1_OPACITY, AIM_RIBBON_Y)
+    this.aimRibbon2 = this.buildRibbon(ribbonTexTrail, AIM_LINE2_COLOR, AIM_LINE2_OPACITY, AIM_RIBBON_Y + 0.1)
+    this.aimRibbon3 = this.buildRibbon(ribbonTexTrail, AIM_LINE3_COLOR, AIM_LINE3_OPACITY, AIM_RIBBON_Y + 0.2)
 
     // The contact ring: a hollow circle the size of the ball it wraps, with
-    // nothing inside it, at the point the cue ball is lined up to touch.
+    // nothing inside it, at the cushion end when aiming at open table.
     this.contactRing = new THREE.Mesh(
       new THREE.RingGeometry(BALL_RADIUS - AIM_RING_STROKE_MM, BALL_RADIUS, 48),
       new THREE.MeshBasicMaterial({
@@ -2349,7 +2424,12 @@ const outerL = APRON_OUTER_L
     // follows the stick's angle and pull-back the same way the stick itself does.
     this.stickShadow = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
-      new THREE.MeshBasicMaterial({ map: stickShadowTexture(), transparent: true, depthWrite: false })
+      new THREE.MeshBasicMaterial({
+        map: stickShadowTexture(),
+        color: STICK_SHADOW_COLOR,
+        transparent: true,
+        depthWrite: false
+      })
     )
     this.stickShadow.rotation.x = -Math.PI / 2
     this.stickShadow.renderOrder = 1
@@ -2755,24 +2835,36 @@ const outerL = APRON_OUTER_L
       length = far
     }
     const lineAngle = guide ? Math.atan2(guide.contact.y - cueBall.y, guide.contact.x - cueBall.x) : aim.angle
-    this.setRibbon(
-      this.aimRibbon1,
-      cx + Math.cos(lineAngle) * BALL_RADIUS,
-      cz + Math.sin(lineAngle) * BALL_RADIUS,
-      lineAngle,
-      Math.max(0, length - BALL_RADIUS),
-      AIM_LINE1_WIDTH
-    )
 
     if (guide) {
+      this.setRibbon(
+        this.aimRibbon1,
+        cx + Math.cos(lineAngle) * BALL_RADIUS,
+        cz + Math.sin(lineAngle) * BALL_RADIUS,
+        lineAngle,
+        Math.max(0, length - BALL_RADIUS),
+        AIM_LINE1_WIDTH
+      )
+      this.aimRibbon1Open.visible = false
+      this.contactRing.visible = false
       this.showContactMarker(guide)
     } else {
-      // Nothing in the way: no ring, and neither the object ball's line nor the
-      // tangent exists. Every one has to be cleared, or a stale ribbon left on
-      // the cloth would claim a ball was in the shot.
-      this.contactRing.visible = false
+      // Nothing in the way: Line 1 runs to cushion with last 30% fade, ring at end, Lines 2 & 3 hidden
+      this.setRibbon(
+        this.aimRibbon1Open,
+        cx + Math.cos(lineAngle) * BALL_RADIUS,
+        cz + Math.sin(lineAngle) * BALL_RADIUS,
+        lineAngle,
+        Math.max(0, length - BALL_RADIUS),
+        AIM_LINE1_WIDTH
+      )
+      this.aimRibbon1.visible = false
       this.aimRibbon2.visible = false
       this.aimRibbon3.visible = false
+      const endX = cx + Math.cos(lineAngle) * length
+      const endZ = cz + Math.sin(lineAngle) * length
+      this.contactRing.position.set(endX, AIM_RING_Y, endZ)
+      this.contactRing.visible = true
     }
 
     // The tip sits `tipGap` behind the ball's centre, and the stick extends a
@@ -2812,25 +2904,17 @@ const outerL = APRON_OUTER_L
   }
 
   /**
-   * Rings the target ball and lays the two shorter lines: the object ball's own
-   * path away along the line of centres, and the cue ball's tangent after the
-   * contact when the guide worked one out.
+   * Lays the two departure lines: the object ball's own path away along the line
+   * of centres, and the cue ball's deflection tangent. The contact ring is kept hidden.
    */
   private showContactMarker(guide: AimGuide): void {
-    // The contact point is on the target's surface, so the target's centre is one
-    // radius further along the line of centres. The ring goes round that ball.
-    const targetX = guide.contact.x + guide.lineOfCentres.x * BALL_RADIUS
-    const targetY = guide.contact.y + guide.lineOfCentres.y * BALL_RADIUS
-    this.contactRing.position.set(tableX(targetX), AIM_RING_Y, tableZ(targetY))
-    this.contactRing.visible = true
+    this.contactRing.visible = false
 
-    // LINE 2: the object ball's line, from its surface along the line of centres.
-    // The ball itself occludes the first radius of it, which is the broadcast
-    // look: the line emerges from the far side.
+    // LINE 2: the object ball's line, starting at the object ball surface along the line of centres.
     this.setRibbon(
       this.aimRibbon2,
-      tableX(guide.contact.x),
-      tableZ(guide.contact.y),
+      tableX(guide.contact.x + guide.lineOfCentres.x * (2 * BALL_RADIUS)),
+      tableZ(guide.contact.y + guide.lineOfCentres.y * (2 * BALL_RADIUS)),
       Math.atan2(guide.lineOfCentres.y, guide.lineOfCentres.x),
       AIM_LINE2_LENGTH,
       AIM_LINE2_WIDTH
@@ -2862,6 +2946,7 @@ const outerL = APRON_OUTER_L
 
   private hideAim(): void {
     this.aimRibbon1.visible = false
+    this.aimRibbon1Open.visible = false
     this.aimRibbon2.visible = false
     this.aimRibbon3.visible = false
     this.contactRing.visible = false
@@ -3109,7 +3194,7 @@ const outerL = APRON_OUTER_L
       this.stickShadowAlpha +=
         (this.stickShadowTarget - this.stickShadowAlpha) * (1 - Math.exp(-STICK_SHADOW_FADE_RATE * dt))
       const shadowMat = this.stickShadow.material as THREE.MeshBasicMaterial
-      shadowMat.opacity = this.stickShadowAlpha
+      shadowMat.opacity = this.stickShadowAlpha * STICK_SHADOW_OPACITY
       this.stickShadow.visible = this.stickShadowAlpha > 0.02
     }
     this.camera.updateMatrixWorld(true)
