@@ -914,9 +914,11 @@ th {
  * pointer at all and only its controls opt back in. Without it a HUD that happened to
  * cover a strip of cloth would silently turn that strip into a dead zone.
  *
- * The event banners (`.event-banner-layer`) are absolutely positioned against this box, so
- * they land in the middle of the screen in both the overhead and the aim view without
- * knowing which one is on.
+ * The transient messages used to be absolutely positioned against this box, which put them
+ * in the middle of the screen in both the overhead and the aim view without either view
+ * knowing about the other — and in the middle of the screen is the cloth. They are in the
+ * stack under the score capsule now (`.hud-toast`), which is above both views for the same
+ * reason and no longer covers the table while it is being read.
  */
 .hud {
   position: absolute;
@@ -1614,13 +1616,13 @@ th {
  * and stop: a row of them would be the widest thing on the left of the screen, and the left
  * corner is where a player's eye lands first.
  */
-.hud-tools-left {
+.hud-tools--left {
   flex-direction: column;
   align-items: flex-start;
 }
 
 /* Top-right: a row of four, on a wide screen. */
-.hud-tools-right {
+.hud-tools--right {
   flex-direction: row;
   align-items: flex-start;
   justify-content: flex-end;
@@ -1714,7 +1716,7 @@ th {
   pointer-events: auto;
 }
 
-.hud-tools-right .hud-pop {
+.hud-tools--right .hud-pop {
   left: auto;
   right: 0;
 }
@@ -1862,18 +1864,18 @@ th {
     display: grid;
   }
 
-  .hud-tools-right {
+  .hud-tools--right {
     flex-direction: column;
     align-items: flex-end;
     gap: 5px;
   }
 
-  .hud-tools-right > .hud-tool:not(.hud-tool--more) {
+  .hud-tools--right > .hud-tool:not(.hud-tool--more) {
     display: none;
   }
 
   /* Open: a short column of glass, anchored under the button it belongs to. */
-  .hud-tools-right.hud-more-open {
+  .hud-tools--right.hud-more-open {
     padding: 5px;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.08);
@@ -1885,14 +1887,39 @@ th {
       0 12px 28px rgba(0, 0, 0, 0.3);
   }
 
-  .hud-tools-right.hud-more-open > .hud-tool:not(.hud-tool--more) {
+  .hud-tools--right.hud-more-open > .hud-tool:not(.hud-tool--more) {
     display: grid;
   }
 
   /* A column hangs its popover to the left, or it runs off the right of the screen. */
-  .hud-tools-right .hud-pop {
+  .hud-tools--right .hud-pop {
     top: 0;
     right: calc(100% + 8px);
+  }
+}
+
+/**
+ * Narrow portrait phones: the names come out of the capsule.
+ *
+ * Below about 430px the capsule is ~260px wide, and after two 40px avatars, the score and
+ * the gaps there is about 40px left for each name — which at 14px Inter is three characters.
+ * A truncated name is worse than no name: it is not a name, it is a letter that looks like
+ * a mistake. So the avatars and the score stay and the names go, and identity falls to the
+ * gold turn ring on the active avatar, which is already carrying it.
+ *
+ * The threshold is arithmetic rather than a device guess: 430px is where the two names stop
+ * having 60px each, which is the narrowest that still shows about seven characters. At 430
+ * and up they are kept.
+ */
+@media (max-width: 430px) {
+  .hud-capsule-side .hud-name {
+    display: none;
+  }
+
+  /* With the names gone the pill is only avatars and a number, so it can be tighter. */
+  .hud-capsule {
+    gap: 8px;
+    padding: 5px 10px;
   }
 }
 
