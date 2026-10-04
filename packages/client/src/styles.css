@@ -253,6 +253,31 @@ body.game-mode {
 }
 
 /**
+ * The match screen is the viewport.
+ *
+ * `#app` above is an id selector, so it outranks every class in this file: its 1200px
+ * max-width and its 16px padding were being applied to the game column as well, which is
+ * what drew black bars either side of the table and a band of page above it. One id still
+ * beats one id only on order, so the game's own full-bleed values are declared with the
+ * same weight, after it.
+ *
+ * `position: fixed` rather than a height: the shell is out of flow entirely, so nothing
+ * else in the document can give it a scrollbar or push it off the top. `100dvh` is the
+ * dynamic viewport, so a phone browser's collapsing address bar cannot leave a strip of
+ * page under the table. The lobby shells still scroll; this one is not a page.
+ */
+#app.app-game {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/**
  * The game screen: the table, and nothing else, in one viewport.
  *
  * There is no app header here any more, and no controls bar under the table. The shell used
@@ -266,48 +291,59 @@ body.game-mode {
  * what lets the stage actually shrink below its content height.
  */
 .app-game {
-  max-width: none;
-  height: 100dvh;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr);
-  padding: 8px;
+  display: block;
 }
 
-/*
- * Two rows: the HUD, then the table.
+/**
+ * Everything on this screen is an overlay on the canvas.
  *
- * The HUD stays in the flow above the stage rather than floating over it. An overlay would
- * have bought the table a few more pixels, but every item in it - the pills, the chips, the
- * tool cluster - would then be sitting on the cloth, and nothing is allowed to do that. The
- * row is sized by its content, so it costs the table only the height of the pills.
+ * The page used to be two rows: a HUD strip, then the table. That cost the table the
+ * height of the strip and meant a phone in landscape had almost none left. The HUD is a
+ * layer over the cloth now — the canvas is the page — and this box is the positioning
+ * context both the canvas and that layer share.
+ *
+ * `pointer-events: none` is on the layer, not here: the canvas below it is what a pointer
+ * is aiming with, and a box that catches the pointer takes the gesture away from it.
+ * The individual controls opt back in (see `.hud-tools`, `.power-rail`, `.spin-dial`).
  */
 .game-page {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 8px;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
 }
 
+/**
+ * The stage is the whole viewport now.
+ *
+ * No flex centring and no padding: the canvas is sized to this box outright rather than
+ * fitted into it as a 2:1 rectangle, so what the camera has to work with is the real
+ * shape of the window. `topDownHeight` fits the whole table to whatever aspect it is
+ * given, which is why a table that is wider than the window or taller than it still
+ * arrives whole, centred, with the HUD floating over the empty margin.
+ */
 .table-stage {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  position: absolute;
+  inset: 0;
+  display: block;
   min-height: 0;
-  padding: 4px;
+  padding: 0;
 }
 
 /**
  * The frame is the canvas and nothing else.
  *
- * Padding here would shrink the content box away from the 2:1 the table is drawn in,
- * and the aim maths maps the canvas rectangle straight onto the table rectangle, so
- * the surround lives on the stage instead.
+ * The rounded card this used to be is gone: at full bleed a 14px radius and a drop
+ * shadow would show the page behind the corners, which is the one thing a full-screen
+ * table cannot have. The surround colour stays as the frame's own background, so the
+ * first frame before the renderer draws is the room rather than a white flash.
  */
 .table-frame {
-  position: relative;
+  position: absolute;
+  inset: 0;
   background: radial-gradient(circle at 50% 30%, #4a2c16, #2a1709);
-  border-radius: 14px;
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
+  border-radius: 0;
+  box-shadow: none;
   overflow: hidden;
 }
 
@@ -661,7 +697,8 @@ th {
 #game-canvas {
   width: 100%;
   height: 100%;
-  border-radius: 10px;
+  /* Full bleed: there is no card edge to round any more (see `.table-frame`). */
+  border-radius: 0;
   display: block;
 }
 
@@ -676,10 +713,10 @@ th {
  */
 .camera-toggle {
   position: absolute;
-  top: 10px;
-  left: 10px;
-  width: 38px;
-  height: 38px;
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  left: calc(env(safe-area-inset-left, 0px) + 10px);
+  width: 40px;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -710,16 +747,33 @@ th {
 }
 
 /**
- * Placement guidance, under the table. Same quiet one-liner style as the controls
- * hint: muted text that appears while a placement is being rejected and says why,
- * then disappears. Not a toast — this is continuous state, not an event.
+ * Placement guidance, floating over the table.
+ *
+ * Same quiet one-liner as before — muted text that appears while a placement is being
+ * rejected and says why, then disappears. Not a toast: this is continuous state, not an
+ * event. It was a row under the table, which put the one line of help on the screen in the
+ * one place a phone in landscape has no room for; it is pinned above the bottom edge now,
+ * which is the strip below the table a camera never puts a ball in.
+ *
+ * It takes no pointer events, so it cannot steal the click that would move the cue ball out
+ * of the spot it is complaining about.
  */
 .placement-hint {
+  position: absolute;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+  transform: translateX(-50%);
+  max-width: min(420px, calc(100vw - 200px));
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(10, 14, 20, 0.72);
+  border: 1px solid rgba(210, 153, 34, 0.35);
   text-align: center;
-  color: var(--timer-warn);
-  font-size: 13px;
-  padding: 4px 0 0;
-  min-height: 1.2em;
+  color: #f0c674;
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+  z-index: 5;
 }
 
 .placement-hint[hidden] {
@@ -764,8 +818,11 @@ th {
 }
 
 @media (max-width: 640px) {
+  /* The game shell used to narrow its own padding here. It is the viewport now, so there
+     is nothing to pad: `#app.app-game` sets zero and wins on specificity regardless. The
+     rule is kept only so the breakpoint still has somewhere to say something later. */
   .app-game {
-    padding: 6px;
+    padding: 0;
   }
 }
 
@@ -861,11 +918,25 @@ th {
  * Sized in viewport-relative units so the whole overlay shrinks with the table rather
  * than staying a fixed height and squeezing the cloth on a small screen.
  */
+/**
+ * The HUD layer.
+ *
+ * One box over the whole canvas, and the first of the two things the page puts on top of
+ * the table (`#app.game-page`'s other child is the stage). `pointer-events: none` is the
+ * important half: the canvas underneath is what a drag aims with, so this layer takes no
+ * pointer at all and only its controls opt back in. Without it a HUD that happened to
+ * cover a strip of cloth would silently turn that strip into a dead zone.
+ *
+ * The event banners (`.event-banner-layer`) are absolutely positioned against this box, so
+ * they land in the middle of the screen in both the overhead and the aim view without
+ * knowing which one is on.
+ */
 .hud {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  display: block;
+  pointer-events: none;
 }
 
 /*
@@ -876,8 +947,16 @@ th {
  * whose items carry their own glass, so the cloth is visible in the gaps between them and
  * each pill can be read on its own. `align-items: start` puts the three clusters on one line
  * rather than stretching them to the tallest, which keeps the row exactly as tall as a pill.
+ *
+ * Absolutely positioned against the layer above rather than sitting in its flow, and inset
+ * by the safe area on all three sides: on a notched phone in landscape the inset is the
+ * notch, and a score capsule sitting under one is unreadable.
  */
 .hud-top {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  right: calc(env(safe-area-inset-right, 0px) + 10px);
+  left: calc(env(safe-area-inset-left, 0px) + 10px);
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: start;
@@ -1647,7 +1726,7 @@ th {
 .power-rail {
   position: absolute;
   top: 50%;
-  right: clamp(6px, 1.4vw, 18px);
+  right: calc(env(safe-area-inset-right, 0px) + clamp(6px, 1.4vw, 18px));
   transform: translateY(-50%);
   display: flex;
   flex-direction: column;
@@ -1684,8 +1763,8 @@ th {
  */
 .spin-dial {
   position: absolute;
-  left: clamp(8px, 1.6vw, 20px);
-  bottom: clamp(8px, 1.6vw, 20px);
+  left: calc(env(safe-area-inset-left, 0px) + clamp(8px, 1.6vw, 20px));
+  bottom: calc(env(safe-area-inset-bottom, 0px) + clamp(8px, 1.6vw, 20px));
   width: 84px;
   height: 84px;
   display: flex;
@@ -2089,10 +2168,12 @@ button.bell::after {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
+  /* Above the placement hint, which owns the strip nearest the bottom edge. Both are
+     centred, so leaving this one at zero would stack the two notices on each other. */
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 56px);
   display: flex;
   justify-content: center;
-  padding: 10px;
+  padding: 0 10px;
   pointer-events: none;
   z-index: 4;
 }

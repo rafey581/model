@@ -8,7 +8,6 @@ import type { CueController } from './game/input.js'
 import { createHud, computePrizeCredits, describeBallOn, deriveHudState } from './game/hud.js'
 import type { Hud } from './game/hud.js'
 import { frameForHud } from './game/hudFrame.js'
-import { fitTableBox } from './game/layout.js'
 import { createShotTimer } from './game/shotTimerView.js'
 import type { TurnTiming } from './game/shotTimer.js'
 import type { ShotInput, ShotPlayback } from '@snooker/shared'
@@ -203,16 +202,33 @@ let hintDismissed = false
 /** What the table is worth, read once from the match rather than recomputed. */
 let matchPrizeCredits = 0
 /**
- * The ceiling for the canvas backing store's device pixel ratio. 1.5 keeps a
- * high-DPI screen sharper than plain 1× while capping the fragment load that 4K
- * panels (DPR 2+) would otherwise put on a weak GPU; the adaptive ladder below
- * steps between 1 and this, and never above it.
+ * The ceiling for the canvas backing store's device pixel ratio.
+ *
+ * Two of them, because the right answer is a function of the screen rather than of the
+ * code: a phone has far fewer pixels to shade than a desktop at the same CSS size, so a
+ * DPR-3 phone rendering a full-bleed table at 3x is shading three times what a laptop is
+ * for the same picture. `DPR_CAP_DESKTOP` is sharp enough that a 2x panel is drawn at its
+ * native density and no denser, and `DPR_CAP_MOBILE` is the fallback for a small screen.
+ *
+ * `dprCap` is where the adaptive ladder actually sits: it starts at the ceiling chosen
+ * for this screen and only ever steps down, never below 1 and never above the ceiling.
  */
-let dprCap = 1.5
+const DPR_CAP_DESKTOP = 2
+const DPR_CAP_MOBILE = 1.5
+/** Below this on either axis the screen is treated as a phone rather than a desktop. */
+const DPR_MOBILE_MAX_EDGE = 820
+
+let dprCap = DPR_CAP_DESKTOP
+let dprCeiling = DPR_CAP_DESKTOP
 let frameEma = 0
 let lastFrameTime = 0
 let slowFrames = 0
 let lastDprUpAt = 0
+
+/** The ratio ceiling for the screen in front of us, recomputed on every match. */
+function dprCeilingForScreen(): number {
+  return Math.min(window.innerWidth, window.innerHeight) <= DPR_MOBILE_MAX_EDGE ? DPR_CAP_MOBILE : DPR_CAP_DESKTOP
+}
 
 const BALL_NAMES: Record<number, string> = {
   16: 'yellow',
@@ -2004,23 +2020,31 @@ function enterMatch(matchId: string, isPractice = false): void {
 }
 
 /**
- * Fits the table to the space the layout has left over and sizes the canvas to match.
+ * Sizes the canvas to the space the layout has left over.
  *
- * Measured off the stage rather than the window, so the HUD and the controls can take
- * their space first and the page still ends up exactly one screen tall. The fitting
- * itself is in game/layout.ts, where it can be tested without a page.
+ * The stage is now the viewport (see `.game-page` / `.table-stage`), so there is nothing
+ * to fit the table into: the canvas takes the whole box, at whatever shape the window is.
+ * That is safe for both views because the cameras fit themselves to the aspect they are
+ * given — `topDownHeight` solves for whichever of length and width binds first — so the
+ * overhead view still arrives with the whole table in it, and the aim view gets a wider
+ * field of view on a wide window rather than bars down either side.
+ *
+ * The backing store is the CSS box times the device pixel ratio, capped (see `dprCap`),
+ * and the element's own CSS size stays 100%, so the renderer draws at the device's density
+ * without the layout ever being told about it.
+ *
+ * Measured off the stage rather than the window so the stage's own box is the truth. The
+ * ResizeObserver in `renderGame` calls this on every change to that box, which covers a
+ * window resize and an orientation change alike: a fixed, inset-0 stage is exactly the
+ * viewport, so it changes whenever the viewport does.
  */
 function applyCanvasSize(): void {
   const canvas = rgCanvas
   const stage = tableStageEl
   if (!canvas || !stage) return
-  const { width, height } = fitTableBox(stage.clientWidth, stage.clientHeight)
+  const width = Math.floor(stage.clientWidth)
+  const height = Math.floor(stage.clientHeight)
   if (width <= 0 || height <= 0) return
-  const frame = canvas.parentElement
-  if (frame instanceof HTMLElement) {
-    frame.style.width = `${width}px`
-    frame.style.height = `${height}px`
-  }
   const dpr = Math.min(dprCap, window.devicePixelRatio || 1)
   const w = Math.max(320, Math.floor(width * dpr))
   const h = Math.max(180, Math.floor(height * dpr))
@@ -2242,11 +2266,16 @@ function renderGame(): void {
   hud.spinDialRoot.appendChild(spinLabel)
 
   app.appendChild(page)
+  // The stage is a fixed, inset-0 box, so its content box is the viewport and this
+  // observer fires for a window resize and for an orientation change both — including
+  // the rotation that changes the shape of the screen from portrait to landscape and so
+  // changes the camera's aspect with it.
   applyCanvasSize()
   gameResizeObserver?.disconnect()
   gameResizeObserver = new ResizeObserver(() => applyCanvasSize())
   gameResizeObserver.observe(stage)
-  dprCap = 1.5
+  dprCeiling = dprCeilingForScreen()
+  dprCap = dprCeiling
   frameEma = 0
   slowFrames = 0
 
@@ -2942,9 +2971,11 @@ function loop(): void {
           applyCanvasSize()
           toast('Lowered graphics quality for smoother play', 'info')
         }
-        if (frameEma < 14 && dprCap < 1.5 && now - lastDprUpAt > 20000) {
+        // Back up to the ceiling for this screen, which is 2 on a desktop and 1.5 on a
+        // phone: the ladder restores the sharpness the device can take, and never more.
+        if (frameEma < 14 && dprCap < dprCeiling && now - lastDprUpAt > 20000) {
           lastDprUpAt = now
-          dprCap = 1.5
+          dprCap = dprCeiling
           applyCanvasSize()
         }
       }
