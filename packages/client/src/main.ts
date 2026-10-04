@@ -371,26 +371,29 @@ function header(options: { home?: boolean } = {}): HTMLElement {
 }
 
 /**
- * The two-view toggle.
+ * The two-view toggle's glyph, and which of the two it is right now.
  *
- * The glyph shows the view the button switches *to*, which is the more useful of the two
- * readings while you are looking at the other one. The mark is a lens ring with a diagram
- * inside it: from behind the cue ball, a ball on a horizon with the cue above it; from
- * overhead, the table's own rectangle with its centre line.
+ * AIM is a camera seen from the side — body, lens, and the little viewfinder bump on top —
+ * because that is the view you are in when you are lining a shot up. TOP_DOWN is the table's
+ * own footprint with a ball sitting on it, which is the other view. So the mark always
+ * describes the mode you are currently looking at, not the one the button would switch to.
+ *
+ * Both are drawn inside the same lens ring at the same 1.3 stroke weight, and they take their
+ * colour from `currentColor` so they inherit whatever the glass button is currently wearing.
  */
 function cameraSvg(mode: 'AIM' | 'TOP_DOWN'): string {
   const ink = 'currentColor'
   const diagram =
     mode === 'AIM'
-      ? '<circle cx="10" cy="11.9" r="2.1" fill="' +
+      ? '<path d="M8.1 7.3V6.1a0.8 0.8 0 0 1 0.8-0.8h2.2a0.8 0.8 0 0 1 0.8 0.8v1.2" fill="none" stroke="' +
         ink +
-        '"/>' +
-        '<path d="M3.4 15.5h13.2" stroke="' +
+        '" stroke-width="1.3" stroke-linejoin="round"/>' +
+        '<rect x="4.4" y="7.3" width="11.2" height="7.3" rx="1.6" fill="none" stroke="' +
         ink +
-        '" stroke-width="1.3" stroke-linecap="round"/>' +
-        '<path d="M10 4.1v3.9" stroke="' +
+        '" stroke-width="1.3"/>' +
+        '<circle cx="10" cy="10.95" r="2.25" fill="none" stroke="' +
         ink +
-        '" stroke-width="1.3" stroke-linecap="round"/>'
+        '" stroke-width="1.3"/>'
       : '<rect x="4.1" y="6.2" width="11.8" height="7.6" rx="1.5" fill="none" stroke="' +
         ink +
         '" stroke-width="1.3"/>' +
@@ -429,8 +432,11 @@ function buildCameraToggle(): HTMLButtonElement {
   btn.onclick = () => {
     setCameraMode(cameraMode === 'AIM' ? 'TOP_DOWN' : 'AIM')
   }
-  setCameraMode(cameraMode)
+  // Publish the element before asking it to paint itself. `setCameraMode` writes the glyph
+  // through `cameraToggleEl` and returns early when that is still null, so setting it after
+  // this call left the button built but empty until the player's first click.
   cameraToggleEl = btn
+  setCameraMode(cameraMode)
   return btn
 }
 
@@ -438,10 +444,12 @@ function setCameraMode(mode: 'AIM' | 'TOP_DOWN'): void {
   cameraMode = mode
   const btn = cameraToggleEl
   if (!btn) return
-  const switchingTo = mode === 'AIM' ? 'behind the cue ball' : 'overhead'
   btn.innerHTML = cameraSvg(mode)
-  btn.title = `Camera: ${mode === 'AIM' ? 'behind the cue ball' : 'overhead'} — switch to ${switchingTo}`
-  btn.setAttribute('aria-label', btn.title)
+  // A fixed name, and the state carried by aria-pressed rather than by the label: the glyph
+  // and the pressed styling already say which view this is, so a mode-dependent name would
+  // only repeat them out loud on every focus.
+  btn.title = 'Camera view'
+  btn.setAttribute('aria-label', 'Camera view')
   btn.setAttribute('aria-pressed', mode === 'TOP_DOWN' ? 'true' : 'false')
 }
 
