@@ -159,6 +159,34 @@ const CUSHION_COLOR = 0x1fae4a
 /** The cushion nose strip: brighter still, catching the lamp. */
 const NOSE_COLOR = 0x2bc75a
 
+/*
+ * STEP 3 — the balls, their contact with the cloth, and the cue stick.
+ */
+/** Ball resin: tight diffuse under the lacquer film. */
+const BALL_ROUGHNESS = 0.2
+/** The clearcoat's own roughness — the one crisp highlight a ball is known by. */
+const BALL_CLEARCOAT_ROUGHNESS = 0.1
+/** How much brighter than the palette's white the cue ball is drawn. */
+const CUE_BALL_BRIGHTEN = 1.08
+/** The contact disc's size, as a multiple of the ball's radius. */
+const BALL_SHADOW_PLANE = 2.6
+/** The contact disc's height above the cloth, in millimetres. */
+const BALL_SHADOW_Y = 0.5
+/** How far the contact disc leans off the ball's centre, away from the lamp overhead. */
+const BALL_SHADOW_LEAN_MM = 4.5
+/** The contact disc's stretch along that lean. */
+const BALL_SHADOW_STRETCH = 1.16
+/** The cue's silhouette: a thin tip running out to a thicker butt. */
+const STICK_TIP_R = 5.5
+const STICK_SHAFT_BUTT_R = 13
+const STICK_BUTT_END_R = 15.5
+/** Chalk blue, bright enough to read as the tip at gameplay distance. */
+const STICK_TIP_COLOR = 0x5f92cf
+/** The stick's shadow strip on the cloth, in millimetres across. */
+const STICK_SHADOW_WIDTH = 26
+/** How fast the stick's shadow fades in and out, per second. */
+const STICK_SHADOW_FADE_RATE = 14
+
 function feltTexture(): THREE.CanvasTexture {
   return cachedTexture('felt', () => {
     // 512×512, one tile across the whole bed. The old 2048×1024 canvas cost VRAM and
@@ -390,6 +418,39 @@ function glowTexture(): THREE.CanvasTexture {
     grad.addColorStop(1, 'rgba(255,200,110,0)')
     ctx.fillStyle = grad
     ctx.fillRect(0, 0, size, size)
+    return new THREE.CanvasTexture(canvas)
+  })
+}
+
+/**
+ * The stick's shadow strip: dark at the centre of the cue's line, feathered to
+ * nothing across its width, and out toward the butt along its length. u runs
+ * along the stick (dark at the ball end), v across it.
+ */
+function stickShadowTexture(): THREE.CanvasTexture {
+  return cachedTexture('stick-shadow', () => {
+    const w = 512
+    const h = 128
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')!
+    // Across the width: one soft band, darkest under the shaft's core.
+    const across = ctx.createLinearGradient(0, 0, 0, h)
+    across.addColorStop(0, 'rgba(0,0,0,0)')
+    across.addColorStop(0.5, 'rgba(0,0,0,0.5)')
+    across.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = across
+    ctx.fillRect(0, 0, w, h)
+    // Along the length: full at the tip end, thinning to nothing at the butt, so
+    // the strip dissolves behind the player's bridge hand rather than ending.
+    const along = ctx.createLinearGradient(0, 0, w, 0)
+    along.addColorStop(0, 'rgba(255,255,255,1)')
+    along.addColorStop(0.75, 'rgba(255,255,255,0.55)')
+    along.addColorStop(1, 'rgba(255,255,255,0)')
+    ctx.globalCompositeOperation = 'destination-out'
+    ctx.fillStyle = along
+    ctx.fillRect(0, 0, w, h)
     return new THREE.CanvasTexture(canvas)
   })
 }
@@ -756,15 +817,17 @@ class BallRig {
   riseFrom = new THREE.Vector3()
 
   constructor(radius: number, color: number, shadowTex: THREE.CanvasTexture) {
-    // Phenolic resin look, without the clearcoat pass. A tight roughness with a
-    // strong environment map gives the hard specular highlight the ball is known by;
-    // MeshPhysicalMaterial's extra clearcoat layer cost a second shading pass per
-    // ball for a sheen the env map already supplies. Emissive stays zero: it is only
-    // ever set on highlight, and setting it costs nothing while unlit.
-    this.material = new THREE.MeshStandardMaterial({
+    // Phenolic resin: a tight diffuse under a clearcoat film. The coat is what
+    // carries the ball's one crisp highlight off the lamp, and the env map's
+    // bright band is what the coat reflects between that highlight and the
+    // horizon. Emissive stays zero: it is only ever set on highlight, and setting
+    // it costs nothing while unlit.
+    this.material = new THREE.MeshPhysicalMaterial({
       color,
-      roughness: 0.12,
+      roughness: BALL_ROUGHNESS,
       metalness: 0.0,
+      clearcoat: 1,
+      clearcoatRoughness: BALL_CLEARCOAT_ROUGHNESS,
       emissive: 0x000000,
       envMapIntensity: 1.2
     })
@@ -780,9 +843,13 @@ class BallRig {
       transparent: true,
       depthWrite: false
     })
-    this.blob = new THREE.Mesh(new THREE.PlaneGeometry(radius * 3.4, radius * 3.4), blobMat)
+    this.blob = new THREE.Mesh(new THREE.PlaneGeometry(radius * BALL_SHADOW_PLANE, radius * BALL_SHADOW_PLANE), blobMat)
     this.blob.rotation.x = -Math.PI / 2
-    this.blob.position.y = 0.6
+    // The group's origin rides at the ball's centre, so the disc is hung below it
+    // onto the cloth: half a millimetre up, the same sliver the aim ribbons sit at.
+    // Under a sinking ball it slides beneath the cloth and the depth test retires
+    // it, which is the potted ball's shadow disappearing for free.
+    this.blob.position.y = BALL_SHADOW_Y - radius
     this.blob.renderOrder = 1
     this.group.add(this.blob)
   }
@@ -824,6 +891,22 @@ class BallRig {
       this.firstSeen = false
     }
     this.target.set(targetX, BALL_RADIUS, targetZ)
+    // The contact disc leans and stretches away from the table's centre, where the
+    // lamp hangs: that is the oblique part of the light, and it is the direction a
+    // real shadow would take. Dead centre there is nothing to lean towards.
+    const centreDist = Math.hypot(targetX, targetZ)
+    if (centreDist > 40) {
+      const nx = targetX / centreDist
+      const nz = targetZ / centreDist
+      this.blob.position.set(nx * BALL_SHADOW_LEAN_MM, BALL_SHADOW_Y - BALL_RADIUS, nz * BALL_SHADOW_LEAN_MM)
+      // With the disc lying flat, its spin maps its local +X onto the cloth; pointing
+      // that axis along the lean is what makes the stretch read as a direction.
+      this.blob.rotation.z = Math.atan2(-nz, nx)
+      this.blob.scale.set(BALL_SHADOW_STRETCH, 1, 1)
+    } else {
+      this.blob.position.set(0, BALL_SHADOW_Y - BALL_RADIUS, 0)
+      this.blob.scale.set(1, 1, 1)
+    }
     this.material.emissive.setHex(highlight ? 0x7a5c10 : 0x000000)
   }
 
@@ -858,6 +941,11 @@ export class Scene3D {
   private cuePathLine!: THREE.Line
   private spinLine!: THREE.Line
   private stick!: THREE.Group
+  /** The stick's soft shadow strip on the cloth, following its angle and pull-back. */
+  private stickShadow!: THREE.Mesh
+  /** The strip's current and target opacity, so it fades rather than cuts. */
+  private stickShadowAlpha = 0
+  private stickShadowTarget = 0
   private lastTime = 0
   private immediate = false
   /**
@@ -2235,25 +2323,29 @@ const outerL = APRON_OUTER_L
     // ferrule and a chalked blue tip. Geometry shares the stick's own axis (+y is
     // toward the tip), so every part is positioned along it.
     this.stick = new THREE.Group()
-    const shaftMat = new THREE.MeshStandardMaterial({
+    const shaftMat = new THREE.MeshPhysicalMaterial({
       map: cueWoodTexture('cue-ash', { r: 214, g: 178, b: 122 }, 26),
-      roughness: 0.42,
-      metalness: 0.0
-    })
-    const buttMat = new THREE.MeshStandardMaterial({
-      map: cueWoodTexture('cue-maple', { r: 74, g: 44, b: 26 }, 16),
       roughness: 0.38,
-      metalness: 0.0
+      metalness: 0.0,
+      clearcoat: 0.5,
+      clearcoatRoughness: 0.3
+    })
+    const buttMat = new THREE.MeshPhysicalMaterial({
+      map: cueWoodTexture('cue-maple', { r: 74, g: 44, b: 26 }, 16),
+      roughness: 0.34,
+      metalness: 0.0,
+      clearcoat: 0.5,
+      clearcoatRoughness: 0.3
     })
     const ferruleMat = new THREE.MeshStandardMaterial({ color: 0xd8b15c, roughness: 0.25, metalness: 0.9 })
-    const chalkMat = new THREE.MeshStandardMaterial({ color: 0x3a6ea5, roughness: 0.95, metalness: 0.0 })
-    // Shaft: taper from the 9mm tip end to the 12.5mm joint, 1200mm long.
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 12.5, 1200, 20), shaftMat)
+    const chalkMat = new THREE.MeshStandardMaterial({ color: STICK_TIP_COLOR, roughness: 0.95, metalness: 0.0 })
+    // Shaft: a proper taper, thin at the tip running out to the joint.
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(STICK_TIP_R, STICK_SHAFT_BUTT_R, 1200, 20), shaftMat)
     shaft.position.y = 0
     // Same rule as the balls: the stick moves, the shadow map does not.
     shaft.castShadow = false
-    // Butt extension past the joint, 300mm, flaring slightly.
-    const butt = new THREE.Mesh(new THREE.CylinderGeometry(12.5, 14, 300, 20), buttMat)
+    // Butt extension past the joint, 300mm, flaring to the thick end.
+    const butt = new THREE.Mesh(new THREE.CylinderGeometry(STICK_SHAFT_BUTT_R, STICK_BUTT_END_R, 300, 20), buttMat)
     butt.position.y = -750
     butt.castShadow = false
     // Brass ferrule at the tip end of the shaft.
@@ -2263,11 +2355,25 @@ const outerL = APRON_OUTER_L
     const tip = new THREE.Mesh(new THREE.CylinderGeometry(5.2, 5.4, 14, 16), chalkMat)
     tip.position.y = 634
     // A thin decorative ring where the two timbers meet.
-    const joint = new THREE.Mesh(new THREE.CylinderGeometry(12.7, 12.7, 10, 20), ferruleMat)
+    const joint = new THREE.Mesh(new THREE.CylinderGeometry(STICK_SHAFT_BUTT_R + 0.2, STICK_SHAFT_BUTT_R + 0.2, 10, 20), ferruleMat)
     joint.position.y = -598
     this.stick.add(shaft, butt, ferrule, tip, joint)
     this.stick.visible = false
     this.scene.add(this.stick)
+
+    // The stick's shadow on the cloth: a soft strip under the line the cue takes,
+    // feathered at the edges and fading toward the butt. It is a texture rather
+    // than a shadow map — the map is baked over static geometry only — and it
+    // follows the stick's angle and pull-back the same way the stick itself does.
+    this.stickShadow = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({ map: stickShadowTexture(), transparent: true, depthWrite: false })
+    )
+    this.stickShadow.rotation.x = -Math.PI / 2
+    this.stickShadow.renderOrder = 1
+    this.stickShadow.frustumCulled = false
+    this.stickShadow.visible = false
+    this.scene.add(this.stickShadow)
   }
 
   /**
@@ -2528,7 +2634,18 @@ const outerL = APRON_OUTER_L
       seen.add(ball.id)
       let rig = this.balls.get(ball.id)
       if (!rig) {
-        rig = new BallRig(BALL_RADIUS, ballColor(ball.id), contactShadowTexture())
+        // The cue ball is lifted just off the palette's white: beside fifteen
+        // saturated colours under the same warm lamp, a plain white reads grey.
+        const base = ballColor(ball.id)
+        let tint = base
+        if (ball.id === BALL_IDS.CUE) {
+          const lifted = new THREE.Color(base).multiplyScalar(CUE_BALL_BRIGHTEN)
+          lifted.r = Math.min(1, lifted.r)
+          lifted.g = Math.min(1, lifted.g)
+          lifted.b = Math.min(1, lifted.b)
+          tint = lifted.getHex()
+        }
+        rig = new BallRig(BALL_RADIUS, tint, contactShadowTexture())
         this.balls.set(ball.id, rig)
         this.scene.add(rig.group)
       }
@@ -2678,6 +2795,17 @@ const outerL = APRON_OUTER_L
     const up = new THREE.Vector3(0, 1, 0)
     const target = new THREE.Vector3(dir.x, 0, dir.z).normalize()
     this.stick.quaternion.setFromUnitVectors(up, target)
+
+    // The shadow strip under the line the stick takes: from the ball out past the
+    // butt, flat on the cloth, spun to the shot's heading. The length follows the
+    // pull-back, so loading the shot drags the shadow back with the stick.
+    const shadowLen = tipGap + 250
+    this.stickShadow.scale.set(shadowLen, STICK_SHADOW_WIDTH, 1)
+    this.stickShadow.position.set(cx - dir.x * shadowLen * 0.5, 0.55, cz - dir.z * shadowLen * 0.5)
+    // With the strip lying flat, its spin maps its local +X onto the cloth; the
+    // dark end of the texture is the one that has to land by the ball.
+    this.stickShadow.rotation.z = Math.atan2(-dir.z, dir.x)
+    this.stickShadowTarget = 1
   }
 
   /**
@@ -2761,6 +2889,7 @@ const outerL = APRON_OUTER_L
     this.objectArrow.visible = false
     this.cuePathLine.visible = false
     if (this.stick) this.stick.visible = false
+    if (this.stickShadow) this.stickShadowTarget = 0
   }
 
   /**
@@ -2998,6 +3127,14 @@ const outerL = APRON_OUTER_L
     // The camera eases after the balls have been moved, so the frame that goes to the
     // screen is the one the rig has just settled towards rather than the one before.
     this.stepCamera(dt)
+    // The stick's shadow fades with the stick rather than cutting out with it.
+    if (this.stickShadow) {
+      this.stickShadowAlpha +=
+        (this.stickShadowTarget - this.stickShadowAlpha) * (1 - Math.exp(-STICK_SHADOW_FADE_RATE * dt))
+      const shadowMat = this.stickShadow.material as THREE.MeshBasicMaterial
+      shadowMat.opacity = this.stickShadowAlpha
+      this.stickShadow.visible = this.stickShadowAlpha > 0.02
+    }
     this.camera.updateMatrixWorld(true)
     const center = new THREE.Vector3(0, 0, 0).project(this.camera)
     const ax = new THREE.Vector3(600, 0, 0).project(this.camera)
