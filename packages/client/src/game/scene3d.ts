@@ -1819,26 +1819,31 @@ const outerL = APRON_OUTER_L
       const geo = geoFor(p.radius)
       // Inner shadow ring on the bed around the mouth, softening the cloth edge.
       const shadow = new THREE.Mesh(geo.shadow, mouthShadowMat)
+      shadow.name = 'pocket-shadow'
       shadow.rotation.x = -Math.PI / 2
       shadow.position.set(x, CUSHION_H + 1.1, z)
       shadow.renderOrder = 4
       this.scene.add(shadow)
       // The throat: open-ended cylinder seen from inside, recessed below the bed.
       const throat = new THREE.Mesh(geo.throat, throatMat)
+      throat.name = 'pocket-throat'
       throat.position.set(x, CUSHION_H + 1.2 - 45, z)
       throat.renderOrder = 5
       this.scene.add(throat)
       // The bottom of the drop.
       const drop = new THREE.Mesh(geo.drop, dropMat)
+      drop.name = 'pocket-drop'
       drop.rotation.x = -Math.PI / 2
       drop.position.set(x, CUSHION_H + 1.2 - 90, z)
       this.scene.add(drop)
       // Leather cushion rim, brass-lipped.
       const lip = new THREE.Mesh(geo.lip, leatherMat)
+      lip.name = 'pocket-lip'
       lip.rotation.x = -Math.PI / 2
       lip.position.set(x, CUSHION_H + 2.4, z)
       this.scene.add(lip)
       const brass = new THREE.Mesh(geo.lip, brassLipMat)
+      brass.name = 'pocket-brass'
       brass.rotation.x = -Math.PI / 2
       brass.scale.set(0.82, 0.82, 1.35)
       brass.position.set(x, CUSHION_H + 3.0, z)
@@ -1850,6 +1855,7 @@ const outerL = APRON_OUTER_L
       // 96 meshes otherwise, all sharing one geometry.
       const stitchCount = 16
       const stitches = new THREE.InstancedMesh(geo.stitch, brassLipMat, stitchCount)
+      stitches.name = 'pocket-stitches'
       const m4 = new THREE.Matrix4()
       const q = new THREE.Quaternion()
       const e = new THREE.Euler()
