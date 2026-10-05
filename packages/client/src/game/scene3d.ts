@@ -5,7 +5,6 @@ import { computeAimGuide, type AimGuide, type AimGuideBall } from './aim.js'
 import { setTableTransform } from './renderer.js'
 import { ballColor } from './palette.js'
 const SHOW_CROWN_MOULDING = false
-
 import {
   type CameraRigState,
   type HeadingLatch,
@@ -145,11 +144,10 @@ const ROOM_WALL_COLOR = '#123a8a'
 /** The navy the wall fades to at the top. */
 const ROOM_WALL_TOP_COLOR = '#0c1c46'
 /** The floor: dark, so the lit table is the subject of the picture. */
-const ROOM_FLOOR_COLOR = '#0d1220'
+const ROOM_FLOOR_COLOR = '#7a2a33'
 /** The bed's colour: bright, saturated tournament green. */
 const CLOTH_COLOR = '#1a9a2e'
-/** How much of the cloth's woven normal map is left standing. Nearly zero: the weave stays as micro-detail, the visible pattern goes. */
-const CLOTH_NORMAL_STRENGTH = 0.06
+
 /** How much of the cushions' shared normal map is left standing. */
 const CUSHION_NORMAL_STRENGTH = 0.12
 /** The rail wood's light figure colour (earlywood), a dark polished brown. */
@@ -165,8 +163,36 @@ const NOSE_COLOR = 0x2bc75a
  * STEP 3 — the balls, their contact with the cloth, and the cue stick.
  */
 /** Ball resin: tight diffuse under the lacquer film. */
+// Renderer/tone mapping
+const TONE_MAPPING_MODE: 'neutral' | 'aces' = 'neutral'
+const TONE_EXPOSURE = 1.0
+
+// Wood / rails
+const RAIL_WOOD_TINT = '#5a2520'
+const APRON_SIDE_TINT = '#4a1d1a'
+
+// Cushions
+const CUSHION_FACE_COLOR = '#12782a'
+const CUSHION_TOP_COLOR = '#33c44d'
+const CUSHION_NOSE_COLOR = '#3fd05a'
+
+// Cloth / baize
+const CLOTH_COLOR_CENTER = '#27b83b'
+const CLOTH_COLOR_MID = '#1c9f32'
+const CLOTH_COLOR_EDGE = '#117823'
+const CLOTH_ROUGHNESS = 0.95
+const CLOTH_METALNESS = 0
+const CLOTH_SHEEN = 0.12
+const CLOTH_SHEEN_COLOR = '#4fd07a'
+const CLOTH_SHEEN_ROUGHNESS = 0.75
+const CLOTH_NORMAL_STRENGTH = 0.02
+const CLOTH_NOISE_STRENGTH = 0.02 // max 2% luminance
+const CLOTH_NOISE_SCALE_MM = 2 // cells < 2mm
+const CLOTH_MIPMAPS = true
+const CLOTH_ANISO_CAP = 16
+
 const BALL_ROUGHNESS = 0.2
-/** The clearcoat's own roughness — the one crisp highlight a ball is known by. */
+/** The clearcoat's own roughness - the one crisp highlight a ball is known by. */
 const BALL_CLEARCOAT_ROUGHNESS = 0.1
 /** How much brighter than the palette's white the cue ball is drawn. */
 const CUE_BALL_BRIGHTEN = 1.08
@@ -182,6 +208,7 @@ const BALL_SHADOW_STRETCH = 1.16
 const STICK_TIP_R = 5.5
 const STICK_SHAFT_BUTT_R = 13
 const STICK_BUTT_END_R = 15.5
+const CUE_LENGTH_MM = 1450
 /** Chalk blue, bright enough to read as the tip at gameplay distance. */
 const STICK_TIP_COLOR = 0x5f92cf
 /** The stick's shadow strip on the cloth, in millimetres across. Thinner than cue butt (13mm vs 26mm). */
@@ -192,6 +219,18 @@ const STICK_SHADOW_COLOR = 0x000000
 const STICK_SHADOW_OPACITY = 0.25
 /** How fast the stick's shadow fades in and out, per second. */
 const STICK_SHADOW_FADE_RATE = 14
+
+const SHADOW_STRETCH = 1.25
+const SHADOW_OFFSET_MM = 3
+const SHADOW_ALPHA = 0.65
+const SHADOW_CORE_ALPHA = 0.85
+
+const POCKET_HOLE_SCALE = 0.95
+const POCKET_HOLE_Y_MM = 0.9
+const POCKET_PLATE_COLOR = '#d9cfb4'
+const POCKET_PLATE_Y_MM = 2
+const POCKET_PLATE_EXTRA_MM = 60
+const POCKET_NET_COLOR = '#e6dcc2'
 
 /*
  * STEP 4 — the aim guide: thin soft ribbons on the cloth and one hollow ring.
@@ -232,33 +271,36 @@ function feltTexture(): THREE.CanvasTexture {
     // Tournament baize, tuned bright and saturated: the broadcast look has the bed
     // as the colour anchor of the picture, holding its green under the warm lamp
     // rather than darkening down toward it.
-    ctx.fillStyle = CLOTH_COLOR
+    const g = ctx.createRadialGradient(size * 0.5, size * 0.2, size * 0.1, size * 0.5, size * 0.5, size * 0.6)
+    g.addColorStop(0, CLOTH_COLOR_CENTER)
+    g.addColorStop(0.5, CLOTH_COLOR_MID)
+    g.addColorStop(1, CLOTH_COLOR_EDGE)
+    ctx.fillStyle = g
     ctx.fillRect(0, 0, size, size)
 
-    // Seamless baize: wrap-around noise, four offset copies, so a mip edge never
-    // shows a seam line and tiling stays invisible.
     let seed = 20260930
     const rand = (): number => {
       seed = (seed * 1103515245 + 12345) & 0x7fffffff
       return seed / 0x7fffffff
     }
-    ctx.fillStyle = 'rgba(255,255,255,0.035)'
-    for (let i = 0; i < 900; i++) {
+    ctx.fillStyle = `rgba(255,255,255,${CLOTH_NOISE_STRENGTH * 0.5})`
+    const noiseCount = 2200
+    for (let i = 0; i < noiseCount; i++) {
       const x = rand() * size
       const y = rand() * size
       for (const dx of [-size, 0, size]) {
         for (const dy of [-size, 0, size]) {
-          ctx.fillRect(x + dx, y + dy, 1.4, 1.4)
+          ctx.fillRect(x + dx, y + dy, 1.0, 1.0)
         }
       }
     }
-    ctx.fillStyle = 'rgba(0,0,0,0.05)'
-    for (let i = 0; i < 700; i++) {
+    ctx.fillStyle = `rgba(0,0,0,${CLOTH_NOISE_STRENGTH * 0.5})`
+    for (let i = 0; i < noiseCount; i++) {
       const x = rand() * size
       const y = rand() * size
       for (const dx of [-size, 0, size]) {
         for (const dy of [-size, 0, size]) {
-          ctx.fillRect(x + dx, y + dy, 1.4, 1.4)
+          ctx.fillRect(x + dx, y + dy, 1.0, 1.0)
         }
       }
     }
@@ -271,24 +313,7 @@ function feltTexture(): THREE.CanvasTexture {
     ctx.translate(size / 2, size / 2)
     ctx.rotate(-Math.PI / 5)
     ctx.translate(-size / 2, -size / 2)
-    ctx.fillStyle = 'rgba(255,255,255,0.022)'
-    for (let i = 0; i < 260; i++) {
-      const y = rand() * size
-      for (const dx of [-size, 0, size]) {
-        for (const dy of [-size, 0, size]) {
-          ctx.fillRect(dx, y + dy, size, 1)
-        }
-      }
-    }
-    ctx.fillStyle = 'rgba(0,0,0,0.018)'
-    for (let i = 0; i < 260; i++) {
-      const y = rand() * size
-      for (const dx of [-size, 0, size]) {
-        for (const dy of [-size, 0, size]) {
-          ctx.fillRect(dx, y + dy + 0.5, size, 1)
-        }
-      }
-    }
+
     ctx.restore()
 
     // Baulk line, the D and the spot marks, baked into the cloth: no line meshes,
@@ -335,10 +360,7 @@ function feltTexture(): THREE.CanvasTexture {
 
     const texture = new THREE.CanvasTexture(canvas)
     texture.colorSpace = THREE.SRGBColorSpace
-    // Trilinear mipmapping with the anisotropy cap is what stops the flicker:
-    // minified baize sampled without it shimmers at every grazing angle the cue
-    // camera has, and the shimmer reads as texture crawling during transitions.
-    texture.generateMipmaps = true
+    texture.generateMipmaps = CLOTH_MIPMAPS
     texture.minFilter = THREE.LinearMipmapLinearFilter
     texture.magFilter = THREE.LinearFilter
     texture.wrapS = THREE.RepeatWrapping
@@ -958,15 +980,14 @@ class BallRig {
     const blobMat = new THREE.MeshBasicMaterial({
       map: shadowTex,
       transparent: true,
-      depthWrite: false
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1
     })
-    this.blob = new THREE.Mesh(new THREE.PlaneGeometry(radius * BALL_SHADOW_PLANE, radius * BALL_SHADOW_PLANE), blobMat)
+    this.blob = new THREE.Mesh(new THREE.PlaneGeometry(radius * 1.5, radius * 1.5), blobMat)
     this.blob.rotation.x = -Math.PI / 2
-    // The group's origin rides at the ball's centre, so the disc is hung below it
-    // onto the cloth: half a millimetre up, the same sliver the aim ribbons sit at.
-    // Under a sinking ball it slides beneath the cloth and the depth test retires
-    // it, which is the potted ball's shadow disappearing for free.
-    this.blob.position.y = BALL_SHADOW_Y - radius
+    this.blob.position.y = 0.6
     this.blob.renderOrder = 1
     this.group.add(this.blob)
   }
@@ -1015,13 +1036,11 @@ class BallRig {
     if (centreDist > 40) {
       const nx = targetX / centreDist
       const nz = targetZ / centreDist
-      this.blob.position.set(nx * BALL_SHADOW_LEAN_MM, BALL_SHADOW_Y - BALL_RADIUS, nz * BALL_SHADOW_LEAN_MM)
-      // With the disc lying flat, its spin maps its local +X onto the cloth; pointing
-      // that axis along the lean is what makes the stretch read as a direction.
+      this.blob.position.set(nx * SHADOW_OFFSET_MM, 0.6, nz * SHADOW_OFFSET_MM)
       this.blob.rotation.z = Math.atan2(-nz, nx)
-      this.blob.scale.set(BALL_SHADOW_STRETCH, 1, 1)
+      this.blob.scale.set(SHADOW_STRETCH, 1, 1)
     } else {
-      this.blob.position.set(0, BALL_SHADOW_Y - BALL_RADIUS, 0)
+      this.blob.position.set(0, 0.6, 0)
       this.blob.scale.set(1, 1, 1)
     }
     this.material.emissive.setHex(highlight ? 0x7a5c10 : 0x000000)
@@ -1166,7 +1185,7 @@ export class Scene3D {
     this.renderer.setPixelRatio(1)
     this.renderer.setSize(width, height, false)
     // One query, one clamp, shared by every texture built after this line.
-    MAX_ANISO = Math.min(this.renderer.capabilities.getMaxAnisotropy(), 4)
+    MAX_ANISO = Math.min(this.renderer.capabilities.getMaxAnisotropy(), CLOTH_ANISO_CAP)
     this.renderer.shadowMap.enabled = true
     // PCFSoftShadowMap was deprecated in r186; PCFShadowMap with a radius is the
     // supported soft look, and the map is baked once so the filter costs per frame
@@ -1175,8 +1194,12 @@ export class Scene3D {
     // Everything this light can see is static, so the map is rendered exactly once —
     // the flag is raised after the scene is fully built and never touched again.
     this.renderer.shadowMap.autoUpdate = false
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping
-    this.renderer.toneMappingExposure = 1.35
+    if (TONE_MAPPING_MODE === 'neutral' && (THREE as any).NeutralToneMapping) {
+      this.renderer.toneMapping = (THREE as any).NeutralToneMapping
+    } else {
+      this.renderer.toneMapping = THREE.ACESFilmicToneMapping
+    }
+    this.renderer.toneMappingExposure = TONE_EXPOSURE
     // sRGB output, by its current name (outputEncoding was retired in r152).
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
 
@@ -1403,32 +1426,17 @@ export class Scene3D {
     const pad = APRON_PAD
     const cloth = new THREE.Mesh(
       new THREE.PlaneGeometry(TABLE_LENGTH, TABLE_WIDTH),
-      // High-grade matte baize: 0.88 roughness, a whisper of metalness. The texture
-      // carries the colour (mapped white, so tinting stays in one place) and the
-      // baked markings; mipmapping on that texture is what keeps this surface calm
-      // from the low cue angle.
-      // MeshPhysicalMaterial rather than Standard, and the reason is one term: sheen.
-      // Cloth is a fuzzy dielectric surface — light that hits it scatters sideways off
-      // millions of fibre ends rather than mirroring. Standard has no term for that, so
-      // the bed could only ever be "matte", and matte is what made it read as painted.
-      // Sheen adds a soft grazing-angle bloom along the far rail that the lamp's
-      // falloff cannot produce on its own. Clearcoat is deliberately NOT used here: the
-      // clearcoat lobe is glossy and specular, which is the opposite of baize.
       new THREE.MeshPhysicalMaterial({
         map: (this.feltTex = feltTexture()),
-        // Normal map at 60— so the weave threads land near a millimetre apart on the bed,
-        // which is the real pitch of worsted cloth. Any coarser and it reads as canvas.
         normalMap: feltNormalTexture(),
         normalScale: new THREE.Vector2(CLOTH_NORMAL_STRENGTH, CLOTH_NORMAL_STRENGTH),
         color: 0xffffff,
-        roughness: 0.94,
-        metalness: 0,
-        // Sheen colour is the cloth's own hue, slightly lifted: a white sheen would wash
-        // the bed out at grazing angles and kill the green.
-        sheen: 0.55,
-        sheenColor: new THREE.Color(0x4fd07a),
-        sheenRoughness: 0.75,
-        envMapIntensity: 0.35
+        roughness: CLOTH_ROUGHNESS,
+        metalness: CLOTH_METALNESS,
+        sheen: CLOTH_SHEEN,
+        sheenColor: new THREE.Color(CLOTH_SHEEN_COLOR),
+        sheenRoughness: CLOTH_SHEEN_ROUGHNESS,
+        envMapIntensity: 0.08
       })
     )
     cloth.rotation.x = -Math.PI / 2
@@ -1459,12 +1467,12 @@ const outerL = APRON_OUTER_L
     const apronMat = new THREE.MeshPhysicalMaterial({
       map: woodTexture(),
       roughnessMap: woodRoughnessTexture(),
-      color: 0xffffff,
-      roughness: 0.42,
+      color: new THREE.Color(RAIL_WOOD_TINT),
+      roughness: 0.38,
       metalness: 0,
-      clearcoat: 0.85,
-      clearcoatRoughness: 0.12,
-      envMapIntensity: 1.15
+      clearcoat: 0.4,
+      clearcoatRoughness: 0.3,
+      envMapIntensity: 0.35
     })
     // The main body: same outer footprint and same top face as the original box, so the
     // depth guard's 1mm cloth-to-apron gap is untouched. Only the faces *between* this
@@ -1485,22 +1493,22 @@ const outerL = APRON_OUTER_L
     const panelMat = new THREE.MeshPhysicalMaterial({
       map: woodTexture(),
       roughnessMap: woodRoughnessTexture(),
-      color: 0xffffff,
-      roughness: 0.48,
+      color: new THREE.Color(RAIL_WOOD_TINT),
+      roughness: 0.38,
       metalness: 0,
-      clearcoat: 0.7,
-      clearcoatRoughness: 0.15,
-      envMapIntensity: 1.0
+      clearcoat: 0.4,
+      clearcoatRoughness: 0.3,
+      envMapIntensity: 0.35
     })
     const mouldingMat = new THREE.MeshPhysicalMaterial({
       map: woodTexture(),
       roughnessMap: woodRoughnessTexture(),
-      color: 0xffffff,
+      color: new THREE.Color(RAIL_WOOD_TINT),
       roughness: 0.38,
       metalness: 0,
-      clearcoat: 0.9,
-      clearcoatRoughness: 0.1,
-      envMapIntensity: 1.2
+      clearcoat: 0.4,
+      clearcoatRoughness: 0.3,
+      envMapIntensity: 0.35
     })
 
     // Long faces (x-axis) - two panels each side, split at centre
@@ -1891,16 +1899,14 @@ const outerL = APRON_OUTER_L
     // only if the caller closes it, and this one's ends are swept open at the pocket
     // jaws where the segment is cut to length.
     const cushionMat = new THREE.MeshPhysicalMaterial({
-      color: CUSHION_COLOR,
+      color: new THREE.Color(CUSHION_FACE_COLOR),
       normalMap: feltNormalTexture(),
       normalScale: new THREE.Vector2(CUSHION_NORMAL_STRENGTH, CUSHION_NORMAL_STRENGTH),
-      roughness: 0.62,
+      roughness: 0.6,
       metalness: 0,
       side: THREE.DoubleSide,
-      sheen: 0.4,
-      sheenColor: new THREE.Color(0x45c46e),
-      sheenRoughness: 0.7,
-      envMapIntensity: 0.35
+      vertexColors: true,
+      envMapIntensity: 0.3
     })
     // The nose strip stays a separate material rather than being merged into the cushion:
 // real cushion rubber is compressed smooth along the strike line, so it takes a tighter
@@ -1908,16 +1914,13 @@ const outerL = APRON_OUTER_L
 // eye where the cushion is. With the profile below carrying the shape, this is now a
 // thin capping strip on the nose shoulder instead of a separate box beside it.
     const noseMat = new THREE.MeshPhysicalMaterial({
-      color: NOSE_COLOR,
+      color: new THREE.Color(CUSHION_NOSE_COLOR),
       normalMap: feltNormalTexture(),
       normalScale: new THREE.Vector2(CUSHION_NORMAL_STRENGTH, CUSHION_NORMAL_STRENGTH),
-      roughness: 0.42,
+      roughness: 0.35,
       metalness: 0,
       side: THREE.DoubleSide,
-      sheen: 0.35,
-      sheenColor: new THREE.Color(0x5fe089),
-      sheenRoughness: 0.55,
-      envMapIntensity: 0.5
+      envMapIntensity: 0.4
     })
     // Six segments, two per long rail and one per short rail. The long pair on each rail
     // is the same length, so this caches two distinct geometries rather than six.
@@ -1941,9 +1944,24 @@ const outerL = APRON_OUTER_L
       mesh.position.copy(place.position)
       mesh.castShadow = true
       mesh.receiveShadow = true
-      // Tagged so selfCheck can assert the inner face stays on the physics plane. The
-      // key encodes the rail's run axis and side, which is all the check needs to know
-      // which of the four collision planes this cushion is responsible for.
+      // Two-tone cushion: darker face toward table, lighter glossy top
+      const pos = (geo.attributes.position as THREE.BufferAttribute)
+      const normal = (geo.attributes.normal as THREE.BufferAttribute)
+      const colors = new Float32Array(pos.count * 3)
+      const faceColor = new THREE.Color(CUSHION_FACE_COLOR)
+      const topColor = new THREE.Color(CUSHION_TOP_COLOR)
+      const nY = new THREE.Vector3()
+      for (let i = 0; i < pos.count; i++) {
+        nY.x = normal.getX(i)
+        nY.y = normal.getY(i)
+        nY.z = normal.getZ(i)
+        const t = THREE.MathUtils.smoothstep(nY.y, 0.25, 0.85)
+        const c = faceColor.clone().lerp(topColor, t)
+        colors[i * 3 + 0] = c.r
+        colors[i * 3 + 1] = c.g
+        colors[i * 3 + 2] = c.b
+      }
+      geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
       mesh.userData.physicsSurface = `cushion:${axis}:${outward}`
       this.scene.add(mesh)
 
@@ -2159,7 +2177,7 @@ const outerL = APRON_OUTER_L
     // Dark floor, so the lit table is the subject of the picture.
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(16000, 9000),
-      new THREE.MeshStandardMaterial({ color: new THREE.Color(ROOM_FLOOR_COLOR), roughness: 0.55, metalness: 0.0, envMapIntensity: 0.5 })
+      new THREE.MeshLambertMaterial({ color: new THREE.Color(ROOM_FLOOR_COLOR) })
     )
     floor.rotation.x = -Math.PI / 2
     floor.position.y = -790
@@ -2724,7 +2742,7 @@ const outerL = APRON_OUTER_L
           lifted.b = Math.min(1, lifted.b)
           tint = lifted.getHex()
         }
-        rig = new BallRig(BALL_RADIUS, tint, contactShadowTexture())
+        rig = new BallRig(BALL_RADIUS, tint, this.shadowTexCache || contactShadowTexture())
         this.balls.set(ball.id, rig)
         this.scene.add(rig.group)
       }

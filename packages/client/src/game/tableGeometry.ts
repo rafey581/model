@@ -33,7 +33,7 @@ export const CUSHION_H = 12
 export const CUSHION_DEPTH = 44
 
 /** How far the apron extends past the bed on every side. */
-export const APRON_PAD = 64
+export const APRON_PAD = 2 * (CUSHION_DEPTH + 80)
 
 /** The apron body's outer footprint. */
 export const APRON_OUTER_L = TABLE_LENGTH + APRON_PAD
