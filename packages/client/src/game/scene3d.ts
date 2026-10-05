@@ -1478,12 +1478,12 @@ const outerL = APRON_OUTER_L
     const apronMat = new THREE.MeshPhysicalMaterial({
       map: woodTexture(),
       roughnessMap: woodRoughnessTexture(),
-      color: new THREE.Color(RAIL_WOOD_TINT),
-      roughness: 0.38,
+      color: new THREE.Color('#4a2214'),
+      roughness: 0.42,
       metalness: 0,
-      clearcoat: 0.4,
-      clearcoatRoughness: 0.3,
-      envMapIntensity: 0.35
+      clearcoat: 0.32,
+      clearcoatRoughness: 0.28,
+      envMapIntensity: 0.5
     })
     // The main body: same outer footprint and same top face as the original box, so the
     // depth guard's 1mm cloth-to-apron gap is untouched. Only the faces *between* this
