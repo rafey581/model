@@ -238,6 +238,10 @@ const POCKET_LIP_COLOR = '#d9cfb4'
 const POCKET_LIP_WIDTH_MM = 14
 const POCKET_LIP_HEIGHT_MM = 3
 const SHOW_OLD_POCKET_PLATES = false
+/** The old brown leather torus ring around each pocket mouth. Off: replaced by the cream rim. */
+const SHOW_POCKET_LIP_RING = false
+/** The old flat cream ShapeGeometry plate lying across the table at each pocket. Off: replaced by the bed opening. */
+const SHOW_POCKET_FLAT_PLATE = false
 const RAIL_WOOD_UV_TILE_MM = 500
 
 /*
@@ -2203,13 +2207,17 @@ const outerL = APRON_OUTER_L
       plate.rotation.x = -Math.PI / 2
       plate.position.set(0, POCKET_PLATE_Y_MM, 0)
       plate.renderOrder = 1
-      this.scene.add(plate)
+      if (SHOW_POCKET_FLAT_PLATE) {
+        this.scene.add(plate)
+      }
 
-      const lip = new THREE.Mesh(geo.lip, leatherMat)
-      lip.name = 'pocket-lip'
-      lip.rotation.x = -Math.PI / 2
-      lip.position.set(x, CUSHION_H + 2.4, z)
-      this.scene.add(lip)
+      if (SHOW_POCKET_LIP_RING) {
+        const lip = new THREE.Mesh(geo.lip, leatherMat)
+        lip.name = 'pocket-lip'
+        lip.rotation.x = -Math.PI / 2
+        lip.position.set(x, CUSHION_H + 2.4, z)
+        this.scene.add(lip)
+      }
       if (false) {
         const brass = new THREE.Mesh(geo.lip, brassLipMat)
         brass.name = 'pocket-brass'
