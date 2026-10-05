@@ -2207,7 +2207,7 @@ const outerL = APRON_OUTER_L
       lip.rotation.x = -Math.PI / 2
       lip.position.set(x, CUSHION_H + 2.4, z)
       this.scene.add(lip)
-      if (SHOW_BRASS_TRIM) {
+      if (false) {
         const brass = new THREE.Mesh(geo.lip, brassLipMat)
         brass.name = 'pocket-brass'
         brass.rotation.x = -Math.PI / 2
@@ -2240,7 +2240,7 @@ const outerL = APRON_OUTER_L
         stitches.setMatrixAt(i, m4)
       }
       stitches.instanceMatrix.needsUpdate = true
-      if (SHOW_BRASS_TRIM) {
+      if (false) {
         this.scene.add(stitches)
       }
     }
