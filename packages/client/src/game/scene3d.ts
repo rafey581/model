@@ -2094,6 +2094,20 @@ const outerL = APRON_OUTER_L
         stitch: THREE.BufferGeometry
       }
     >()
+    const pocketHoleMat = new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -1
+    })
+    const pocketPlateMat = new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color(POCKET_PLATE_COLOR),
+      roughness: 0.55,
+      metalness: 0,
+      envMapIntensity: 0.35
+    })
     const geoFor = (radius: number) => {
       const cached = pocketGeo.get(radius)
       if (cached) return cached
@@ -2135,6 +2149,46 @@ const outerL = APRON_OUTER_L
       drop.position.set(x, CUSHION_H + 1.2 - 90, z)
       this.scene.add(drop)
       // Leather cushion rim, brass-lipped.
+      const holeR = p.radius * POCKET_HOLE_SCALE
+      const hole = new THREE.Mesh(new THREE.CircleGeometry(holeR, 32), pocketHoleMat)
+      hole.rotation.x = -Math.PI / 2
+      hole.position.set(x, POCKET_HOLE_Y_MM, z)
+      hole.renderOrder = 2
+      this.scene.add(hole)
+      const net = new THREE.Mesh(new THREE.CircleGeometry(holeR, 32), new THREE.MeshBasicMaterial({ color: new THREE.Color(POCKET_NET_COLOR), transparent: true, opacity: 0.22, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 }))
+      net.rotation.x = -Math.PI / 2
+      net.position.set(x, POCKET_HOLE_Y_MM + 0.01, z)
+      net.renderOrder = 3
+      this.scene.add(net)
+
+      // Jaw plate: flat cream plate with hole, clipped to apron footprint
+      const isCorner = p.kind === 'corner'
+      const shape = new THREE.Shape()
+      const extra = POCKET_PLATE_EXTRA_MM
+      const apronHalfL = APRON_OUTER_L / 2
+      const apronHalfW = APRON_OUTER_W / 2
+      if (isCorner) {
+        // wedge along the two rails toward corner; but easier: build polygon around pocket extending along rails, then hole
+        shape.moveTo(x - holeR, z)
+        shape.lineTo(x - extra, z)
+        shape.lineTo(x, z - extra)
+        shape.lineTo(x + holeR, z)
+        shape.arc(0, 0, holeR, 0, Math.PI * 2, true)
+        shape.closePath()
+      } else {
+        shape.moveTo(x - extra, z - holeR)
+        shape.lineTo(x + extra, z - holeR)
+        shape.lineTo(x + extra, z + holeR)
+        shape.lineTo(x - extra, z + holeR)
+        shape.lineTo(x - extra, z - holeR)
+      }
+      const plateGeo = new THREE.ShapeGeometry(shape)
+      const plate = new THREE.Mesh(plateGeo, pocketPlateMat)
+      plate.rotation.x = -Math.PI / 2
+      plate.position.set(0, POCKET_PLATE_Y_MM, 0)
+      plate.renderOrder = 1
+      this.scene.add(plate)
+
       const lip = new THREE.Mesh(geo.lip, leatherMat)
       lip.name = 'pocket-lip'
       lip.rotation.x = -Math.PI / 2
