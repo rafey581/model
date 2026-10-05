@@ -136,13 +136,13 @@ let MAX_ANISO = 4
  * away to navy. The table is the subject of the picture; the room is its backdrop.
  */
 /** The scene's clear colour: dark navy, the top of the room's gradient. */
-const ROOM_BG_COLOR = '#0a1128'
+const ROOM_BG_COLOR = '#10235a'
 /** Gentle exponential fog in the room's own colour, per millimetre. Nothing at gameplay distances, a fade at the far wall. */
 const ROOM_FOG_DENSITY = 0.00004
 /** The blue the wall is painted at its brightest. */
-const ROOM_WALL_COLOR = '#123a8a'
+const ROOM_WALL_COLOR = '#1b4bb0'
 /** The navy the wall fades to at the top. */
-const ROOM_WALL_TOP_COLOR = '#0c1c46'
+const ROOM_WALL_TOP_COLOR = '#0b1a45'
 /** The floor: dark, so the lit table is the subject of the picture. */
 const ROOM_FLOOR_COLOR = '#9a3340'
 /** The bed's colour: bright, saturated tournament green. */
@@ -165,7 +165,7 @@ const NOSE_COLOR = 0x2bc75a
 /** Ball resin: tight diffuse under the lacquer film. */
 // Renderer/tone mapping
 const TONE_MAPPING_MODE: 'neutral' | 'aces' = 'neutral'
-const TONE_EXPOSURE = 1.0
+const TONE_EXPOSURE = 1.1
 
 // Wood / rails
 const RAIL_WOOD_TINT = '#5a2520'
@@ -177,15 +177,15 @@ const CUSHION_TOP_COLOR = '#33c44d'
 const CUSHION_NOSE_COLOR = '#3fd05a'
 
 // Cloth / baize
-const CLOTH_COLOR_CENTER = '#27b83b'
-const CLOTH_COLOR_MID = '#1c9f32'
-const CLOTH_COLOR_EDGE = '#117823'
-const CLOTH_ROUGHNESS = 0.95
+const CLOTH_COLOR_CENTER = '#20a63a'
+const CLOTH_COLOR_MID = '#1a952f'
+const CLOTH_COLOR_EDGE = '#127a28'
+const CLOTH_ROUGHNESS = 0.96
 const CLOTH_METALNESS = 0
-const CLOTH_SHEEN = 0.12
+const CLOTH_SHEEN = 0.1
 const CLOTH_SHEEN_COLOR = '#4fd07a'
-const CLOTH_SHEEN_ROUGHNESS = 0.75
-const CLOTH_NORMAL_STRENGTH = 0.02
+const CLOTH_SHEEN_ROUGHNESS = 0.8
+const CLOTH_NORMAL_STRENGTH = 0.01
 const CLOTH_NOISE_STRENGTH = 0.02 // max 2% luminance
 const CLOTH_NOISE_SCALE_MM = 2 // cells < 2mm
 const CLOTH_MIPMAPS = true
