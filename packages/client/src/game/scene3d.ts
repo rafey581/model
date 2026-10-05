@@ -457,9 +457,9 @@ function contactShadowTexture(): THREE.CanvasTexture {
     canvas.height = size
     const ctx = canvas.getContext('2d')!
     const grad = ctx.createRadialGradient(size / 2, size / 2, 4, size / 2, size / 2, size / 2)
-    grad.addColorStop(0, 'rgba(0,0,0,0.85)')
-    grad.addColorStop(0.4, 'rgba(0,0,0,0.65)')
-    grad.addColorStop(0.7, 'rgba(0,0,0,0.25)')
+    grad.addColorStop(0, 'rgba(0,0,0,0.65)')
+    grad.addColorStop(0.4, 'rgba(0,0,0,0.5)')
+    grad.addColorStop(0.7, 'rgba(0,0,0,0.18)')
     grad.addColorStop(1, 'rgba(0,0,0,0)')
     ctx.fillStyle = grad
     ctx.fillRect(0, 0, size, size)
@@ -992,11 +992,12 @@ class BallRig {
       transparent: true,
       depthWrite: false,
       polygonOffset: true,
-      polygonOffsetFactor: -1,
+      polygonOffsetFactor: -2,
       polygonOffsetUnits: -1,
-      toneMapped: false
+      toneMapped: false,
+      blending: THREE.NormalBlending
     })
-    this.blob = new THREE.Mesh(new THREE.PlaneGeometry(radius * 1.5, radius * 1.5), blobMat)
+    this.blob = new THREE.Mesh(new THREE.PlaneGeometry(radius * 1.3, radius * 1.3), blobMat)
     this.blob.rotation.x = -Math.PI / 2
     this.blob.position.y = 0.6
     this.blob.renderOrder = 1
@@ -1047,7 +1048,7 @@ class BallRig {
     if (centreDist > 40) {
       const nx = targetX / centreDist
       const nz = targetZ / centreDist
-      this.blob.position.set(nx * SHADOW_OFFSET_MM, 0.6, nz * SHADOW_OFFSET_MM)
+      this.blob.position.set(nx * (SHADOW_OFFSET_MM + 2), 0.6, nz * (SHADOW_OFFSET_MM + 2))
       this.blob.rotation.z = Math.atan2(-nz, nx)
       this.blob.scale.set(SHADOW_STRETCH, 1, 1)
     } else {
