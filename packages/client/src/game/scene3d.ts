@@ -971,12 +971,13 @@ class BallRig {
     // it costs nothing while unlit.
     this.material = new THREE.MeshPhysicalMaterial({
       color,
-      roughness: BALL_ROUGHNESS,
+      roughness: 0.05,
       metalness: 0.0,
-      clearcoat: 1,
-      clearcoatRoughness: BALL_CLEARCOAT_ROUGHNESS,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.02,
       emissive: 0x000000,
-      envMapIntensity: 1.0
+      envMapIntensity: 1.0,
+      ior: 1.5
     })
     this.sphere = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 28), this.material)
     // Balls never cast into the scene's one static shadow map: a shadow baked at
