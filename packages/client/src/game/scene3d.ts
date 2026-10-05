@@ -235,6 +235,16 @@ const POCKET_CUT_EXTRA_MM = 40
 const RAIL_TOP_HEIGHT_MM = 55
 const POCKET_FLOOR_Y_MM = -0.5
 const POCKET_LIP_COLOR = '#d9cfb4'
+/** The cream cap ringing every pocket mouth: warm off-white, satin. */
+const POCKET_RIM_COLOR = '#e9dfc6'
+/** How far the cream cap reaches out from the physics pocket radius, in mm. */
+const POCKET_RIM_WIDTH_MM = 26
+/** How tall the cream cap stands above its own base, in mm. */
+const POCKET_RIM_HEIGHT_MM = 10
+/** The dark jaali hanging inside the pocket cavity. */
+const POCKET_NET_DARK_COLOR = '#14100c'
+/** How far the jaali hangs below the cloth, in mm. */
+const POCKET_NET_DROP_MM = 66
 const POCKET_LIP_WIDTH_MM = 14
 const POCKET_LIP_HEIGHT_MM = 3
 const SHOW_OLD_POCKET_PLATES = false
@@ -2110,6 +2120,9 @@ const outerL = APRON_OUTER_L
         lip: THREE.BufferGeometry
         shadow: THREE.BufferGeometry
         stitch: THREE.BufferGeometry
+        mouth: THREE.BufferGeometry
+        rim: THREE.BufferGeometry
+        net: THREE.BufferGeometry
       }
     >()
     const pocketHoleMat = new THREE.MeshBasicMaterial({
@@ -2126,6 +2139,26 @@ const outerL = APRON_OUTER_L
       metalness: 0,
       envMapIntensity: 0.35
     })
+    // The cream/ivory cap that rings every pocket mouth: warm off-white, semi-gloss,
+    // satin rather than plastic. It is a dielectric like the rails, so metalness stays 0
+    // and the clearcoat is a whisper - any more and the lamp turns it into a chrome ring.
+    const pocketRimMat = new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color(POCKET_RIM_COLOR),
+      roughness: 0.55,
+      metalness: 0,
+      clearcoat: 0.15,
+      clearcoatRoughness: 0.35,
+      envMapIntensity: 0.25
+    })
+    // The jaali hanging inside the pocket: a dark, matte, unlit-looking weave. Seen from
+    // inside, so BackSide - the camera looks down into a cone, not at the outside of one.
+    const pocketNetMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(POCKET_NET_DARK_COLOR),
+      roughness: 0.9,
+      metalness: 0,
+      side: THREE.BackSide,
+      envMapIntensity: 0.05
+    })
     const geoFor = (radius: number) => {
       const cached = pocketGeo.get(radius)
       if (cached) return cached
@@ -2138,7 +2171,38 @@ const outerL = APRON_OUTER_L
         // signal available here, and a ring of tiny capsules costs about 400 triangles.
         // 16 is the point where they stop reading as a beaded edge, which is what a real
         // lace looks like.
-        stitch: new THREE.CapsuleGeometry(1.5, 7, 3, 6)
+        stitch: new THREE.CapsuleGeometry(1.5, 7, 3, 6),
+        // The bed opening: a clean disc of cloth-coloured-over-by-black that reads as the
+        // mouth. Its radius is the physics radius exactly, so it meets the cream cap's
+        // inner edge with no sliver of green showing between them.
+        mouth: new THREE.CircleGeometry(radius, 32),
+        // The cream cap, lathed. The profile is authored in (radius, height) and spun
+        // around Y, which is the one primitive that gives a rounded outer edge without
+        // hand-authoring a torus section. Inner edge sits ON the physics radius: never
+        // narrower, or the drawn mouth would disagree with where the ball actually drops.
+        rim: new THREE.LatheGeometry(
+          [
+            new THREE.Vector2(radius, 0),
+            new THREE.Vector2(radius, POCKET_RIM_HEIGHT_MM * 0.55),
+            new THREE.Vector2(radius + 2, POCKET_RIM_HEIGHT_MM * 0.85),
+            new THREE.Vector2(radius + 6, POCKET_RIM_HEIGHT_MM),
+            new THREE.Vector2(radius + POCKET_RIM_WIDTH_MM - 6, POCKET_RIM_HEIGHT_MM),
+            new THREE.Vector2(radius + POCKET_RIM_WIDTH_MM - 2, POCKET_RIM_HEIGHT_MM * 0.8),
+            new THREE.Vector2(radius + POCKET_RIM_WIDTH_MM, POCKET_RIM_HEIGHT_MM * 0.4),
+            new THREE.Vector2(radius + POCKET_RIM_WIDTH_MM, 0)
+          ],
+          32
+        ),
+        // The jaali: a truncated cone hanging from just under the rim down into the
+        // cavity. Open-ended, so it is a wall and not a lid - the drop below stays black.
+        net: new THREE.CylinderGeometry(
+          radius * 0.95,
+          radius * 0.5,
+          POCKET_NET_DROP_MM,
+          20,
+          1,
+          true
+        )
       }
       pocketGeo.set(radius, made)
       return made
@@ -2168,20 +2232,32 @@ const outerL = APRON_OUTER_L
       drop.rotation.x = -Math.PI / 2
       drop.position.set(x, CUSHION_H + 1.2 - 90, z)
       this.scene.add(drop)
-      // Leather cushion rim, brass-lipped.
-      const holeR = p.radius * POCKET_HOLE_SCALE
-      const hole = new THREE.Mesh(new THREE.CircleGeometry(holeR, 32), pocketHoleMat)
-      hole.rotation.x = -Math.PI / 2
-      hole.position.set(x, POCKET_HOLE_Y_MM, z)
-      hole.renderOrder = 2
-      this.scene.add(hole)
-      const net = new THREE.Mesh(new THREE.CircleGeometry(holeR, 32), new THREE.MeshBasicMaterial({ color: new THREE.Color(POCKET_NET_COLOR), transparent: true, opacity: 0.22, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 }))
-      net.rotation.x = -Math.PI / 2
-      net.position.set(x, POCKET_HOLE_Y_MM + 0.01, z)
-      net.renderOrder = 3
-      this.scene.add(net)
+      // The bed opening. A clean black disc sitting a fraction of a millimetre over the
+      // cloth, sized to the physics radius so it lines up with where the ball actually
+      // falls. This is what stops the cloth reading as an unbroken sheet at the pocket.
+      const mouth = new THREE.Mesh(geo.mouth, pocketHoleMat)
+      mouth.name = 'pocket-mouth'
+      mouth.rotation.x = -Math.PI / 2
+      mouth.position.set(x, POCKET_HOLE_Y_MM, z)
+      mouth.renderOrder = 2
+      this.scene.add(mouth)
+
+      // The cream cap, sitting on top of the cushion's own height so the rubber and the
+      // cap meet at one level rather than the cap perching on the rail below them.
+      const rim = new THREE.Mesh(geo.rim, pocketRimMat)
+      rim.name = 'pocket-rim'
+      rim.position.set(x, CUSHION_H - POCKET_RIM_HEIGHT_MM, z)
+      this.scene.add(rim)
+
+      // The jaali, hanging from under the cap down into the dark. Its top radius tracks
+      // the mouth so there is no gap to see the room through.
+      const jaali = new THREE.Mesh(geo.net, pocketNetMat)
+      jaali.name = 'pocket-net'
+      jaali.position.set(x, CUSHION_H - POCKET_RIM_HEIGHT_MM - POCKET_NET_DROP_MM / 2, z)
+      this.scene.add(jaali)
 
       // Jaw plate: flat cream plate with hole, clipped to apron footprint
+      const holeR = p.radius * POCKET_HOLE_SCALE
       const isCorner = p.kind === 'corner'
       const shape = new THREE.Shape()
       const extra = POCKET_PLATE_EXTRA_MM
