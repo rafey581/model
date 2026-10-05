@@ -1910,14 +1910,14 @@ const outerL = APRON_OUTER_L
     // only if the caller closes it, and this one's ends are swept open at the pocket
     // jaws where the segment is cut to length.
     const cushionMat = new THREE.MeshPhysicalMaterial({
-      color: new THREE.Color(CUSHION_FACE_COLOR),
+      color: new THREE.Color('#1c9a34'),
       normalMap: feltNormalTexture(),
       normalScale: new THREE.Vector2(CUSHION_NORMAL_STRENGTH, CUSHION_NORMAL_STRENGTH),
-      roughness: 0.6,
+      roughness: 0.55,
       metalness: 0,
       side: THREE.DoubleSide,
       vertexColors: true,
-      envMapIntensity: 0.3
+      envMapIntensity: 0.25
     })
     // The nose strip stays a separate material rather than being merged into the cushion:
 // real cushion rubber is compressed smooth along the strike line, so it takes a tighter
@@ -1925,13 +1925,13 @@ const outerL = APRON_OUTER_L
 // eye where the cushion is. With the profile below carrying the shape, this is now a
 // thin capping strip on the nose shoulder instead of a separate box beside it.
     const noseMat = new THREE.MeshPhysicalMaterial({
-      color: new THREE.Color(CUSHION_NOSE_COLOR),
+      color: new THREE.Color('#22b23f'),
       normalMap: feltNormalTexture(),
       normalScale: new THREE.Vector2(CUSHION_NORMAL_STRENGTH, CUSHION_NORMAL_STRENGTH),
-      roughness: 0.35,
+      roughness: 0.32,
       metalness: 0,
       side: THREE.DoubleSide,
-      envMapIntensity: 0.4
+      envMapIntensity: 0.3
     })
     // Six segments, two per long rail and one per short rail. The long pair on each rail
     // is the same length, so this caches two distinct geometries rather than six.
