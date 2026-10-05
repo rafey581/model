@@ -2144,12 +2144,14 @@ const outerL = APRON_OUTER_L
       const z = tableZ(p.y)
       const geo = geoFor(p.radius)
       // Inner shadow ring on the bed around the mouth, softening the cloth edge.
-      const shadow = new THREE.Mesh(geo.shadow, mouthShadowMat)
-      shadow.name = 'pocket-shadow'
-      shadow.rotation.x = -Math.PI / 2
-      shadow.position.set(x, CUSHION_H + 1.1, z)
-      shadow.renderOrder = 4
-      this.scene.add(shadow)
+      if (false) {
+        const shadow = new THREE.Mesh(geo.shadow, mouthShadowMat)
+        shadow.name = 'pocket-shadow'
+        shadow.rotation.x = -Math.PI / 2
+        shadow.position.set(x, CUSHION_H + 1.1, z)
+        shadow.renderOrder = 4
+        this.scene.add(shadow)
+      }
       // The throat: open-ended cylinder seen from inside, recessed below the bed.
       const throat = new THREE.Mesh(geo.throat, throatMat)
       throat.name = 'pocket-throat'
