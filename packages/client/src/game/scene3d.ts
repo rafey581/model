@@ -4,6 +4,8 @@ import type { FrameSnapshotData, AimState, RenderOptions } from './renderer.js'
 import { computeAimGuide, type AimGuide, type AimGuideBall } from './aim.js'
 import { setTableTransform } from './renderer.js'
 import { ballColor } from './palette.js'
+const SHOW_CROWN_MOULDING = false
+
 import {
   type CameraRigState,
   type HeadingLatch,
@@ -1515,9 +1517,9 @@ const outerL = APRON_OUTER_L
 
       // Panels on each side of divider
       for (const panelSide of [-1, 1]) {
-        const x = panelSide * (fieldSizeL / 2 + mouldingWidth)
+        const x = panelSide * (fieldSizeL / 4 + mouldingWidth / 4)
         const panel = new THREE.Mesh(
-          new THREE.BoxGeometry(fieldSizeL, 4, mouldingWidth),
+        new THREE.BoxGeometry(fieldSizeL / 2 - mouldingWidth / 2, 4, mouldingWidth),
           panelMat
         )
         panel.position.set(x, -72, z)
@@ -1615,7 +1617,7 @@ const outerL = APRON_OUTER_L
       crown.rotation.y = -Math.PI / 2
       crown.position.set(0, -1, side * (APRON_OUTER_W / 2))
       crown.castShadow = true
-      this.scene.add(crown)
+      if (SHOW_CROWN_MOULDING) this.scene.add(crown)
     }
     // Short rails
     const crownShortGeo = new THREE.ExtrudeGeometry(crownProfile, {
@@ -1629,7 +1631,7 @@ const outerL = APRON_OUTER_L
       const crown = new THREE.Mesh(crownShortGeo, crownMat)
       crown.position.set(side * (APRON_OUTER_L / 2), -1, 0)
       crown.castShadow = true
-      this.scene.add(crown)
+      if (SHOW_CROWN_MOULDING) this.scene.add(crown)
     }
 
     // A recessed rebate under the cap — the reveal between the top rail and the body.
