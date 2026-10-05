@@ -449,8 +449,9 @@ function contactShadowTexture(): THREE.CanvasTexture {
     canvas.height = size
     const ctx = canvas.getContext('2d')!
     const grad = ctx.createRadialGradient(size / 2, size / 2, 4, size / 2, size / 2, size / 2)
-    grad.addColorStop(0, 'rgba(0,0,0,0.55)')
-    grad.addColorStop(0.6, 'rgba(0,0,0,0.18)')
+    grad.addColorStop(0, 'rgba(0,0,0,0.85)')
+    grad.addColorStop(0.4, 'rgba(0,0,0,0.65)')
+    grad.addColorStop(0.7, 'rgba(0,0,0,0.25)')
     grad.addColorStop(1, 'rgba(0,0,0,0)')
     ctx.fillStyle = grad
     ctx.fillRect(0, 0, size, size)
@@ -979,11 +980,13 @@ class BallRig {
     this.group.add(this.sphere)
     const blobMat = new THREE.MeshBasicMaterial({
       map: shadowTex,
+      color: 0x000000,
       transparent: true,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1
+      polygonOffsetUnits: -1,
+      toneMapped: false
     })
     this.blob = new THREE.Mesh(new THREE.PlaneGeometry(radius * 1.5, radius * 1.5), blobMat)
     this.blob.rotation.x = -Math.PI / 2
@@ -2077,12 +2080,14 @@ const outerL = APRON_OUTER_L
       sheenColor: new THREE.Color(0xa8794a),
       envMapIntensity: 0.8
     })
+    const TRIM_COLOR = '#6b4a22'
+    const SHOW_BRASS_TRIM = false
     const brassLipMat = new THREE.MeshStandardMaterial({
-      color: 0xe0c288,
-      metalness: 1,
-      roughness: 0.16,
+      color: new THREE.Color(TRIM_COLOR),
+      metalness: 0.6,
+      roughness: 0.55,
       roughnessMap: brassRoughnessTexture(),
-      envMapIntensity: 1.6
+      envMapIntensity: 0.15
     })
     const pocketGeo = new Map<
       number,
@@ -2194,12 +2199,14 @@ const outerL = APRON_OUTER_L
       lip.rotation.x = -Math.PI / 2
       lip.position.set(x, CUSHION_H + 2.4, z)
       this.scene.add(lip)
-      const brass = new THREE.Mesh(geo.lip, brassLipMat)
-      brass.name = 'pocket-brass'
-      brass.rotation.x = -Math.PI / 2
-      brass.scale.set(0.82, 0.82, 1.35)
-      brass.position.set(x, CUSHION_H + 3.0, z)
-      this.scene.add(brass)
+      if (SHOW_BRASS_TRIM) {
+        const brass = new THREE.Mesh(geo.lip, brassLipMat)
+        brass.name = 'pocket-brass'
+        brass.rotation.x = -Math.PI / 2
+        brass.scale.set(0.82, 0.82, 1.35)
+        brass.position.set(x, CUSHION_H + 3.0, z)
+        this.scene.add(brass)
+      }
 
       // Lacing around the pocket mouth. Each stitch is a capsule laid flat and rotated to
       // follow the circle, alternating lean so the ring reads as laced rather than as a
@@ -2225,7 +2232,9 @@ const outerL = APRON_OUTER_L
         stitches.setMatrixAt(i, m4)
       }
       stitches.instanceMatrix.needsUpdate = true
-      this.scene.add(stitches)
+      if (SHOW_BRASS_TRIM) {
+        this.scene.add(stitches)
+      }
     }
 
     // Dark floor, so the lit table is the subject of the picture.
