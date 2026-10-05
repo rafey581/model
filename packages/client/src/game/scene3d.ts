@@ -144,7 +144,7 @@ const ROOM_WALL_COLOR = '#123a8a'
 /** The navy the wall fades to at the top. */
 const ROOM_WALL_TOP_COLOR = '#0c1c46'
 /** The floor: dark, so the lit table is the subject of the picture. */
-const ROOM_FLOOR_COLOR = '#7a2a33'
+const ROOM_FLOOR_COLOR = '#9a3340'
 /** The bed's colour: bright, saturated tournament green. */
 const CLOTH_COLOR = '#1a9a2e'
 
@@ -230,7 +230,15 @@ const POCKET_HOLE_Y_MM = 0.9
 const POCKET_PLATE_COLOR = '#d9cfb4'
 const POCKET_PLATE_Y_MM = 2
 const POCKET_PLATE_EXTRA_MM = 60
-const POCKET_NET_COLOR = '#e6dcc2'
+const POCKET_NET_COLOR = '#c9bf9f'
+const POCKET_CUT_EXTRA_MM = 40
+const RAIL_TOP_HEIGHT_MM = 55
+const POCKET_FLOOR_Y_MM = -0.5
+const POCKET_LIP_COLOR = '#d9cfb4'
+const POCKET_LIP_WIDTH_MM = 14
+const POCKET_LIP_HEIGHT_MM = 3
+const SHOW_OLD_POCKET_PLATES = false
+const RAIL_WOOD_UV_TILE_MM = 500
 
 /*
  * STEP 4 — the aim guide: thin soft ribbons on the cloth and one hollow ring.
