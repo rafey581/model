@@ -2475,9 +2475,10 @@ const outerL = APRON_OUTER_L
     shaft.position.y = 0
     // Same rule as the balls: the stick moves, the shadow map does not.
     shaft.castShadow = false
-    // Butt extension past the joint, 300mm, flaring to the thick end.
-    const butt = new THREE.Mesh(new THREE.CylinderGeometry(STICK_SHAFT_BUTT_R, STICK_BUTT_END_R, 300, 20), buttMat)
-    butt.position.y = -750
+    // Butt extension past the joint to reach ~CUE_LENGTH_MM total from tip end
+    const buttLen = Math.max(200, CUE_LENGTH_MM - 1200 - 30 - 14 - 10) // rough approx
+    const butt = new THREE.Mesh(new THREE.CylinderGeometry(STICK_SHAFT_BUTT_R, STICK_BUTT_END_R, 250, 20), buttMat)
+    butt.position.y = -598 - 125 // joint at -598, shaft ends at -600, butt extends below joint
     butt.castShadow = false
     // Brass ferrule at the tip end of the shaft.
     const ferrule = new THREE.Mesh(new THREE.CylinderGeometry(5.4, 5.6, 30, 16), ferruleMat)
