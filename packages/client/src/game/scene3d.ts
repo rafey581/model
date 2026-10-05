@@ -245,6 +245,28 @@ const POCKET_RIM_HEIGHT_MM = 10
 const POCKET_NET_DARK_COLOR = '#14100c'
 /** How far the jaali hangs below the cloth, in mm. */
 const POCKET_NET_DROP_MM = 66
+/**
+ * How deep the modelled pocket bowl goes below the cloth, in mm. Deep enough that the
+ * gradient has somewhere to fall off to, shallow enough that the net inside it is still
+ * lit by the table lamps at the normal playing camera angle.
+ */
+const POCKET_BOWL_DEPTH_MM = 46
+/** The bowl narrows from the physics radius down to this at its bottom. */
+const POCKET_BOWL_THROAT_MM = 30
+/** How far down the bowl the jaali sits, and how wide it is there. */
+const POCKET_NET_DEPTH_MM = 34
+const POCKET_NET_RADIUS_MM = 34
+/**
+ * The arc, in degrees, that the green jaw covers where a cushion meets the pocket. A
+ * cushion meets a corner pocket on two axes, so each corner gets two of these.
+ */
+const POCKET_JAW_ARC_DEG = 50
+/** How high the jaw stands proud of the cloth where it meets the cushion. */
+const POCKET_JAW_RISE_MM = 16
+/** The radius the jaw reaches as it rises, i.e. how far it leans out over the bowl. */
+const POCKET_JAW_REACH_MM = 60
+/** Build the detailed bowl/net/jaw on this many corner pockets. One, to review it first. */
+const POCKET_DETAIL_CORNERS = 1
 const POCKET_LIP_WIDTH_MM = 14
 const POCKET_LIP_HEIGHT_MM = 3
 const SHOW_OLD_POCKET_PLATES = false
@@ -878,6 +900,97 @@ function pocketDepthTexture(): THREE.CanvasTexture {
     grad.addColorStop(1, 'rgba(30,18,10,0.25)')
     ctx.fillStyle = grad
     ctx.fillRect(0, 0, size, size)
+    return new THREE.CanvasTexture(canvas)
+  })
+}
+
+/**
+ * The jaali, painted rather than modelled: cream strings in a diamond lattice over near
+ * black, so the gaps read as the dark of the drop behind them.
+ *
+ * Two passes per diagonal. The first is a wide, dim stroke that stands in for the string's
+ * own shadow falling into the mesh; the second is the thin bright core on top. Without the
+ * underlay a single stroke reads as flat white paint, and the whole point of a net is that
+ * you see through it.
+ */
+function pocketNetTexture(): THREE.CanvasTexture {
+  return cachedTexture('pocket-net', () => {
+    const size = 256
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = '#070605'
+    ctx.fillRect(0, 0, size, size)
+    const pitch = size / 6
+    ctx.lineCap = 'round'
+    // Underlay: the soft dark edge where the cord sinks into the weave.
+    ctx.strokeStyle = 'rgba(120,108,86,0.30)'
+    ctx.lineWidth = 6
+    for (let dir = 0; dir < 2; dir++) {
+      for (let i = -size; i <= size * 2; i += pitch) {
+        ctx.beginPath()
+        if (dir === 0) {
+          ctx.moveTo(i, 0)
+          ctx.lineTo(i + size, size)
+        } else {
+          ctx.moveTo(i, 0)
+          ctx.lineTo(i - size, size)
+        }
+        ctx.stroke()
+      }
+    }
+    // Core: the cord itself. Two slightly different creams so the lattice has some life in
+    // it rather than reading as one flat printed colour.
+    ctx.lineWidth = 2.4
+    for (let dir = 0; dir < 2; dir++) {
+      ctx.strokeStyle = dir === 0 ? '#f6efdc' : '#e8dfc6'
+      for (let i = -size; i <= size * 2; i += pitch) {
+        ctx.beginPath()
+        if (dir === 0) {
+          ctx.moveTo(i, 0)
+          ctx.lineTo(i + size, size)
+        } else {
+          ctx.moveTo(i, 0)
+          ctx.lineTo(i - size, size)
+        }
+        ctx.stroke()
+      }
+    }
+    // The knots where the cords cross, so the diamonds have something at their corners.
+    ctx.fillStyle = '#fbf6e6'
+    for (let dir = 0; dir < 2; dir++) {
+      for (let i = 0; i <= size * 2; i += pitch) {
+        const cx = dir === 0 ? (i + size) % size : (size - (i % size))
+        ctx.beginPath()
+        ctx.arc(cx, (i + size) % size, 1.7, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+    return new THREE.CanvasTexture(canvas)
+  })
+}
+
+/**
+ * The bowl's inner wall shading: cream where it meets the cloth, falling to near black at
+ * the throat. A lathe runs v from the first profile point to the last, so a vertical
+ * gradient is all that is needed - no lighting on the inside of a hole is ever going to be
+ * even, and faking it in the texture is cheaper and steadier than trying to light it.
+ */
+function pocketBowlShadeTexture(): THREE.CanvasTexture {
+  return cachedTexture('pocket-bowl-shade', () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 4
+    canvas.height = 128
+    const ctx = canvas.getContext('2d')!
+    const grad = ctx.createLinearGradient(0, 0, 0, canvas.height)
+    grad.addColorStop(0, '#efe6d0')
+    grad.addColorStop(0.3, '#d8caa9')
+    grad.addColorStop(0.62, '#6c5c44')
+    grad.addColorStop(0.85, '#241d15')
+    grad.addColorStop(1, '#0b0906')
+    ctx.fillStyle = grad
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
     return new THREE.CanvasTexture(canvas)
   })
 }
@@ -2123,6 +2236,10 @@ const outerL = APRON_OUTER_L
         mouth: THREE.BufferGeometry
         rim: THREE.BufferGeometry
         net: THREE.BufferGeometry
+        bowl: THREE.BufferGeometry
+        netDisc: THREE.BufferGeometry
+        jawLong: THREE.BufferGeometry
+        jawShort: THREE.BufferGeometry
       }
     >()
     const pocketHoleMat = new THREE.MeshBasicMaterial({
@@ -2158,6 +2275,32 @@ const outerL = APRON_OUTER_L
       metalness: 0,
       side: THREE.BackSide,
       envMapIntensity: 0.05
+    })
+    // The bowl: cream satin on the inside wall, shaded to black at the throat by the
+    // gradient rather than by light, because no amount of lamp gets into a 46mm hole.
+    // BackSide - we look at the inside of the funnel, never its outside.
+    const pocketBowlMat = new THREE.MeshStandardMaterial({
+      map: pocketBowlShadeTexture(),
+      roughness: 0.62,
+      metalness: 0,
+      side: THREE.BackSide,
+      envMapIntensity: 0.08
+    })
+    // The jaali as a picture rather than a cone. Unlit on purpose: it sits deep in a hole
+    // where lit materials go black, and the reference wants the strings to stay legibly
+    // cream from the normal playing camera angle.
+    const pocketNetDiscMat = new THREE.MeshBasicMaterial({
+      map: pocketNetTexture(),
+      side: THREE.DoubleSide,
+      toneMapped: false
+    })
+    // The jaw is cushion, so it wears cushion cloth: same green, same roughness, so the
+    // nose reads as one continuous rubber from rail to pocket.
+    const pocketJawMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(CUSHION_FACE_COLOR),
+      roughness: 0.88,
+      metalness: 0,
+      envMapIntensity: 0.12
     })
     const geoFor = (radius: number) => {
       const cached = pocketGeo.get(radius)
@@ -2202,15 +2345,71 @@ const outerL = APRON_OUTER_L
           20,
           1,
           true
+        ),
+        // The bowl: a funnel whose lip is the physics radius at the cloth and which draws
+        // in to the throat depth below it. The profile is authored top-down so the lathe's
+        // v runs 0 at the cloth edge to 1 at the throat, which is the direction the shading
+        // gradient runs.
+        bowl: new THREE.LatheGeometry(
+          [
+            new THREE.Vector2(radius, 0),
+            new THREE.Vector2(radius * 0.98, -7),
+            new THREE.Vector2(radius * 0.9, -18),
+            new THREE.Vector2(radius * 0.78, -30),
+            new THREE.Vector2(POCKET_BOWL_THROAT_MM + 4, -40),
+            new THREE.Vector2(POCKET_BOWL_THROAT_MM, -POCKET_BOWL_DEPTH_MM)
+          ],
+          40
+        ),
+        // The jaali as a picture across the throat of the bowl.
+        netDisc: new THREE.CircleGeometry(POCKET_NET_RADIUS_MM, 32),
+        // The two jaws. A corner pocket is met by two cushions, on the +X and +Z axes,
+        // so each gets its own 50 degree arc of green nose curving down over the bowl lip.
+        // LatheGeometry measures phi from +Z (x = r sin phi, z = r cos phi), so the arc
+        // facing the long rail is centred on phi = 0 and the one facing the short rail on
+        // phi = 90 degrees. The inner edge sits exactly on the physics radius, so the nose
+        // rolls over the lip without ever narrowing the drawn mouth.
+        jawLong: new THREE.LatheGeometry(
+          [
+            new THREE.Vector2(radius, 0),
+            new THREE.Vector2(radius + 1.5, 5),
+            new THREE.Vector2(radius + 5.5, 10),
+            new THREE.Vector2(Math.max(POCKET_JAW_REACH_MM, radius + 12), POCKET_JAW_RISE_MM),
+            new THREE.Vector2(Math.max(POCKET_JAW_REACH_MM, radius + 12) - 3, POCKET_JAW_RISE_MM - 4),
+            new THREE.Vector2(radius + 6, 3),
+            new THREE.Vector2(radius, 0)
+          ],
+          14,
+          -THREE.MathUtils.degToRad(POCKET_JAW_ARC_DEG) / 2,
+          THREE.MathUtils.degToRad(POCKET_JAW_ARC_DEG)
+        ),
+        jawShort: new THREE.LatheGeometry(
+          [
+            new THREE.Vector2(radius, 0),
+            new THREE.Vector2(radius + 1.5, 5),
+            new THREE.Vector2(radius + 5.5, 10),
+            new THREE.Vector2(Math.max(POCKET_JAW_REACH_MM, radius + 12), POCKET_JAW_RISE_MM),
+            new THREE.Vector2(Math.max(POCKET_JAW_REACH_MM, radius + 12) - 3, POCKET_JAW_RISE_MM - 4),
+            new THREE.Vector2(radius + 6, 3),
+            new THREE.Vector2(radius, 0)
+          ],
+          14,
+          THREE.MathUtils.degToRad(90 - POCKET_JAW_ARC_DEG / 2),
+          THREE.MathUtils.degToRad(POCKET_JAW_ARC_DEG)
         )
       }
       pocketGeo.set(radius, made)
       return made
     }
+    // Only the first N corner pockets get the detailed treatment, so it can be reviewed
+    // before it is copied to the rest. Everything else keeps the simple version.
+    let detailCornersLeft = POCKET_DETAIL_CORNERS
     for (const p of POCKETS) {
       const x = tableX(p.x)
       const z = tableZ(p.y)
       const geo = geoFor(p.radius)
+      const detailed = p.kind === 'corner' && detailCornersLeft > 0
+      if (detailed) detailCornersLeft -= 1
       // Inner shadow ring on the bed around the mouth, softening the cloth edge.
       if (false) {
         const shadow = new THREE.Mesh(geo.shadow, mouthShadowMat)
@@ -2235,26 +2434,59 @@ const outerL = APRON_OUTER_L
       // The bed opening. A clean black disc sitting a fraction of a millimetre over the
       // cloth, sized to the physics radius so it lines up with where the ball actually
       // falls. This is what stops the cloth reading as an unbroken sheet at the pocket.
-      const mouth = new THREE.Mesh(geo.mouth, pocketHoleMat)
-      mouth.name = 'pocket-mouth'
-      mouth.rotation.x = -Math.PI / 2
-      mouth.position.set(x, POCKET_HOLE_Y_MM, z)
-      mouth.renderOrder = 2
-      this.scene.add(mouth)
+      if (!detailed) {
+        const mouth = new THREE.Mesh(geo.mouth, pocketHoleMat)
+        mouth.name = 'pocket-mouth'
+        mouth.rotation.x = -Math.PI / 2
+        mouth.position.set(x, POCKET_HOLE_Y_MM, z)
+        mouth.renderOrder = 2
+        this.scene.add(mouth)
 
-      // The cream cap, sitting on top of the cushion's own height so the rubber and the
-      // cap meet at one level rather than the cap perching on the rail below them.
-      const rim = new THREE.Mesh(geo.rim, pocketRimMat)
-      rim.name = 'pocket-rim'
-      rim.position.set(x, CUSHION_H - POCKET_RIM_HEIGHT_MM, z)
-      this.scene.add(rim)
+        // The cream cap, sitting on top of the cushion's own height so the rubber and the
+        // cap meet at one level rather than the cap perching on the rail below them.
+        const rim = new THREE.Mesh(geo.rim, pocketRimMat)
+        rim.name = 'pocket-rim'
+        rim.position.set(x, CUSHION_H - POCKET_RIM_HEIGHT_MM, z)
+        this.scene.add(rim)
 
-      // The jaali, hanging from under the cap down into the dark. Its top radius tracks
-      // the mouth so there is no gap to see the room through.
-      const jaali = new THREE.Mesh(geo.net, pocketNetMat)
-      jaali.name = 'pocket-net'
-      jaali.position.set(x, CUSHION_H - POCKET_RIM_HEIGHT_MM - POCKET_NET_DROP_MM / 2, z)
-      this.scene.add(jaali)
+        // The jaali, hanging from under the cap down into the dark. Its top radius tracks
+        // the mouth so there is no gap to see the room through.
+        const jaali = new THREE.Mesh(geo.net, pocketNetMat)
+        jaali.name = 'pocket-net'
+        jaali.position.set(x, CUSHION_H - POCKET_RIM_HEIGHT_MM - POCKET_NET_DROP_MM / 2, z)
+        this.scene.add(jaali)
+      }
+
+      if (detailed) {
+        // The bowl. Its lip is the physics radius sitting on the cloth, so the cream wall
+        // starts exactly at the cloth edge and shares the pocket's centre - it is placed at
+        // the pocket's own x/z, never at the origin. The lathe is BackSide, so what the
+        // camera sees is the inside of the funnel.
+        const bowl = new THREE.Mesh(geo.bowl, pocketBowlMat)
+        bowl.name = 'pocket-bowl-detail'
+        bowl.position.set(x, 0, z)
+        this.scene.add(bowl)
+
+        // The jaali, stretched across the throat of the bowl. Kept shallow enough that it
+        // is still lit and still legible looking down from the normal playing camera.
+        const netDisc = new THREE.Mesh(geo.netDisc, pocketNetDiscMat)
+        netDisc.name = 'pocket-net-detail'
+        netDisc.rotation.x = -Math.PI / 2
+        netDisc.position.set(x, -POCKET_NET_DEPTH_MM, z)
+        this.scene.add(netDisc)
+
+        // The two green jaws, one per cushion that meets this pocket. They are lathes
+        // centred on the pocket itself, so they are automatically concentric with the bowl.
+        for (const [name, jawGeo] of [
+          ['pocket-jaw-long', geo.jawLong],
+          ['pocket-jaw-short', geo.jawShort]
+        ] as const) {
+          const jaw = new THREE.Mesh(jawGeo, pocketJawMat)
+          jaw.name = name
+          jaw.position.set(x, 0, z)
+          this.scene.add(jaw)
+        }
+      }
 
       // Jaw plate: flat cream plate with hole, clipped to apron footprint
       const holeR = p.radius * POCKET_HOLE_SCALE
