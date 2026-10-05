@@ -976,7 +976,7 @@ class BallRig {
       clearcoat: 1,
       clearcoatRoughness: BALL_CLEARCOAT_ROUGHNESS,
       emissive: 0x000000,
-      envMapIntensity: 1.2
+      envMapIntensity: 1.0
     })
     this.sphere = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 28), this.material)
     // Balls never cast into the scene's one static shadow map: a shadow baked at
