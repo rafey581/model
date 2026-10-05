@@ -29,7 +29,7 @@ import {
  */
 
 /** The cushion's inner face is a vertical plane at u=0; the ball radius is 26.25mm. */
-export const CUSHION_H = 12
+export const CUSHION_H = 36
 export const CUSHION_DEPTH = 44
 
 /** How far the apron extends past the bed on every side. */
