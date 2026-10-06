@@ -39,7 +39,7 @@ import {
   placementIsOver,
   stepPlacementFlow
 } from './game/placement.js'
-import { PLACEMENT_TRANSITION_SECONDS } from './game/camera.js'
+import { PLAYER_CAMERA_MODES, PLACEMENT_TRANSITION_SECONDS, type PlayerCameraMode } from './game/camera.js'
 /** Radians of camera orbit per pixel of right-drag: a full-width drag sweeps half a turn. */
 const CAMERA_ORBIT_PER_PIXEL = Math.PI / 900
 
@@ -97,11 +97,11 @@ let frame: FrameSnapshotData | null = null
 let cueController: CueController | null = null
 let scene3d: Scene3D | null = null
 /**
- * Which of the two views the player has asked for. The camera follows this rather than
+ * Which of the views the player has asked for. The camera follows this rather than
  * being told where to go, so the choice survives every shot: watching a shot put the camera
  * on the balls, and when the balls stop it comes back to whatever was asked for here.
  */
-let cameraMode: 'AIM' | 'TOP_DOWN' = 'AIM'
+let cameraMode: PlayerCameraMode = 'AIM'
 let cameraToggleEl: HTMLButtonElement | null = null
 /**
  * Where the cue-ball placement flow currently stands: idle, flying the camera up to the
@@ -370,39 +370,94 @@ function header(options: { home?: boolean } = {}): HTMLElement {
   return head
 }
 
+/** What each view is called out loud, for the button's own label. */
+const CAMERA_VIEW_NAMES: Record<PlayerCameraMode, string> = {
+  AIM: 'cue ball',
+  BROADCAST: 'broadcast',
+  SIDE: 'side',
+  CLOSE: 'close-up',
+  TOP_DOWN: 'overhead'
+}
+
 /**
- * The two-view toggle's glyph, and which of the two it is right now.
+ * The mark each view draws inside the lens ring.
  *
- * AIM is a camera seen from the side — body, lens, and the little viewfinder bump on top —
- * because that is the view you are in when you are lining a shot up. TOP_DOWN is the table's
- * own footprint with a ball sitting on it, which is the other view. So the mark always
- * describes the mode you are currently looking at, not the one the button would switch to.
+ * All five at the same 1.3 stroke weight, all taking their colour from `currentColor` so
+ * they inherit whatever the glass button is currently wearing:
  *
- * Both are drawn inside the same lens ring at the same 1.3 stroke weight, and they take their
- * colour from `currentColor` so they inherit whatever the glass button is currently wearing.
+ *  - AIM is a camera seen from the side — body, lens, and the little viewfinder bump on
+ *    top — because that is the view you are in when you are lining a shot up.
+ *  - BROADCAST is a screen on a stand: the wide shot the venue is covered from.
+ *  - SIDE is a camera in profile on its tripod, which is the camera beside the table.
+ *  - CLOSE is a focus reticle, which is what a close camera does: frames one thing tight.
+ *  - TOP_DOWN is the table's own footprint with a ball sitting on it.
  */
-function cameraSvg(mode: 'AIM' | 'TOP_DOWN'): string {
+const CAMERA_DIAGRAMS: Record<PlayerCameraMode, (ink: string) => string> = {
+  AIM: (ink) =>
+    '<path d="M8.1 7.3V6.1a0.8 0.8 0 0 1 0.8-0.8h2.2a0.8 0.8 0 0 1 0.8 0.8v1.2" fill="none" stroke="' +
+    ink +
+    '" stroke-width="1.3" stroke-linejoin="round"/>' +
+    '<rect x="4.4" y="7.3" width="11.2" height="7.3" rx="1.6" fill="none" stroke="' +
+    ink +
+    '" stroke-width="1.3"/>' +
+    '<circle cx="10" cy="10.95" r="2.25" fill="none" stroke="' +
+    ink +
+    '" stroke-width="1.3"/>',
+  BROADCAST: (ink) =>
+    '<rect x="3.6" y="5.2" width="12.8" height="7.8" rx="1.5" fill="none" stroke="' +
+    ink +
+    '" stroke-width="1.3"/>' +
+    '<path d="M8.6 7.6v3.2l2.9-1.6z" fill="' +
+    ink +
+    '"/>' +
+    '<path d="M10 13v2.3" stroke="' +
+    ink +
+    '" stroke-width="1.3"/>' +
+    '<path d="M7.4 15.9h5.2" stroke="' +
+    ink +
+    '" stroke-width="1.3" stroke-linecap="round"/>',
+  SIDE: (ink) =>
+    '<rect x="4.4" y="7.4" width="8.4" height="5.6" rx="1.6" fill="none" stroke="' +
+    ink +
+    '" stroke-width="1.3"/>' +
+    '<path d="M12.8 8.9l3-1.4v6.4l-3-1.4" fill="none" stroke="' +
+    ink +
+    '" stroke-width="1.3" stroke-linejoin="round"/>' +
+    '<path d="M8.6 13v2.6" stroke="' +
+    ink +
+    '" stroke-width="1.3"/>' +
+    '<path d="M6.4 16.3l2.2-2.9 2.2 2.9" fill="none" stroke="' +
+    ink +
+    '" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>',
+  CLOSE: (ink) =>
+    '<path d="M5.2 7.7V6.2a1 1 0 0 1 1-1h1.6M14.8 7.7V6.2a1 1 0 0 0-1-1h-1.6M5.2 12.3v1.5a1 1 0 0 0 1 1h1.6M14.8 12.3v1.5a1 1 0 0 1-1 1h-1.6" fill="none" stroke="' +
+    ink +
+    '" stroke-width="1.3" stroke-linecap="round"/>' +
+    '<circle cx="10" cy="10" r="2.1" fill="' +
+    ink +
+    '"/>',
+  TOP_DOWN: (ink) =>
+    '<rect x="4.1" y="6.2" width="11.8" height="7.6" rx="1.5" fill="none" stroke="' +
+    ink +
+    '" stroke-width="1.3"/>' +
+    '<path d="M10 6.2v7.6" stroke="' +
+    ink +
+    '" stroke-width="1.3"/>' +
+    '<circle cx="7" cy="9.4" r="1.4" fill="' +
+    ink +
+    '"/>'
+}
+
+/**
+ * The view toggle's glyph, and which view it is right now.
+ *
+ * The mark always describes the mode you are currently looking at, not the one the button
+ * would switch to: there are more views than a two-state button could carry, so what the
+ * button says is "where you are", and pressing it walks on to the next one.
+ */
+function cameraSvg(mode: PlayerCameraMode): string {
   const ink = 'currentColor'
-  const diagram =
-    mode === 'AIM'
-      ? '<path d="M8.1 7.3V6.1a0.8 0.8 0 0 1 0.8-0.8h2.2a0.8 0.8 0 0 1 0.8 0.8v1.2" fill="none" stroke="' +
-        ink +
-        '" stroke-width="1.3" stroke-linejoin="round"/>' +
-        '<rect x="4.4" y="7.3" width="11.2" height="7.3" rx="1.6" fill="none" stroke="' +
-        ink +
-        '" stroke-width="1.3"/>' +
-        '<circle cx="10" cy="10.95" r="2.25" fill="none" stroke="' +
-        ink +
-        '" stroke-width="1.3"/>'
-      : '<rect x="4.1" y="6.2" width="11.8" height="7.6" rx="1.5" fill="none" stroke="' +
-        ink +
-        '" stroke-width="1.3"/>' +
-        '<path d="M10 6.2v7.6" stroke="' +
-        ink +
-        '" stroke-width="1.3"/>' +
-        '<circle cx="7" cy="9.4" r="1.4" fill="' +
-        ink +
-        '"/>'
+  const diagram = CAMERA_DIAGRAMS[mode](ink)
   return (
     '<svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">' +
     '<circle cx="10" cy="10" r="8.4" fill="none" stroke="' +
@@ -414,23 +469,25 @@ function cameraSvg(mode: 'AIM' | 'TOP_DOWN'): string {
 }
 
 /**
- * The aim / overhead view toggle.
+ * The view toggle: cue ball, broadcast, side, close-up, overhead — and round again.
  *
  * Built as one of the HUD's own round glass buttons rather than as the loose circle it
  * used to be, and mounted by the caller directly under Leave: the two controls a player
  * reaches for between shots sit together in the corner, drawn in the same material as
  * everything else on the edge of the screen.
  *
- * It is not a dead control. It has always switched the 3D scene between the view from
- * behind the cue ball and the view from above, it is disabled while the balls are moving
- * or a placement is in flight (see the render loop), and the render loop hides it outright
- * when the 2D fallback renderer is drawing, because then there is only one view.
+ * It is not a dead control. It walks the scene through the five views, it is disabled
+ * while the balls are moving or a placement is in flight (see the render loop), and the
+ * render loop hides it outright when the 2D fallback renderer is drawing, because then
+ * there is only one view.
  */
 function buildCameraToggle(): HTMLButtonElement {
   const btn = el('button', 'hud-tool hud-glass hud-tool--camera') as HTMLButtonElement
   btn.type = 'button'
   btn.onclick = () => {
-    setCameraMode(cameraMode === 'AIM' ? 'TOP_DOWN' : 'AIM')
+    const index = PLAYER_CAMERA_MODES.indexOf(cameraMode)
+    const next = PLAYER_CAMERA_MODES[(index + 1) % PLAYER_CAMERA_MODES.length]
+    setCameraMode(next ?? 'AIM')
   }
   // Publish the element before asking it to paint itself. `setCameraMode` writes the glyph
   // through `cameraToggleEl` and returns early when that is still null, so setting it after
@@ -440,17 +497,18 @@ function buildCameraToggle(): HTMLButtonElement {
   return btn
 }
 
-function setCameraMode(mode: 'AIM' | 'TOP_DOWN'): void {
+function setCameraMode(mode: PlayerCameraMode): void {
   cameraMode = mode
   const btn = cameraToggleEl
   if (!btn) return
   btn.innerHTML = cameraSvg(mode)
-  // A fixed name, and the state carried by aria-pressed rather than by the label: the glyph
-  // and the pressed styling already say which view this is, so a mode-dependent name would
-  // only repeat them out loud on every focus.
-  btn.title = 'Camera view'
-  btn.setAttribute('aria-label', 'Camera view')
-  btn.setAttribute('aria-pressed', mode === 'TOP_DOWN' ? 'true' : 'false')
+  // The view's own name in the label, and the state on the element as `data-mode`: five
+  // marks pass through this button, so the glyph cannot be what says which one it is on
+  // focus, and "pressed" would be a lie about four of the five.
+  const name = CAMERA_VIEW_NAMES[mode]
+  btn.title = `Camera view: ${name}`
+  btn.setAttribute('aria-label', `Camera view: ${name}`)
+  btn.setAttribute('data-mode', mode)
 }
 
 function bellSvg(): string {

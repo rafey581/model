@@ -8,16 +8,29 @@ import {
   AIM_LOOK_AHEAD_MM,
   AIM_PORTRAIT_MAX_EXTRA_DEG,
   AIM_RAIL_CLEARANCE_MM,
+  BROADCAST_BACK_MM,
+  BROADCAST_FOV_DEG,
+  BROADCAST_HEIGHT_MM,
   CAMERA_REACH_MM,
+  CLOSE_BACK_MM,
+  CLOSE_FOV_DEG,
+  CLOSE_HEIGHT_MM,
+  CLOSE_SIDE_MM,
   MAX_CAMERA_HEIGHT_MM,
   MIN_CAMERA_HEIGHT_MM,
   PLACEMENT_TRANSITION_MAX_SECONDS,
   PLACEMENT_TRANSITION_MIN_SECONDS,
   PLACEMENT_TRANSITION_SECONDS,
+  PLAYER_CAMERA_MODES,
+  SIDE_BACK_MM,
+  SIDE_FOV_DEG,
+  SIDE_HEIGHT_MM,
   TOP_DOWN_MIN_HEIGHT_MM,
   aimFovDeg,
   beginPlacementTransition,
+  broadcastPose,
   clampPlacementTransitionSeconds,
+  closePose,
   initialHeadingLatch,
   stepHeadingLatch,
   latchedCameraYaw,
@@ -25,6 +38,7 @@ import {
   followHeadingLatch,
   MAX_ORBIT_RAD,
   noPlacementTransition,
+  sidePose,
   stepPlacementTransition,
   TRACK_MIN_HEIGHT_MM,
   VISIBLE_HALF_LENGTH,
@@ -39,13 +53,23 @@ import {
   shortestAngleDelta,
   stepCameraRig,
   topDownHeight,
-  topDownPose
+  topDownPose,
+  wideFovDeg,
+  type CameraPose
 } from './camera.js'
 
 const DEG = Math.PI / 180
 const HALF_L = TABLE_LENGTH / 2
 const HALF_W = TABLE_WIDTH / 2
 const ASPECT_2_TO_1 = 2
+const ASPECT_16_TO_9 = 16 / 9
+/** The four corners of the bed: what any camera has to hold in frame to show a table. */
+const TABLE_CORNERS = [
+  { x: 0, y: 0 },
+  { x: TABLE_LENGTH, y: 0 },
+  { x: 0, y: TABLE_WIDTH },
+  { x: TABLE_LENGTH, y: TABLE_WIDTH }
+]
 
 const request = (overrides: Partial<Parameters<typeof resolveCameraTarget>[0]> = {}) => ({
   mode: 'AIM' as const,
@@ -364,6 +388,141 @@ describe('the overhead camera', () => {
   })
 })
 
+describe("the venue's television cameras", () => {
+  /** Shapes a window can actually take in landscape, where these views are meant to work. */
+  const WIDE_ASPECTS = [16 / 9, 2, 1.5]
+
+  /** All four corners of the bed projected for a pose. Null would mean behind the lens. */
+  function corners(pose: CameraPose, aspect: number): ({ x: number; y: number } | null)[] {
+    const cam = pickCameraAt(
+      { x: pose.x, y: pose.y, height: pose.height },
+      { x: pose.lookX, y: pose.lookY, height: pose.lookHeight },
+      pose.fov,
+      aspect
+    )
+    return TABLE_CORNERS.map((corner) => projectToNdc(corner, 0, cam))
+  }
+
+  /** The table is on screen whole: in front of the lens, inside the frame, nothing clipped. */
+  function expectTableInFrame(pose: CameraPose, aspect: number): void {
+    for (const ndc of corners(pose, aspect)) {
+      expect(ndc).not.toBeNull()
+      expect(Math.abs(ndc!.x)).toBeLessThanOrEqual(1)
+      expect(Math.abs(ndc!.y)).toBeLessThanOrEqual(1)
+    }
+  }
+
+  it('walks the views in the order the button offers them', () => {
+    expect([...PLAYER_CAMERA_MODES]).toEqual(['AIM', 'BROADCAST', 'SIDE', 'CLOSE', 'TOP_DOWN'])
+  })
+
+  it('opens up on a narrow canvas without touching the landscape framing', () => {
+    expect(wideFovDeg(BROADCAST_FOV_DEG, 2)).toBe(BROADCAST_FOV_DEG)
+    expect(wideFovDeg(BROADCAST_FOV_DEG, ASPECT_16_TO_9)).toBe(BROADCAST_FOV_DEG)
+    expect(wideFovDeg(BROADCAST_FOV_DEG, 0.5)).toBeGreaterThan(BROADCAST_FOV_DEG)
+  })
+
+  it('stands the wide camera down the length of the table, on the landing', () => {
+    const pose = broadcastPose(ASPECT_16_TO_9)
+    expect(pose.x).toBeCloseTo(-BROADCAST_BACK_MM, 9)
+    expect(pose.y).toBeCloseTo(HALF_W, 9)
+    expect(pose.height).toBe(BROADCAST_HEIGHT_MM)
+    expect(pose.lookX).toBeCloseTo(HALF_L, 9)
+    expect(pose.lookY).toBeCloseTo(HALF_W, 9)
+    expect(pose.lookHeight).toBeGreaterThan(0)
+    expect(pose.lookHeight).toBeLessThan(pose.height)
+    expect(pose.fov).toBe(BROADCAST_FOV_DEG)
+    // On the landing ring rather than out in the bowl: 1750 of cushion plus its own
+    // stand-off, and still inside what the rig is allowed to reach for.
+    const range = Math.hypot(pose.x - HALF_L, pose.y - HALF_W)
+    expect(range).toBeCloseTo(HALF_L + BROADCAST_BACK_MM, 9)
+    expect(range).toBeLessThanOrEqual(CAMERA_REACH_MM)
+  })
+
+  it('shows the whole table from the wide camera, near cushion to far', () => {
+    for (const aspect of [...WIDE_ASPECTS, 1]) expectTableInFrame(broadcastPose(aspect), aspect)
+  })
+
+  it('sits beyond the near cushion, level with the middle of the bed', () => {
+    const pose = sidePose(ASPECT_16_TO_9)
+    expect(pose.x).toBeCloseTo(HALF_L, 9)
+    expect(pose.y).toBeCloseTo(-SIDE_BACK_MM, 9)
+    expect(pose.height).toBe(SIDE_HEIGHT_MM)
+    expect(pose.lookX).toBeCloseTo(HALF_L, 9)
+    expect(pose.lookY).toBeCloseTo(HALF_W, 9)
+    expect(pose.fov).toBe(SIDE_FOV_DEG)
+    const range = Math.hypot(pose.x - HALF_L, pose.y - HALF_W)
+    expect(range).toBeCloseTo(HALF_W + SIDE_BACK_MM, 9)
+    expect(range).toBeLessThanOrEqual(CAMERA_REACH_MM)
+  })
+
+  it('shows the whole table from the side, cushions and all', () => {
+    for (const aspect of WIDE_ASPECTS) expectTableInFrame(sidePose(aspect), aspect)
+  })
+
+  it('hangs the close camera off the cue ball, and waits on the wide shot without one', () => {
+    const cue = { x: 900, y: 700 }
+    const pose = closePose(cue, ASPECT_16_TO_9)
+    expect(pose.x).toBeCloseTo(cue.x - CLOSE_BACK_MM, 9)
+    expect(pose.y).toBeCloseTo(cue.y - CLOSE_SIDE_MM, 9)
+    expect(pose.height).toBe(CLOSE_HEIGHT_MM)
+    expect(pose.lookX).toBe(cue.x)
+    expect(pose.lookY).toBe(cue.y)
+    expect(pose.lookHeight).toBeCloseTo(BALL_RADIUS, 9)
+    expect(pose.fov).toBe(CLOSE_FOV_DEG)
+    // A camera that invented a cue ball would sweep across the room on the first frame,
+    // so with no ball to hang off it holds the wide view instead.
+    expect(closePose(null, ASPECT_16_TO_9)).toEqual(broadcastPose(ASPECT_16_TO_9))
+  })
+
+  it('frames the cue ball where a close camera belongs: centred, and big enough to read', () => {
+    for (const cue of [
+      { x: 400, y: 300 },
+      { x: TABLE_LENGTH - 400, y: TABLE_WIDTH - 300 },
+      { x: HALF_L, y: HALF_W }
+    ]) {
+      const pose = closePose(cue, ASPECT_16_TO_9)
+      const cam = pickCameraAt(
+        { x: pose.x, y: pose.y, height: pose.height },
+        { x: pose.lookX, y: pose.lookY, height: pose.lookHeight },
+        pose.fov,
+        ASPECT_16_TO_9
+      )
+      const ball = projectToNdc(cue, BALL_RADIUS, cam)
+      expect(ball).not.toBeNull()
+      // On the look point, so dead centre of frame: the shot is what the picture is of.
+      expect(Math.abs(ball!.x)).toBeLessThan(0.05)
+      expect(Math.abs(ball!.y)).toBeLessThan(0.05)
+      // A few per cent of the frame across, which is what makes it a close camera: the
+      // ball reads as a subject rather than as one of twenty on a wide table.
+      const top = projectToNdc(cue, BALL_RADIUS * 2, cam)
+      expect(top).not.toBeNull()
+      const span = top!.y - ball!.y
+      expect(span).toBeGreaterThan(0.02)
+      expect(span).toBeLessThan(0.2)
+    }
+  })
+
+  it('takes its heading from the look-around alone, never from the shot line', () => {
+    const latch = addOrbit(initialHeadingLatch(0), 0.7)
+    const wide = { ...request({ mode: 'BROADCAST', aimAngle: 1.2, latch }), cue: { x: 900, y: 700 } }
+    expect(resolveCameraTarget(wide)).toEqual(broadcastPose(ASPECT_2_TO_1, latch.orbit))
+    expect(resolveCameraTarget({ ...wide, mode: 'SIDE' })).toEqual(sidePose(ASPECT_2_TO_1, latch.orbit))
+    expect(resolveCameraTarget({ ...wide, mode: 'CLOSE' })).toEqual(closePose(wide.cue, ASPECT_2_TO_1, latch.orbit))
+  })
+
+  it('needs no clamping of its own, at any look-around and with the ball anywhere on the cloth', () => {
+    const poses: CameraPose[] = []
+    for (const orbit of [0, 0.9, Math.PI, -2.2]) {
+      poses.push(broadcastPose(ASPECT_16_TO_9, orbit), sidePose(ASPECT_16_TO_9, orbit))
+      for (const cue of [...TABLE_CORNERS, { x: HALF_L, y: HALF_W }]) {
+        poses.push(closePose(cue, ASPECT_16_TO_9, orbit))
+      }
+    }
+    for (const pose of poses) expect(clampPose(pose)).toEqual(pose)
+  })
+})
+
 describe('the tracking camera', () => {
   it('follows the focus it is given, holding the balls in frame', () => {
     const pose = resolveCameraTarget(
@@ -426,7 +585,9 @@ describe('the rig', () => {
   })
 
   it('keeps the lens sane through every transition between every pair of modes', () => {
-    const modes = ['AIM', 'TOP_DOWN', 'TRACK'] as const
+    // Every pair, including the three fixed television views: they ease like the rest, so
+    // the guard has to hold for a broadcast-to-close move as much as for aim-to-overhead.
+    const modes = ['AIM', 'TOP_DOWN', 'TRACK', 'BROADCAST', 'SIDE', 'CLOSE'] as const
     const cues = [
       { x: 120, y: 120 },
       { x: TABLE_LENGTH - 120, y: TABLE_WIDTH - 120 },

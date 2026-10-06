@@ -263,4 +263,92 @@ export function computeAimGuide(
   return best
 }
 
+/**
+ * How thick the aim lines read on screen, in pixels.
+ *
+ * The lines are drawn as strips lying on the cloth, so their world width has to
+ * change with the lens: a fixed millimetre width is a hairline at the overhead
+ * camera and a bar at the cue camera. This is the thickness they are held to
+ * instead — a broadcast shot line is about two pixels of pure white, crisp
+ * rather than glowing.
+ */
+export const AIM_LINE_TARGET_PX = 3
+
+/** The thinnest a line is ever drawn, in millimetres: below this it aliases. */
+export const AIM_LINE_MIN_MM = 3
+/** The thickest a line is ever drawn, in millimetres: beyond this it is a stripe. */
+export const AIM_LINE_MAX_MM = 14
+
+/**
+ * The world width, in millimetres, that makes a line read as
+ * {@link AIM_LINE_TARGET_PX} pixels from `distanceMm`, for a lens of `fovDeg`
+ * filling `viewportPx` pixels of height. Clamped so neither the overhead view
+ * nor a ball against the lens can push it to a hairline or a bar.
+ */
+export function aimLineWorldWidth(distanceMm: number, fovDeg: number, viewportPx: number): number {
+  const perPixel = (2 * distanceMm * Math.tan((fovDeg * Math.PI) / 360)) / Math.max(1, viewportPx)
+  return Math.min(AIM_LINE_MAX_MM, Math.max(AIM_LINE_MIN_MM, AIM_LINE_TARGET_PX * perPixel))
+}
+
+/**
+ * Where LINE 1 is drawn: from the cue ball's own surface along the aim angle,
+ * stopping at the ghost ball when something is in the way and at the cushion
+ * when the table is open.
+ *
+ * The heading is always the aim angle, never the direction to the contact point.
+ * Those differ on a cut, and a shot line that leans toward the ball it is going
+ * to hit is drawing a shot nobody is playing: the cue ball goes straight, and
+ * only after contact does anything else move.
+ *
+ * `out` is filled in place so the caller can hold one layout for the frame
+ * without allocating.
+ */
+export interface ShotLineLayout {
+  /** The heading the line is drawn along: the aim angle, unchanged. */
+  angle: number
+  /** Where the line starts, in table coordinates: the cue ball's surface. */
+  from: { x: number; y: number }
+  /** Where it stops: the ghost ball on contact, or the cushion face. */
+  to: { x: number; y: number }
+  /** Millimetres of line to draw, from `from` to `to`. */
+  length: number
+}
+
+/** An empty {@link ShotLineLayout} for a caller to reuse across frames. */
+export function shotLineLayoutTarget(): ShotLineLayout {
+  return { angle: 0, from: { x: 0, y: 0 }, to: { x: 0, y: 0 }, length: 0 }
+}
+
+export function shotLineLayout(
+  cue: { x: number; y: number },
+  angle: number,
+  guide: AimGuide | null,
+  out: ShotLineLayout
+): ShotLineLayout {
+  const dirX = Math.cos(angle)
+  const dirY = Math.sin(angle)
+  out.angle = angle
+  out.from.x = cue.x + dirX * BALL_RADIUS
+  out.from.y = cue.y + dirY * BALL_RADIUS
+
+  if (guide) {
+    out.to.x = guide.ghost.x
+    out.to.y = guide.ghost.y
+    out.length = Math.max(0, guide.travel - BALL_RADIUS)
+    return out
+  }
+
+  // Nothing in the way: the line runs to the bed's own rectangle. Geometry, not
+  // prediction, so no aim data is being invented here.
+  let far = 4000
+  if (dirX > 0.0001) far = Math.min(far, (TABLE_LENGTH - cue.x) / dirX)
+  if (dirX < -0.0001) far = Math.min(far, -cue.x / dirX)
+  if (dirY > 0.0001) far = Math.min(far, (TABLE_WIDTH - cue.y) / dirY)
+  if (dirY < -0.0001) far = Math.min(far, -cue.y / dirY)
+  out.to.x = cue.x + dirX * far
+  out.to.y = cue.y + dirY * far
+  out.length = Math.max(0, far - BALL_RADIUS)
+  return out
+}
+
 

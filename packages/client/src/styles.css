@@ -720,10 +720,10 @@ th {
  * a `.hud-tool` and mounted by the caller directly under Leave, so the two controls a
  * player reaches for between shots are one column in one material.
  *
- * Only the state colours are restated: pressed means overhead, and it is gold then, which
- * is the same gold the turn highlight uses.
+ * Only the state colours are restated: overhead is the one view that wears the gold, and it
+ * is the same gold the turn highlight uses. The other views read by their marks alone.
  */
-.hud-tool--camera[aria-pressed='true'] {
+.hud-tool--camera[data-mode='TOP_DOWN'] {
   color: var(--turn);
   border-color: rgba(201, 168, 76, 0.55);
 }

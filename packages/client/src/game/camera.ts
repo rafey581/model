@@ -151,12 +151,18 @@ export const MAX_CAMERA_HEIGHT_MM = 6000
 /**
  * The furthest from the table's centre the lens may sit, in millimetres.
  *
- * Has to clear the aim camera's 540mm setback when the cue ball is in a corner and the
+ * 4600 is the radius of the venue's own camera landing: the ring of bare carpet the
+ * television tripods stand on, which runs from the hoardings at 4300 out to the front of
+ * the first row of seats at 4740. Every view may therefore stand where a real broadcast
+ * camera would — on that landing, or anywhere inboard of it — and none may reach the
+ * seating, which is the only place in the bowl a camera would visibly bury itself.
+ *
+ * It still clears the aim camera's 540mm setback when the cue ball is in a corner and the
  * shot is played back down the table — 2140mm from centre at worst — and the tracking
  * camera's 950mm from a focus at the far rail, with room over both. It is a backstop
  * against a bad pose, not a constraint the modes feel.
  */
-export const CAMERA_REACH_MM = 3000
+export const CAMERA_REACH_MM = 4600
 /** The narrowest and widest the lens may ever be, in degrees. */
 export const MIN_FOV_DEG = 30
 export const MAX_FOV_DEG = 75
@@ -178,7 +184,26 @@ export const VISIBLE_HALF_WIDTH = HALF_W + POCKET_RADIUS_CORNER + 60
  * it runs. That is what stops a placement cutting to a different camera and back again -
  * there is only ever the one rig and one pose.
  */
-export type CameraMode = 'AIM' | 'TOP_DOWN' | 'TRACK' | 'PLACEMENT_TOP_DOWN'
+export type CameraMode = 'AIM' | 'TOP_DOWN' | 'TRACK' | 'PLACEMENT_TOP_DOWN' | 'BROADCAST' | 'SIDE' | 'CLOSE'
+
+/**
+ * The views the player may choose between, in the order the toggle walks them.
+ *
+ * `AIM` is the cue-ball camera the game plays in and `TOP_DOWN` is the overhead one, and
+ * the three between them are the venue's own broadcast cameras: a wide shot down the
+ * table, a side-on table camera, and a close camera that stays with the cue ball. A shot
+ * takes the camera away from all of them for as long as it lasts and hands it back, so
+ * the order only matters while the player is free to aim.
+ */
+export type PlayerCameraMode = 'AIM' | 'BROADCAST' | 'SIDE' | 'CLOSE' | 'TOP_DOWN'
+
+export const PLAYER_CAMERA_MODES: readonly PlayerCameraMode[] = [
+  'AIM',
+  'BROADCAST',
+  'SIDE',
+  'CLOSE',
+  'TOP_DOWN'
+]
 
 /** Where the camera is, and where it is looking, all in table millimetres. */
 export interface CameraPose {
@@ -436,6 +461,147 @@ export function trackPose(focus: { x: number; y: number; spread: number }, yaw: 
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * The venue's three television cameras.
+ *
+ * A broadcast camera is bolted to a position and does not follow the balls, so these are
+ * fixed poses rather than solved ones — with one exception: the close camera stays with
+ * the cue ball, because that is where the player is.
+ *
+ * Each is placed from the geometry of the room it stands in. The wide shot sits on the
+ * camera landing 4500mm out along the table's own axis, the side camera stands on the
+ * carpet beyond the near cushion, and the close camera hangs just off the ball. All three
+ * stay inside {@link CAMERA_REACH_MM}, and so does every pose the rig eases through on the
+ * way between them, which is what stops a transition crossing the seating.
+ *
+ * The look-at heights are the part that is not obvious. A camera this close to the table
+ * cannot hold the near rail, the far cushion and the crowd behind them in one frame while
+ * looking *down* at the cloth: aiming at the bed puts the crowd off the top of the frame,
+ * and aiming at the crowd drops the near rail out of the bottom. So each pose looks at a
+ * point above the cloth and short of the middle, and the field of view below is the span
+ * it leaves on either side of that point — table at the bottom, bowl at the top.
+ * ------------------------------------------------------------------ */
+
+/** Vertical field of view for the wide broadcast camera, in degrees. */
+export const BROADCAST_FOV_DEG = 55
+/** How far behind the baulk cushion the wide camera stands, which puts it on the landing. */
+export const BROADCAST_BACK_MM = 2750
+/** Height of the wide camera above the cloth: a riser, and the tallest fixed view. */
+export const BROADCAST_HEIGHT_MM = 2800
+/** What the wide camera looks at, measured above the cloth. */
+export const BROADCAST_LOOK_HEIGHT_MM = 1200
+
+/** Vertical field of view for the side camera, in degrees. */
+export const SIDE_FOV_DEG = 52
+/**
+ * How far beyond the near cushion the side camera stands, on the carpet.
+ *
+ * The distance is solved from the frame rather than picked: the near cushion's corners are
+ * the widest thing the lens has to hold, and at `SIDE_FOV_DEG` they leave the picture
+ * anywhere inside about 2000mm. Standing back this far keeps both of them, and the whole
+ * bed with them, in a landscape frame while still leaving the table most of the picture.
+ */
+export const SIDE_BACK_MM = 2600
+/** Height of the side camera above the cloth. */
+export const SIDE_HEIGHT_MM = 1600
+/** What the side camera looks at, measured above the cloth. */
+export const SIDE_LOOK_HEIGHT_MM = 400
+
+/** Vertical field of view for the close camera, in degrees. */
+export const CLOSE_FOV_DEG = 34
+/** How far behind the cue ball the close camera hangs, along the table's length. */
+export const CLOSE_BACK_MM = 1600
+/** How far off the shot line it hangs, across the table's width. */
+export const CLOSE_SIDE_MM = 900
+/** Height of the close camera above the cloth: eye level for somebody leaning in. */
+export const CLOSE_HEIGHT_MM = 1400
+
+/**
+ * Aspect below which the wide views start opening up, and how fast they do it.
+ *
+ * A landscape frame holds the near rail, the far cushion and the bowl behind them at the
+ * base field of view. A portrait phone has no width to spare for a table seen almost
+ * end-on, so the lens opens as the canvas narrows — capped by the same ceiling
+ * {@link clampPose} enforces.
+ */
+const WIDE_PORTRAIT_FROM_ASPECT = 1.6
+const WIDE_PORTRAIT_FOV_PER_ASPECT = 20
+const WIDE_PORTRAIT_MAX_EXTRA_DEG = 21
+
+/** One of the wide views' vertical field of view for a canvas of this shape. */
+export function wideFovDeg(base: number, aspect: number): number {
+  const narrow = Math.max(0, WIDE_PORTRAIT_FROM_ASPECT - aspect)
+  return Math.min(MAX_FOV_DEG, base + Math.min(WIDE_PORTRAIT_MAX_EXTRA_DEG, narrow * WIDE_PORTRAIT_FOV_PER_ASPECT))
+}
+
+/** Turns a table-millimetre offset about the origin. How the look-around moves a fixed view. */
+function rotateOffset(dx: number, dy: number, angle: number): { x: number; y: number } {
+  if (angle === 0) return { x: dx, y: dy }
+  const c = Math.cos(angle)
+  const s = Math.sin(angle)
+  return { x: dx * c - dy * s, y: dx * s + dy * c }
+}
+
+/**
+ * The main broadcast camera: wide, elevated, down the length of the table.
+ *
+ * Stands on the camera landing behind the baulk cushion and looks along the bed, which is
+ * the composition the sport is covered in — table across the lower half, hoardings and
+ * the first rows of the bowl above it, the roof left out of frame entirely.
+ */
+export function broadcastPose(aspect: number, orbit: number = 0): CameraPose {
+  const offset = rotateOffset(-(HALF_L + BROADCAST_BACK_MM), 0, orbit)
+  return {
+    x: TABLE_CENTRE.x + offset.x,
+    y: TABLE_CENTRE.y + offset.y,
+    height: BROADCAST_HEIGHT_MM,
+    lookX: TABLE_CENTRE.x,
+    lookY: TABLE_CENTRE.y,
+    lookHeight: BROADCAST_LOOK_HEIGHT_MM,
+    fov: wideFovDeg(BROADCAST_FOV_DEG, aspect)
+  }
+}
+
+/** The side-on table camera: the whole bed across the frame, from beyond the near cushion. */
+export function sidePose(aspect: number, orbit: number = 0): CameraPose {
+  const offset = rotateOffset(0, -(HALF_W + SIDE_BACK_MM), orbit)
+  return {
+    x: TABLE_CENTRE.x + offset.x,
+    y: TABLE_CENTRE.y + offset.y,
+    height: SIDE_HEIGHT_MM,
+    lookX: TABLE_CENTRE.x,
+    lookY: TABLE_CENTRE.y,
+    lookHeight: SIDE_LOOK_HEIGHT_MM,
+    fov: wideFovDeg(SIDE_FOV_DEG, aspect)
+  }
+}
+
+/**
+ * The close camera, hung just off the cue ball.
+ *
+ * The one fixed view that moves: it holds its offset from the ball rather than the table,
+ * so it stays where the player is as they walk the shot in. With no cue ball there is
+ * nothing to hang off, and a camera that invented one would swing across the room on the
+ * first frame — it waits on the wide shot instead.
+ */
+export function closePose(
+  cue: { x: number; y: number } | null,
+  aspect: number,
+  orbit: number = 0
+): CameraPose {
+  if (!cue) return broadcastPose(aspect, orbit)
+  const offset = rotateOffset(-CLOSE_BACK_MM, -CLOSE_SIDE_MM, orbit)
+  return {
+    x: cue.x + offset.x,
+    y: cue.y + offset.y,
+    height: CLOSE_HEIGHT_MM,
+    lookX: cue.x,
+    lookY: cue.y,
+    lookHeight: BALL_RADIUS,
+    fov: wideFovDeg(CLOSE_FOV_DEG, aspect)
+  }
+}
+
 /**
  * Keeps the lens above the cloth and inside a box the table actually occupies.
  *
@@ -471,6 +637,12 @@ export function resolveCameraTarget(request: CameraRequest): CameraPose {
   if (request.mode === 'TRACK') {
     return request.focus ? trackPose(request.focus, request.aimAngle) : topDownPose(request.aspect)
   }
+  // The three television views are fixed rather than aimed, so they take their heading
+  // from the player's look-around alone and ignore the shot line entirely: turning the
+  // cue must not swing a camera that is meant to be bolted to the floor.
+  if (request.mode === 'BROADCAST') return broadcastPose(request.aspect, request.latch.orbit)
+  if (request.mode === 'SIDE') return sidePose(request.aspect, request.latch.orbit)
+  if (request.mode === 'CLOSE') return closePose(request.cue, request.aspect, request.latch.orbit)
   // With no cue ball there is nothing to sit behind, and a camera that invented one
   // would swing across the table on the first frame. It waits overhead until there is.
   return request.cue

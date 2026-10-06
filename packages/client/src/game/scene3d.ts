@@ -1,14 +1,37 @@
 import * as THREE from 'three'
 import { BALL_IDS, TABLE_LENGTH, TABLE_WIDTH, BALL_RADIUS, BAULK_LINE_X, D_RADIUS, POCKET_RADIUS_CORNER, POCKET_RADIUS_MIDDLE, pocketPositions } from '@snooker/shared'
 import type { FrameSnapshotData, AimState, RenderOptions } from './renderer.js'
-import { computeAimGuide, type AimGuide, type AimGuideBall } from './aim.js'
+import {
+  aimLineWorldWidth,
+  computeAimGuide,
+  shotLineLayout,
+  shotLineLayoutTarget,
+  type AimGuide,
+  type AimGuideBall,
+  type ShotLineLayout
+} from './aim.js'
 import { setTableTransform } from './renderer.js'
+import { buildArenaEnvironment, hideLegacyRoom } from './arenaEnvironment.js'
+import type { ArenaSeatPlacement } from './arenaEnvironment.js'
+import { applyArenaQuality } from './arenaConfig.js'
+import { buildVenueEvents, type VenueEvents, type VenueHost } from './venueEvents.js'
+import type { OpponentShot } from './opponentCue.js'
 import { ballColor } from './palette.js'
+import {
+  createCueBallMaterial,
+  cueShadowPixels,
+  CUE_SHADOW_OFFSET_MM,
+  CUE_SHADOW_PLANE,
+  CUE_SHADOW_STRETCH,
+  CUE_SHADOW_TEXTURE_SIZE,
+  CUE_SHADOW_Y_MM
+} from './ballVisuals.js'
 const SHOW_CROWN_MOULDING = false
 import {
   type CameraRigState,
   type HeadingLatch,
   type PlacementTransition,
+  type PlayerCameraMode,
   initialRigState,
   initialHeadingLatch,
   stepCameraRig,
@@ -19,8 +42,7 @@ import {
   stepPlacementTransition,
   placementTransitionEndPose,
   topDownPose,
-  aimPose,
-  aimFovDeg,
+  resolveCameraTarget,
   followHeadingLatch,
   PLACEMENT_TRANSITION_SECONDS
 } from './camera.js'
@@ -194,16 +216,14 @@ const CLOTH_ANISO_CAP = 16
 const BALL_ROUGHNESS = 0.2
 /** The clearcoat's own roughness - the one crisp highlight a ball is known by. */
 const BALL_CLEARCOAT_ROUGHNESS = 0.1
-/** How much brighter than the palette's white the cue ball is drawn. */
-const CUE_BALL_BRIGHTEN = 1.08
 /** The contact disc's size, as a multiple of the ball's radius. */
-const BALL_SHADOW_PLANE = 2.6
+const BALL_SHADOW_PLANE = 3
 /** The contact disc's height above the cloth, in millimetres. */
 const BALL_SHADOW_Y = 0.5
 /** How far the contact disc leans off the ball's centre, away from the lamp overhead. */
-const BALL_SHADOW_LEAN_MM = 4.5
+const BALL_SHADOW_LEAN_MM = 4
 /** The contact disc's stretch along that lean. */
-const BALL_SHADOW_STRETCH = 1.16
+const BALL_SHADOW_STRETCH = 1.1
 /** The cue's silhouette: a thin tip running out to a thicker butt. */
 const STICK_TIP_R = 5.5
 const STICK_SHAFT_BUTT_R = 13
@@ -306,28 +326,30 @@ const RAIL_WOOD_UV_TILE_MM = 500
 
 /*
  * STEP 4 — the aim guide: thin soft ribbons on the cloth and one hollow ring.
+ *
+ * Every line holds the same screen thickness, worked out per frame from the
+ * lens (see `aimLineWorldWidth`), so a broadcast-style two-pixel line stays two
+ * pixels from the cue camera and from the overhead one alike. Widths are not
+ * named in millimetres for that reason: the millimetres are computed.
  */
 /** The ribbons' height above the cloth, in millimetres. */
-const AIM_RIBBON_Y = 0.6
-/** LINE 1 — the shot line, from the cue ball's surface to the contact or cushion. */
+const AIM_RIBBON_Y = 0.8
+/** LINE 1 — the shot line, from the cue ball's surface to the ghost ball or the cushion. Thin and precise, the way a snooker broadcast draws the shot. */
 const AIM_LINE1_COLOR = 0xffffff
-const AIM_LINE1_WIDTH = 5.5
-const AIM_LINE1_OPACITY = 0.9
-/** The contact ring — hollow, the size of the ball it wraps, nothing inside. Shown only when hitting NO ball. */
+const AIM_LINE1_OPACITY = 1
+/** The contact ring — hollow, the size of the ball it wraps, nothing inside. */
 const AIM_RING_COLOR = 0xffffff
-const AIM_RING_OPACITY = 0.85
-const AIM_RING_STROKE_MM = 1.5
+const AIM_RING_OPACITY = 0.95
+const AIM_RING_STROKE_MM = 2.5
 const AIM_RING_Y = 1.1
 /** LINE 2 — the object ball's line, away along the line of centres. */
 const AIM_LINE2_COLOR = 0x3bd16f
-const AIM_LINE2_WIDTH = 5.5
-const AIM_LINE2_LENGTH = BALL_RADIUS * 6
-const AIM_LINE2_OPACITY = 0.85
+const AIM_LINE2_LENGTH = BALL_RADIUS * 22
+const AIM_LINE2_OPACITY = 1
 /** LINE 3 — the cue ball's tangent after the contact, when one is worked out. */
 const AIM_LINE3_COLOR = 0xffffff
-const AIM_LINE3_WIDTH = 5.0
-const AIM_LINE3_LENGTH = BALL_RADIUS * 4
-const AIM_LINE3_OPACITY = 0.6
+const AIM_LINE3_LENGTH = BALL_RADIUS * 14
+const AIM_LINE3_OPACITY = 1
 
 function feltTexture(): THREE.CanvasTexture {
   return cachedTexture('felt', () => {
@@ -520,12 +542,35 @@ function contactShadowTexture(): THREE.CanvasTexture {
     canvas.width = size
     canvas.height = size
     const ctx = canvas.getContext('2d')!
-    const grad = ctx.createRadialGradient(size / 2, size / 2, 4, size / 2, size / 2, size / 2)
-    grad.addColorStop(0, 'rgba(0,0,0,0.55)')
-    grad.addColorStop(0.6, 'rgba(0,0,0,0.18)')
+    const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2)
+    grad.addColorStop(0, 'rgba(0,0,0,0.5)')
+    grad.addColorStop(0.55, 'rgba(0,0,0,0.5)')
+    grad.addColorStop(0.67, 'rgba(0,0,0,0.42)')
+    grad.addColorStop(0.8, 'rgba(0,0,0,0.2)')
+    grad.addColorStop(0.9, 'rgba(0,0,0,0.07)')
     grad.addColorStop(1, 'rgba(0,0,0,0)')
     ctx.fillStyle = grad
     ctx.fillRect(0, 0, size, size)
+    return new THREE.CanvasTexture(canvas)
+  })
+}
+
+/**
+ * The cue ball's own contact shadow: a softer, wider falloff than the shared ball
+ * shadow, so the ball is grounded without ever reading as a black disc under it.
+ * The darkest point stays small and right at the contact, and the edge dissolves to
+ * nothing well inside the disc's rim.
+ */
+function cueContactShadowTexture(): THREE.CanvasTexture {
+  return cachedTexture('cue-shadow', () => {
+    const size = CUE_SHADOW_TEXTURE_SIZE
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')!
+    const img = ctx.createImageData(size, size)
+    img.data.set(cueShadowPixels(size))
+    ctx.putImageData(img, 0, 0)
     return new THREE.CanvasTexture(canvas)
   })
 }
@@ -572,8 +617,8 @@ function stickShadowTexture(): THREE.CanvasTexture {
 }
 
 /**
- * Open-table aim ribbon: feathered across width, solid first 70%,
- * last 30% fading to 0 toward the cushion.
+ * Open-table aim ribbon: feathered across width, solid first 80%,
+ * last 20% fading to 0 toward the cushion.
  */
 function aimRibbonTexture(): THREE.CanvasTexture {
   return cachedTexture('aim-ribbon', () => {
@@ -587,10 +632,10 @@ function aimRibbonTexture(): THREE.CanvasTexture {
     const d = img.data
     for (let y = 0; y < h; y++) {
       const v = y / (h - 1)
-      const across = Math.min(1, Math.min(v, 1 - v) / 0.28)
+      const across = Math.min(1, Math.min(v, 1 - v) / 0.07)
       for (let x = 0; x < w; x++) {
         const u = x / (w - 1)
-        const along = u < 0.7 ? 1 : 1 - (u - 0.7) / 0.3
+        const along = u < 0.93 ? 1 : 1 - (u - 0.93) / 0.07
         const a = Math.round(255 * across * along * along)
         const i = (y * w + x) * 4
         d[i] = 255
@@ -619,7 +664,7 @@ function aimRibbonSolidTexture(): THREE.CanvasTexture {
     const d = img.data
     for (let y = 0; y < h; y++) {
       const v = y / (h - 1)
-      const across = Math.min(1, Math.min(v, 1 - v) / 0.28)
+      const across = Math.min(1, Math.min(v, 1 - v) / 0.07)
       for (let x = 0; x < w; x++) {
         const a = Math.round(255 * across)
         const i = (y * w + x) * 4
@@ -635,7 +680,9 @@ function aimRibbonSolidTexture(): THREE.CanvasTexture {
 }
 
 /**
- * Aim ribbon trail: feathered across width, fading from 1 to 0 along its length.
+ * Aim ribbon trail: feathered across width, solid for the first 60% and fading
+ * out over the last 40%, so the departure lines point rather than trail off from
+ * the moment of contact.
  */
 function aimRibbonTrailTexture(): THREE.CanvasTexture {
   return cachedTexture('aim-ribbon-trail', () => {
@@ -649,10 +696,10 @@ function aimRibbonTrailTexture(): THREE.CanvasTexture {
     const d = img.data
     for (let y = 0; y < h; y++) {
       const v = y / (h - 1)
-      const across = Math.min(1, Math.min(v, 1 - v) / 0.28)
+      const across = Math.min(1, Math.min(v, 1 - v) / 0.07)
       for (let x = 0; x < w; x++) {
         const u = x / (w - 1)
-        const along = 1 - u
+        const along = u < 0.85 ? 1 : 1 - (u - 0.85) / 0.15
         const a = Math.round(255 * across * along)
         const i = (y * w + x) * 4
         d[i] = 255
@@ -1110,10 +1157,28 @@ function wallTexture(): THREE.CanvasTexture {
   })
 }
 
-class BallRig {
+/**
+ * Per-ball visual overrides for {@link BallRig}. Every field defaults to the shared
+ * ball look, so the fifteen colours keep their exact current material; the cue ball
+ * is the only rig that opts into its own polish and shadow.
+ */
+export interface BallRigOptions {
+  /**
+   * Takes the cue ball's own material from {@link createCueBallMaterial}: the warm
+   * cream resin under its own clearcoat. When set, the constructor's `color` is not
+   * applied - the factory carries the cue ball's colour with its lacquer.
+   */
+  cue?: boolean
+  /** A bespoke contact-shadow texture (the cue ball's soft grounded blob). */
+  shadowTex?: THREE.CanvasTexture
+  /** The contact disc's edge length, as a multiple of the ball's radius. */
+  shadowPlane?: number
+}
+
+export class BallRig {
   group = new THREE.Group()
   sphere: THREE.Mesh
-  material: THREE.MeshStandardMaterial
+  material: THREE.MeshPhysicalMaterial
   blob: THREE.Mesh
   target = new THREE.Vector3()
   firstSeen = true
@@ -1124,23 +1189,39 @@ class BallRig {
   rising = false
   riseT = 0
   riseFrom = new THREE.Vector3()
+  /**
+   * Whether this rig is the cue ball's, and so carries the cue's own grounding:
+   * its shadow sits a shade higher and leans a shade further off the lamp than
+   * the coloured balls', which is all the difference the brightest ball on the
+   * cloth needs to stay planted.
+   */
+  private readonly cueShadow: boolean
 
-  constructor(radius: number, color: number, shadowTex: THREE.CanvasTexture) {
+  constructor(radius: number, color: number, shadowTex: THREE.CanvasTexture, opts: BallRigOptions = {}) {
+    this.cueShadow = opts.cue === true
     // Phenolic resin: a tight diffuse under a clearcoat film. The coat is what
     // carries the ball's one crisp highlight off the lamp, and the env map's
     // bright band is what the coat reflects between that highlight and the
     // horizon. Emissive stays zero: it is only ever set on highlight, and setting
     // it costs nothing while unlit.
-    this.material = new THREE.MeshPhysicalMaterial({
-      color,
-      roughness: 0.05,
-      metalness: 0.0,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.02,
-      emissive: 0x000000,
-      envMapIntensity: 1.0,
-      ior: 1.5
-    })
+    //
+    // The cue ball does not share this material: it is the brightest object on
+    // the cloth, and its own lacquer (warm cream, softer clearcoat, a tamed
+    // reflection of the lamp band) is what keeps it from blowing out against the
+    // green it stands on. It gets a fresh instance so the "ball on" emissive can
+    // drive only its surface.
+    this.material = opts.cue
+      ? createCueBallMaterial()
+      : new THREE.MeshPhysicalMaterial({
+          color,
+          roughness: 0.34,
+          metalness: 0.0,
+          clearcoat: 0.25,
+          clearcoatRoughness: 0.35,
+          emissive: 0x000000,
+          envMapIntensity: 0.3,
+          ior: 1.5
+        })
     this.sphere = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 28), this.material)
     // Balls never cast into the scene's one static shadow map: a shadow baked at
     // frame one would sit forever where the ball first stood. Grounding is sold by
@@ -1149,7 +1230,7 @@ class BallRig {
     this.sphere.castShadow = false
     this.group.add(this.sphere)
     const blobMat = new THREE.MeshBasicMaterial({
-      map: shadowTex,
+      map: opts.shadowTex ?? shadowTex,
       color: 0x000000,
       transparent: true,
       depthWrite: false,
@@ -1159,7 +1240,8 @@ class BallRig {
       toneMapped: false,
       blending: THREE.NormalBlending
     })
-    this.blob = new THREE.Mesh(new THREE.PlaneGeometry(radius * BALL_SHADOW_PLANE, radius * BALL_SHADOW_PLANE), blobMat)
+    const plane = radius * (opts.shadowPlane ?? BALL_SHADOW_PLANE)
+    this.blob = new THREE.Mesh(new THREE.PlaneGeometry(plane, plane), blobMat)
     this.blob.rotation.x = -Math.PI / 2
     this.blob.position.y = 0.6
     this.blob.renderOrder = 1
@@ -1205,16 +1287,20 @@ class BallRig {
     this.target.set(targetX, BALL_RADIUS, targetZ)
     // The contact disc leans and stretches away from the table's centre, where the
     // lamp hangs: that is the oblique part of the light, and it is the direction a
-    // real shadow would take. Dead centre there is nothing to lean towards.
+    // real shadow would take. Dead centre there is nothing to lean towards. The cue
+    // ball takes its own lean, height and stretch from the cue's shadow tuning.
+    const lean = this.cueShadow ? CUE_SHADOW_OFFSET_MM : BALL_SHADOW_LEAN_MM
+    const stretch = this.cueShadow ? CUE_SHADOW_STRETCH : BALL_SHADOW_STRETCH
+    const shadowY = this.cueShadow ? CUE_SHADOW_Y_MM : BALL_SHADOW_Y
     const centreDist = Math.hypot(targetX, targetZ)
     if (centreDist > 40) {
       const nx = targetX / centreDist
       const nz = targetZ / centreDist
-      this.blob.position.set(nx * BALL_SHADOW_LEAN_MM, BALL_SHADOW_Y - BALL_RADIUS, nz * BALL_SHADOW_LEAN_MM)
+      this.blob.position.set(nx * lean, shadowY - BALL_RADIUS, nz * lean)
       this.blob.rotation.z = Math.atan2(-nz, nx)
-      this.blob.scale.set(BALL_SHADOW_STRETCH, 1, 1)
+      this.blob.scale.set(stretch, 1, 1)
     } else {
-      this.blob.position.set(0, BALL_SHADOW_Y - BALL_RADIUS, 0)
+      this.blob.position.set(0, shadowY - BALL_RADIUS, 0)
       this.blob.scale.set(1, 1, 1)
     }
     this.material.emissive.setHex(highlight ? 0x7a5c10 : 0x000000)
@@ -1228,7 +1314,7 @@ class BallRig {
   }
 }
 
-export class Scene3D {
+export class Scene3D implements VenueHost {
   private renderer: THREE.WebGLRenderer
   private scene = new THREE.Scene()
   private camera: THREE.PerspectiveCamera
@@ -1247,6 +1333,13 @@ export class Scene3D {
   private aimRibbon2!: THREE.Mesh
   private aimRibbon3!: THREE.Mesh
   private contactRing!: THREE.Mesh
+  /**
+   * The shot line's layout for this frame, filled in place by `shotLineLayout`
+   * so drawing the guide costs no allocation.
+   */
+  private readonly aimLayout: ShotLineLayout = shotLineLayoutTarget()
+  /** Scratch point for measuring a ribbon's distance to the lens, also reused per frame. */
+  private readonly aimMeasure = new THREE.Vector3()
   private stick!: THREE.Group
   /** The stick's soft shadow strip on the cloth, following its angle and pull-back. */
   private stickShadow!: THREE.Mesh
@@ -1271,7 +1364,7 @@ export class Scene3D {
   private lamp!: THREE.SpotLight
   /** Which view the player has asked for. The rig follows it unless a shot or a
    * placement overrides it. */
-  private cameraMode: 'AIM' | 'TOP_DOWN' = 'AIM'
+  private cameraMode: PlayerCameraMode = 'AIM'
   /** True while a shot is being watched, which is when the camera follows the balls. */
   private tracking = false
   /** The snapshot last handed to `update`, which is what the camera reads its cue ball from. */
@@ -1287,6 +1380,32 @@ export class Scene3D {
    * plus the player's own look-around on top of either.
    */
   private latch: HeadingLatch = initialHeadingLatch()
+  /**
+   * The venue's moving parts: the crowd, the applause, the banner and the opponent's cue.
+   *
+   * The only object in this file that owns anything outside the 3D scene, and the only one
+   * that talks to the network — see `venueEvents.ts` for why that is not in `main.ts`.
+   */
+  private venue: VenueEvents | null = null
+  /** The arena group, and where its seats are. The crowd is parented to the group. */
+  readonly venueGroup!: THREE.Group
+  readonly venueSeats: readonly ArenaSeatPlacement[] = []
+  /**
+   * Snapshots waiting out their presentation delay, oldest first.
+   *
+   * This is a *queue*, not a hold. A hold would show the table frozen at a turn change and
+   * then jump to wherever it had got to; a queue replays every snapshot late instead, so
+   * the motion is the same motion, shifted. The only thing a viewer can tell is that the
+   * room took its beat before anything moved.
+   */
+  private presentationQueue: Array<{ at: number; snapshot: FrameSnapshotData | null; options: RenderOptions }> = []
+  /** Seconds left on the presentation hold, and the clock that spends it. */
+  private presentationLeft = 0
+  private presentationClock = 0
+  /** How late a snapshot is shown while the hold is open. Set by `beginPresentation`. */
+  private presentationDelay = 0
+  /** When the current hold opened, on the presentation clock. */
+  private holdStartedAt = -Infinity
   /** Ring + baulk line segment marking the D during break-off placement. Built once, shown on demand. */
   private dZoneRing!: THREE.Mesh
   /**
@@ -1393,9 +1512,34 @@ export class Scene3D {
     this.camera.lookAt(0, 0, 0)
 
     this.buildLighting()
+    // How much of that arena this device gets to have: the seat and texture budget, the
+    // lamp's shadow map and the number of stand washes are all read during the build
+    // below, so this is the one moment the choice can still be made.
+    const quality = applyArenaQuality()
+    // The World Championship arena: carpet, bowl, hoardings, roof, lighting rig and camera
+    // stands. Built here, before buildTable, so it is inside the matrix freeze at the end of
+    // that build and inside the one shadow bake. Visual only, and tuned entirely from
+    // ARENA_CONFIG in arenaConfig.ts.
+    const arena = buildArenaEnvironment(this.scene, this.renderer)
+    if (quality !== 'high') {
+      console.info(`[arena] built at "${quality}" quality (try ?quality=high to see the full venue)`)
+    }
+    this.venueGroup = arena.group
+    this.venueSeats = arena.seats
     this.buildTable()
+    // The old room's floor and back wall are built inside buildTable, so they can only be
+    // stepped over once that has run. It has to happen: the old floor sits at exactly
+    // `carpetY`, so leaving it in the scene puts two ground planes at the same depth and
+    // they trade wins from pixel to pixel as the camera moves — the carpet reads as a
+    // flickering plane rather than as cloth.
+    hideLegacyRoom(this.scene)
     this.buildAim()
     this.buildPlacement()
+
+    // The crowd, the applause and the turn presentation. Added after the freeze on
+    // purpose: these are the only venue objects that move, and a frozen matrix is the whole
+    // point of the freeze.
+    this.venue = buildVenueEvents(this)
 
     const pmrem = new THREE.PMREMGenerator(this.renderer)
     this.scene.environment = pmrem.fromEquirectangular(envTexture()).texture
@@ -2884,7 +3028,11 @@ const outerL = APRON_OUTER_L
         transparent: true,
         opacity: AIM_RING_OPACITY,
         side: THREE.DoubleSide,
-        depthWrite: false
+        depthWrite: false,
+        toneMapped: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -1
       })
     )
     this.contactRing.rotation.x = -Math.PI / 2
@@ -2959,7 +3107,21 @@ const outerL = APRON_OUTER_L
   private buildRibbon(map: THREE.CanvasTexture, color: number, opacity: number, y: number): THREE.Mesh {
     const ribbon = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
-      new THREE.MeshBasicMaterial({ map, color, transparent: true, opacity, depthWrite: false })
+      new THREE.MeshBasicMaterial({
+        map,
+        color,
+        transparent: true,
+        opacity,
+        depthWrite: false,
+        // The lines are drawn, not lit: tone mapping would take the pure white
+        // down to the lamp's own colour and turn a crisp line into a smudge.
+        toneMapped: false,
+        // Held a hair above the cloth so the strip never fights the cloth's own
+        // depth for the pixels it lies on.
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -1
+      })
     )
     ribbon.rotation.x = -Math.PI / 2
     ribbon.position.y = y
@@ -3143,10 +3305,20 @@ const outerL = APRON_OUTER_L
     this.placementCueLock = cuePos ? { x: cuePos.x, y: cuePos.y } : null
     // The pose to come back to is resolved from the position being flown back to, not
     // from a pose captured when the flight in started: the cue ball has moved since, and
-    // the camera is supposed to end up behind where it actually is.
+    // the camera is supposed to end up behind where it actually is. It is resolved for the
+    // view the player is actually in as well, so the aim camera comes back to the aim pose
+    // exactly as it always did while a broadcast view comes back to where that view stands
+    // — a placement does not fly home through a view nobody asked for.
     this.placementTransition = beginPlacementTransition(
       this.rig.pose,
-      aimPose(landing, this.rig.yaw, aimFovDeg(this.cvw / Math.max(1, this.cvh))),
+      resolveCameraTarget({
+        mode: this.cameraMode,
+        aspect: this.cvw / Math.max(1, this.cvh),
+        cue: landing,
+        aimAngle: this.rig.yaw,
+        latch: this.latch,
+        focus: null
+      }),
       seconds
     )
   }
@@ -3191,22 +3363,58 @@ const outerL = APRON_OUTER_L
     return cue ? { x: cue.x, y: cue.y } : { x: TABLE_LENGTH / 2, y: TABLE_WIDTH / 2 }
   }
 
+  /**
+   * Records where the player is aiming, so the camera's heading follows the aim.
+   *
+   * Separate from {@link applySnapshot} because it is the one part of an update that is
+   * never held: while a presentation delay is running, the snapshot is late and the aim is
+   * not. While the player is free to aim, the heading follows the aim itself so the lens
+   * stays directly behind the cue ball on the shot line — gated to the half-plane the
+   * camera can see, so the drag-back that sets power cannot spin it. While a shot is on
+   * screen the heading is latched to the line that shot was played along, which is the
+   * view the tracking camera holds.
+   */
+  private captureAim(options: RenderOptions): void {
+    if (!options.aim) return
+    this.lastAimAngle = options.aim.angle
+    this.latch = this.tracking
+      ? stepHeadingLatch(this.latch, this.lastAimAngle, true)
+      : followHeadingLatch(this.latch, this.lastAimAngle)
+  }
+
   update(snapshot: FrameSnapshotData | null, options: RenderOptions = {}): void {
+    // While the room is taking its presentation beat, a snapshot is not dropped and not
+    // applied: it joins the back of the queue and is shown when its turn comes. The
+    // snapshot the game actually has is never altered, so what the player is looking at is
+    // the real game, later.
+    //
+    // The gate stays shut while the queue still has work, not just while the hold runs:
+    // otherwise a snapshot arriving the instant the hold expires would leapfrog the one
+    // still waiting, and the table would draw its own history out of order.
+    if (this.presentationLeft > 0 || this.presentationQueue.length > 0) {
+      // The aim heading is taken straight through rather than queued. The table is late on
+      // purpose; the player's own drag across the cue ball is not, and on the frame a turn
+      // changes the snapshot the guide is drawn against is still the settled one it was
+      // already drawn against. Holding this too would be a frozen screen rather than a
+      // held beat.
+      this.captureAim(options)
+      this.presentationQueue.push({
+        at: this.presentationClock + this.presentationDelay,
+        snapshot,
+        options
+      })
+      return
+    }
+    this.applySnapshot(snapshot, options)
+  }
+
+  /** The real update. Split out so the queue can replay it without re-checking the hold. */
+  private applySnapshot(snapshot: FrameSnapshotData | null, options: RenderOptions = {}): void {
     this.immediate = options.immediate === true
     // Kept for the camera, which moves on its own clock in `render` rather than in here:
     // the balls it follows and the heading it turns to are both read from here.
     this.lastSnapshot = snapshot
-    if (options.aim) {
-      this.lastAimAngle = options.aim.angle
-      // While the player is free to aim, the heading follows the aim itself so the
-      // lens stays directly behind the cue ball on the shot line — gated to the
-      // half-plane the camera can see, so the drag-back that sets power cannot
-      // spin it. While a shot is on screen the heading is latched to the line that
-      // shot was played along, which is the view the tracking camera holds.
-      this.latch = this.tracking
-        ? stepHeadingLatch(this.latch, this.lastAimAngle, true)
-        : followHeadingLatch(this.latch, this.lastAimAngle)
-    }
+    this.captureAim(options)
     if (!snapshot) {
       for (const rig of this.balls.values()) rig.setVisible(false)
       this.hideAim()
@@ -3228,18 +3436,19 @@ const outerL = APRON_OUTER_L
       seen.add(ball.id)
       let rig = this.balls.get(ball.id)
       if (!rig) {
-        // The cue ball is lifted just off the palette's white: beside fifteen
-        // saturated colours under the same warm lamp, a plain white reads grey.
-        const base = ballColor(ball.id)
-        let tint = base
+        // The cue ball gets its own look: warm cream phenolic under its own
+        // clearcoat, and a softer grounded contact shadow. Every other ball keeps
+        // the shared phenolic material and shadow.
+        const tint = ballColor(ball.id)
+        let cueTuning: BallRigOptions | undefined
         if (ball.id === BALL_IDS.CUE) {
-          const lifted = new THREE.Color(base).multiplyScalar(CUE_BALL_BRIGHTEN)
-          lifted.r = Math.min(1, lifted.r)
-          lifted.g = Math.min(1, lifted.g)
-          lifted.b = Math.min(1, lifted.b)
-          tint = lifted.getHex()
+          cueTuning = {
+            cue: true,
+            shadowTex: cueContactShadowTexture(),
+            shadowPlane: CUE_SHADOW_PLANE
+          }
         }
-        rig = new BallRig(BALL_RADIUS, tint, this.shadowTexCache || contactShadowTexture())
+        rig = new BallRig(BALL_RADIUS, tint, this.shadowTexCache || contactShadowTexture(), cueTuning)
         this.balls.set(ball.id, rig)
         this.scene.add(rig.group)
       }
@@ -3333,56 +3542,33 @@ const outerL = APRON_OUTER_L
     const cz = tableZ(cueBall.y)
     const dir = { x: Math.cos(aim.angle), z: Math.sin(aim.angle) }
 
-    // LINE 1 runs from the cue ball's own surface to wherever the shot line
-    // ends: the contact ring when a ball is in the way, the cushion when the
-    // table is open. The cushion end is a ray against the bed's own rectangle —
-    // geometry, not prediction — so no new aim data is being invented here.
+    // LINE 1 runs along the aim angle from the cue ball's own surface to
+    // wherever the shot line ends: the ghost ball when a ball is in the way,
+    // the cushion when the table is open. The heading is the aim's own, never
+    // the direction to the contact point — the two differ on a cut, and the cue
+    // ball goes where it was aimed. The cushion end is a ray against the bed's
+    // own rectangle, so no new aim data is being invented here either.
     const guide = computeAimGuide({ ...cueBall, id: 0 }, aim.angle, balls)
-    let length: number
-    if (guide) {
-      length = Math.hypot(guide.contact.x - cueBall.x, guide.contact.y - cueBall.y)
-    } else {
-      const dx = Math.cos(aim.angle)
-      const dy = Math.sin(aim.angle)
-      let far = 4000
-      if (dx > 0.0001) far = Math.min(far, (TABLE_LENGTH - cueBall.x) / dx)
-      if (dx < -0.0001) far = Math.min(far, -cueBall.x / dx)
-      if (dy > 0.0001) far = Math.min(far, (TABLE_WIDTH - cueBall.y) / dy)
-      if (dy < -0.0001) far = Math.min(far, -cueBall.y / dy)
-      length = far
-    }
-    const lineAngle = guide ? Math.atan2(guide.contact.y - cueBall.y, guide.contact.x - cueBall.x) : aim.angle
+    const layout = shotLineLayout(cueBall, aim.angle, guide, this.aimLayout)
+    const drawn = layout.length > 1
+    const startX = tableX(layout.from.x)
+    const startZ = tableZ(layout.from.y)
 
-    if (guide) {
-      this.setRibbon(
-        this.aimRibbon1,
-        cx + Math.cos(lineAngle) * BALL_RADIUS,
-        cz + Math.sin(lineAngle) * BALL_RADIUS,
-        lineAngle,
-        Math.max(0, length - BALL_RADIUS),
-        AIM_LINE1_WIDTH
-      )
+    if (drawn) {
+      this.setRibbon(guide ? this.aimRibbon1 : this.aimRibbon1Open, startX, startZ, layout.angle, layout.length)
+      ;(guide ? this.aimRibbon1Open : this.aimRibbon1).visible = false
+      // The ring sits where the line stops: the ghost ball on contact, the
+      // cushion face on an open table.
+      this.contactRing.position.set(tableX(layout.to.x), AIM_RING_Y, tableZ(layout.to.y))
+      this.contactRing.visible = true
+    } else {
+      this.aimRibbon1.visible = false
       this.aimRibbon1Open.visible = false
       this.contactRing.visible = false
-      this.showContactMarker(guide)
-    } else {
-      // Nothing in the way: Line 1 runs to cushion with last 30% fade, ring at end, Lines 2 & 3 hidden
-      this.setRibbon(
-        this.aimRibbon1Open,
-        cx + Math.cos(lineAngle) * BALL_RADIUS,
-        cz + Math.sin(lineAngle) * BALL_RADIUS,
-        lineAngle,
-        Math.max(0, length - BALL_RADIUS),
-        AIM_LINE1_WIDTH
-      )
-      this.aimRibbon1.visible = false
-      this.aimRibbon2.visible = false
-      this.aimRibbon3.visible = false
-      const endX = cx + Math.cos(lineAngle) * length
-      const endZ = cz + Math.sin(lineAngle) * length
-      this.contactRing.position.set(endX, AIM_RING_Y, endZ)
-      this.contactRing.visible = true
     }
+    this.aimRibbon2.visible = false
+    this.aimRibbon3.visible = false
+    if (guide) this.showContactMarker(guide)
 
     // The tip sits `tipGap` behind the ball's centre, and the stick extends a
     // further STICK_TIP_Y forward of its own origin, so the origin goes back by
@@ -3407,14 +3593,26 @@ const outerL = APRON_OUTER_L
     this.stickShadowTarget = 1
   }
 
-  /** Lays one of the aim ribbons down on the cloth: from a point, along a heading, so long. */
-  private setRibbon(ribbon: THREE.Mesh, x: number, z: number, angle: number, length: number, widthMm: number): void {
+  /**
+   * Lays one of the aim ribbons down on the cloth: from a point, along a
+   * heading, so long, and thick enough to read as `AIM_LINE_TARGET_PX` from
+   * wherever the lens is standing.
+   *
+   * Width is measured rather than passed: it is a property of the frame, not of
+   * the line, and every ribbon takes the same one so the three lines of a
+   * contact read as one guide rather than as three different pens.
+   */
+  private setRibbon(ribbon: THREE.Mesh, x: number, z: number, angle: number, length: number): void {
     if (length <= 1) {
       ribbon.visible = false
       return
     }
-    ribbon.scale.set(length, widthMm, 1)
-    ribbon.position.set(x + Math.cos(angle) * length * 0.5, ribbon.position.y, z + Math.sin(angle) * length * 0.5)
+    const midX = x + Math.cos(angle) * length * 0.2
+    const midZ = z + Math.sin(angle) * length * 0.2
+    const distance = this.camera.position.distanceTo(this.aimMeasure.set(midX, ribbon.position.y, midZ))
+    const width = aimLineWorldWidth(distance, this.camera.fov, this.cvh)
+    ribbon.scale.set(length, width, 1)
+    ribbon.position.set(midX, ribbon.position.y, midZ)
     // With the strip lying flat, its spin maps its local +X onto the cloth.
     ribbon.rotation.z = Math.atan2(-Math.sin(angle), Math.cos(angle))
     ribbon.visible = true
@@ -3422,19 +3620,17 @@ const outerL = APRON_OUTER_L
 
   /**
    * Lays the two departure lines: the object ball's own path away along the line
-   * of centres, and the cue ball's deflection tangent. The contact ring is kept hidden.
+   * of centres, and the cue ball's deflection tangent. The contact ring is left
+   * wherever the shot line put it.
    */
   private showContactMarker(guide: AimGuide): void {
-    this.contactRing.visible = false
-
     // LINE 2: the object ball's line, starting at the object ball surface along the line of centres.
     this.setRibbon(
       this.aimRibbon2,
       tableX(guide.contact.x + guide.lineOfCentres.x * (2 * BALL_RADIUS)),
       tableZ(guide.contact.y + guide.lineOfCentres.y * (2 * BALL_RADIUS)),
       Math.atan2(guide.lineOfCentres.y, guide.lineOfCentres.x),
-      AIM_LINE2_LENGTH,
-      AIM_LINE2_WIDTH
+      AIM_LINE2_LENGTH
     )
 
     // LINE 3: the cue ball's departure after the contact, from the ghost's
@@ -3452,8 +3648,7 @@ const outerL = APRON_OUTER_L
           tableX(first.from.x + tx * BALL_RADIUS),
           tableZ(first.from.y + ty * BALL_RADIUS),
           Math.atan2(ty, tx),
-          AIM_LINE3_LENGTH,
-          AIM_LINE3_WIDTH
+          AIM_LINE3_LENGTH
         )
         return
       }
@@ -3472,11 +3667,11 @@ const outerL = APRON_OUTER_L
   }
 
   /**
-   * Asks for one of the two views the player controls: the camera behind the cue ball, or
-   * the overhead one. Nothing is cut — the rig eases between them — so this can be called
-   * as often as the button is pressed.
+   * Asks for one of the views the player controls: the camera behind the cue ball, the
+   * overhead one, and the venue's own three broadcast cameras. Nothing is cut — the rig
+   * eases between them — so this can be called as often as the button is pressed.
    */
-  setCameraMode(mode: 'AIM' | 'TOP_DOWN'): void {
+  setCameraMode(mode: PlayerCameraMode): void {
     this.cameraMode = mode
   }
 
@@ -3503,7 +3698,7 @@ const outerL = APRON_OUTER_L
   }
 
   /** The view the camera is being asked for, for the toggle to reflect. */
-  currentCameraMode(): 'AIM' | 'TOP_DOWN' {
+  currentCameraMode(): PlayerCameraMode {
     return this.cameraMode
   }
 
@@ -3649,10 +3844,85 @@ const outerL = APRON_OUTER_L
     }
   }
 
+  /**
+   * Releases the snapshots whose presentation delay has run out.
+   *
+   * Applied in order, oldest first, so the replay is the same replay — there is no moment
+   * where a frame is skipped and the table appears to teleport. The hold ends when its
+   * seconds are spent, not when the queue empties; anything still waiting keeps its own
+   * longer timestamp and comes out on the frame it was due.
+   */
+  private drainPresentation(): void {
+    if (this.presentationQueue.length === 0) return
+    const due = this.presentationQueue.filter((item) => item.at <= this.presentationClock)
+    if (due.length === 0) return
+    this.presentationQueue = this.presentationQueue.filter((item) => item.at > this.presentationClock)
+    for (const item of due) this.applySnapshot(item.snapshot, item.options)
+  }
+
+  /**
+   * The `VenueHost` half of this class: the three things the venue needs from the scene.
+   *
+   * Deliberately three methods and two getters. Everything the crowd, the applause and the
+   * banner want from the 3D world is here, and nothing here can move a ball.
+   */
+  beginPresentation(seconds: number): void {
+    this.presentationDelay = Math.max(0, seconds)
+    this.presentationLeft = this.presentationDelay
+    this.holdStartedAt = this.presentationClock
+  }
+
+  /**
+   * Brings the opponent's cue up, with its strike lined up against the first frame of the
+   * replay.
+   *
+   * The cue is a picture of an action; the replay is the action. When they are not lined
+   * up the room looks like it is doing two things: the stick finishes its strike while the
+   * ball is still sitting there, and then the ball goes anyway. So the delay already held
+   * for the turn banner is stretched by however much of the wind-up has not happened yet,
+   * and everything already waiting is pushed back by the same amount — which is only ever
+   * a rescheduling of pictures that were going to be late anyway.
+   *
+   * If nothing is waiting, the hold has already passed and the shot is on screen; there is
+   * nothing left to line up with, so the cue simply plays in front of it.
+   */
+  showOpponentCue(shot: OpponentShot): void {
+    const preRoll = this.venue?.cuePreRoll() ?? 0
+    const elapsed = this.presentationClock - this.holdStartedAt
+    const extra = preRoll - elapsed
+    if (extra > 0 && this.presentationQueue.length > 0) {
+      for (const item of this.presentationQueue) item.at += extra
+      this.presentationDelay += extra
+      this.presentationLeft = Math.max(this.presentationLeft, extra)
+    }
+    this.venue?.showCue(shot)
+  }
+
+  /**
+   * Ends a presentation hold now, throwing away anything still waiting.
+   *
+   * This is teardown, not the end of a hold: the normal end of a hold is the clock in
+   * `drainPresentation`, which releases the queue instead of dropping it. Anything calling
+   * this during a replay is choosing to skip it.
+   */
+  endPresentation(): void {
+    this.presentationLeft = 0
+    this.presentationDelay = 0
+    this.presentationQueue.length = 0
+    this.venue?.hideCue()
+  }
+
   render(): void {
     const now = performance.now()
     const dt = Math.min(0.05, (now - this.lastTime) / 1000)
     this.lastTime = now
+    // The venue is stepped first and on the same clock as everything else: the crowd keeps
+    // time, the banner counts down, and the opponent's cue advances, all on this frame's
+    // `dt` rather than on their own.
+    this.presentationClock += dt
+    if (this.presentationLeft > 0) this.presentationLeft = Math.max(0, this.presentationLeft - dt)
+    this.venue?.step(dt)
+    this.drainPresentation()
     if (dt > 0) {
       // A streamed shot hands over positions that are already sampled from the
       // simulation, so they are applied as-is instead of being smoothed again.
@@ -3758,6 +4028,8 @@ const outerL = APRON_OUTER_L
   }
 
   dispose(): void {
+    this.venue?.dispose()
+    this.venue = null
     this.renderer.dispose()
     this.scene.traverse((obj) => {
       const mesh = obj as THREE.Mesh
