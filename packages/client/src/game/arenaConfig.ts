@@ -77,16 +77,17 @@ export interface ArenaBudget {
 }
 
 /**
- * `seatPitch` is the spacing along a row, and it deliberately did NOT scale down with the
- * chairs' 70-percent resize: at 392 (0.7 x 560) the high tier grows from 596 to 816
- * chairs / 29,376 triangles, above both the current count (561 / 20,196 here) and the
- * test's 700-chair cap. If the rows ever look too sparse, lower these three numbers —
- * the cost is chairs, and it is paid in triangles.
+ * `seatPitch` is the spacing along a row, and it deliberately did NOT shrink with the
+ * chairs: at 250mm wide with pitch 560 the high plan is 531 chairs / 19,116 triangles
+ * (the test caps it at 700 / 25,200, and the frame budget wants no more than the 596 /
+ * 21,456 this all started at). If the rows ever look too sparse, lower these three
+ * numbers — the cost is chairs, and it is paid in triangles. `rows` must stay strictly
+ * low < medium < high or the bowl-plan test fails.
  */
 const QUALITY_BUDGETS: Record<ArenaQuality, ArenaBudget> = {
   low: { tiers: 3, rows: 3, seatPitch: 900, curveSegments: 24, textureSize: 256, stepRings: false, carpetBump: false, trussSegments: 4 },
-  medium: { tiers: 4, rows: 5, seatPitch: 700, curveSegments: 40, textureSize: 512, stepRings: true, carpetBump: true, trussSegments: 6 },
-  high: { tiers: 4, rows: 6, seatPitch: 560, curveSegments: 64, textureSize: 1024, stepRings: true, carpetBump: true, trussSegments: 8 } // rows was 7
+  medium: { tiers: 4, rows: 4, seatPitch: 700, curveSegments: 40, textureSize: 512, stepRings: true, carpetBump: true, trussSegments: 6 }, // rows was 5
+  high: { tiers: 4, rows: 5, seatPitch: 560, curveSegments: 64, textureSize: 1024, stepRings: true, carpetBump: true, trussSegments: 8 } // rows was 7 (6 after E2)
 }
 
 export interface ArenaConfig {
@@ -399,11 +400,12 @@ export const ARENA_CONFIG: ArenaConfig = {
     // The arena distance. Everything else in the bowl is either relative to this (the
     // first row via `firstRowInset`) or derived from it in code, so pushing the whole
     // venue back is this one number.
-    innerRadius: 5600, // was 4300
-    // 1100 behind the boards puts the first row's centre at 6700 and its front edge at
-    // 6250 — unchanged as a gap, because the inset is relative to the boards. Past the
-    // broadcast pedestal's 4600 reach (camera.ts), with a 900mm walk left behind the boards.
-    firstRowInset: 1100,
+    innerRadius: 7000, // was 5600 (4300 before Part E)
+    // 1500 behind the boards puts the first row's centre at 8500 and its front edge at
+    // 8050 — a 1050mm walk left behind the boards, and the whole backdrop another 1400
+    // out from the table than the last pass. The gap is relative to the boards, so it
+    // moves with `innerRadius` untouched.
+    firstRowInset: 1500, // was 1100
     // Low boards: 750 (was 900) puts the top edge at y=-40, just under the bed, so the
     // sponsors read without standing between the camera and the table — the ring is a
     // dark band at the carpet's edge rather than a wall the eye has to climb over.
@@ -415,16 +417,18 @@ export const ARENA_CONFIG: ArenaConfig = {
     // the carpet — both were skipped entirely at the old 420mm rise.
     firstRowLift: -490,
     /**
-     * One bank of six rows, 294mm up per 900mm out: an 18.2-degree rake, where the old
-     * bank was seven rows at 420/900 = 25 degrees. Shallower and shorter, so the far bank
-     * stops looming over the table and the top row sits 980 above the cloth instead of
-     * 2030. Six rows is what `budget.rows` caps a tier at on high quality, so the plan and
-     * the budget say the same thing; low and medium take fewer rows out of the same bank.
+     * One bank of five rows, 294mm up per 900mm out: an 18.2-degree rake (was seven rows
+     * at 420/900 = 25 degrees). Five rows at that rake puts the top row's floor 686 above
+     * the cloth — under half the old 2030 — so the bank reads as a distant dark edge
+     * rather than something leaning over the table. `budget.rows` on high quality says the
+     * same five; low and medium take fewer rows out of the same bank.
      */
-    tiers: [{ rows: 6, rowPitch: 900, rowRise: 294, aisle: 0 }], // was rows 7, rowRise 420
-    wallHeight: 10000,
-    wallRadius: 16000,
-    fasciaHeight: 1500,
+    tiers: [{ rows: 5, rowPitch: 900, rowRise: 294, aisle: 0 }], // was rows 6 (7 before E2), rowRise 420
+    // The outer wall, dormant behind `buildShell: false` but scaled down with the bowl so
+    // it still fits: 13500 now reaches only 950 past the bowl's 12550 back edge.
+    wallHeight: 7500, // was 10000
+    wallRadius: 13500, // was 16000
+    fasciaHeight: 1200, // was 1500
     /**
      * The mouth cut in the roof, and the reason there is one: an arena's lighting rig
      * hangs from the structure it is aimed through, so the ceiling opens over the table
@@ -443,34 +447,35 @@ export const ARENA_CONFIG: ArenaConfig = {
     stripeColor: '#06122f',
     patternEvery: 3,
     blockSize: 8,
-    // The chairs themselves, at 70 percent of the old 470/440/450/830/90/60 — smaller in
-    // every dimension so the bowl reads as distant detail instead of furniture in the
-    // player's lap. Spacing along the row did not scale: see QUALITY_BUDGETS.
-    width: 330, // was 470
-    depth: 310, // was 440
-    frontGap: 42, // was 60
-    seatHeight: 315, // was 450
-    // 265 of backrest over the pan (was 380): enough to read as a chair from across the
-    // arena and no more, since a taller back hides the row behind it.
-    backHeight: 580, // was 830
+    // The chairs themselves, down to about half their original size (470/440/450/830/90/60
+    // at Part E's start; 330/310/315/580/63 after the first 70-percent cut): a chair that is
+    // half as tall sits half as far into the sightline, which is what keeps the bowl reading
+    // as backdrop instead of furniture. Row spacing did not shrink: see QUALITY_BUDGETS.
+    width: 250, // was 330 (470 originally)
+    depth: 240, // was 310 (440)
+    frontGap: 30, // was 42 (60)
+    seatHeight: 240, // was 315 (450)
+    // 190 of backrest over the pan (was 265, originally 380): enough to read as a chair
+    // from across the arena and no more, since a taller back hides the row behind it.
+    backHeight: 430, // was 580 (830)
     backLean: 9,
-    thickness: 63 // was 90
+    thickness: 50 // was 63 (90)
   },
 
   hoardings: {
-    // 64 panels at r=5600 = 550mm of arc each, against the old 40 at r=4300 = 675mm: about
-    // 20 percent shorter, so each advert sits in a frame its own size instead of being
-    // stretched around the wider ring. 64/4 = 16 whole texture tiles, so the ring closes
-    // on a seam.
-    panels: 64, // was 40
+    // 80 panels at r=7000 = 550mm of arc each, against the old 40 at r=4300 = 675mm: about
+    // 20 percent shorter even after the ring moved out again, so each advert sits in a
+    // frame its own size instead of being stretched around a wider ring. 80/4 = 20 whole
+    // texture tiles, so the ring closes on a seam.
+    panels: 80, // was 64 (40 before E3)
     panelsPerTile: 4,
     emissiveIntensity: 0.25,
     slogans: ['SNOOKERX', 'WORLD CHAMPIONSHIP', 'SNOOKER ARENA', 'LIVE ON STREAM', 'TOP BREAK 112', 'NEXT FRAME']
   },
 
   wall: {
-    textureRepeat: 44,
-    repeatY: 3
+    textureRepeat: 37, // was 44: the same wrap rate around a 13500 wall instead of a 16000 one
+    repeatY: 2 // was 3: the same vertical density on a 7500 wall instead of a 10000 one
   },
 
   roof: {
@@ -493,10 +498,10 @@ export const ARENA_CONFIG: ArenaConfig = {
   },
 
   cameras: {
-    // On the landing between the hoardings and the front of the first row (5600..6250
-    // now the boards moved to 5600), so the stand is past the playing area but still
-    // beside the front tier. The landing is 650mm deep, which is what holds the splay down.
-    radius: 5800, // was 4500
+    // On the landing between the hoardings and the front of the first row (7000..8050 now
+    // the boards sit at 7000), so the stand is past the playing area but still beside the
+    // front tier. The landing is 1050mm deep, which is what holds the splay down.
+    radius: 7300, // was 5800 (4500 originally)
     // 2050 to the head, plus the body: about 2.5m standing on the landing, which is what
     // a venue camera on a fixed pedestal actually measures.
     height: 2050,
