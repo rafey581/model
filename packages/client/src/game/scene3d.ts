@@ -15,7 +15,6 @@ import { buildArenaEnvironment, hideLegacyRoom } from './arenaEnvironment.js'
 import type { ArenaSeatPlacement } from './arenaEnvironment.js'
 import { applyArenaQuality } from './arenaConfig.js'
 import { buildVenueEvents, type VenueEvents, type VenueHost } from './venueEvents.js'
-import { buildTrophy } from './stadium.js'
 import type { OpponentShot } from './opponentCue.js'
 import { ballColor } from './palette.js'
 import {
@@ -31,9 +30,6 @@ const SHOW_CROWN_MOULDING = false
 // The crowd went with the old arena: the dark bowl stands empty, and an empty seat plan is
 // how the venue says so (venueEvents builds no people when it gets none).
 const SHOW_OLD_AUDIENCE = false
-// The trophy on its plinth beside the table: the one object in the hall that is not
-// furniture. Built into the arena group, so it freezes and disposes with it.
-const SHOW_TROPHY = true
 import {
   type CameraRigState,
   type HeadingLatch,
@@ -1534,9 +1530,6 @@ export class Scene3D implements VenueHost {
     // that build and inside the one shadow bake. Visual only, and tuned entirely from
     // ARENA_CONFIG in arenaConfig.ts.
     const arena = buildArenaEnvironment(this.scene, this.renderer)
-    // Into the arena group rather than the scene, so the trophy is inside the matrix freeze
-    // at the end of buildTable and inside the one shadow bake, and disposes with the arena.
-    if (SHOW_TROPHY) arena.group.add(buildTrophy())
     if (quality !== 'high') {
       console.info(`[arena] built at "${quality}" quality (try ?quality=high to see the full venue)`)
     }
