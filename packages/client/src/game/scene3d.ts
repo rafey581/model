@@ -336,20 +336,20 @@ const RAIL_WOOD_UV_TILE_MM = 500
 const AIM_RIBBON_Y = 0.8
 /** LINE 1 — the shot line, from the cue ball's surface to the ghost ball or the cushion. Thin and precise, the way a snooker broadcast draws the shot. */
 const AIM_LINE1_COLOR = 0xffffff
-const AIM_LINE1_OPACITY = 1
+const AIM_LINE1_OPACITY = 0.85
 /** The contact ring — hollow, the size of the ball it wraps, nothing inside. */
 const AIM_RING_COLOR = 0xffffff
 const AIM_RING_OPACITY = 0.95
 const AIM_RING_STROKE_MM = 2.5
 const AIM_RING_Y = 1.1
 /** LINE 2 — the object ball's line, away along the line of centres. */
-const AIM_LINE2_COLOR = 0x3bd16f
-const AIM_LINE2_LENGTH = BALL_RADIUS * 22
-const AIM_LINE2_OPACITY = 1
+const AIM_LINE2_COLOR = 0x7dff4a 
+const AIM_LINE2_LENGTH = BALL_RADIUS * 12
+const AIM_LINE2_OPACITY = 0.95
 /** LINE 3 — the cue ball's tangent after the contact, when one is worked out. */
 const AIM_LINE3_COLOR = 0xffffff
-const AIM_LINE3_LENGTH = BALL_RADIUS * 14
-const AIM_LINE3_OPACITY = 1
+const AIM_LINE3_LENGTH = BALL_RADIUS * 8
+const AIM_LINE3_OPACITY = 0.6
 
 function feltTexture(): THREE.CanvasTexture {
   return cachedTexture('felt', () => {
@@ -445,12 +445,12 @@ function feltTexture(): THREE.CanvasTexture {
     ctx.ellipse(bx, mid, (D_RADIUS / TABLE_LENGTH) * size, (D_RADIUS / TABLE_WIDTH) * size, 0, Math.PI * 0.5, Math.PI * 1.5)
     ctx.stroke()
 
-    mark(BAULK_LINE_X, TABLE_WIDTH / 2 + D_RADIUS * 0.9)
-    mark(BAULK_LINE_X, TABLE_WIDTH / 2 - D_RADIUS * 0.9)
-    mark(BAULK_LINE_X, TABLE_WIDTH / 2)
-    mark(TABLE_LENGTH / 2, TABLE_WIDTH / 2)
-    mark(TABLE_LENGTH * 0.75, TABLE_WIDTH / 2)
-    mark(TABLE_LENGTH - 324, TABLE_WIDTH / 2)
+    // mark(BAULK_LINE_X, TABLE_WIDTH / 2 + D_RADIUS * 0.9)
+    // mark(BAULK_LINE_X, TABLE_WIDTH / 2 - D_RADIUS * 0.9)
+    // mark(BAULK_LINE_X, TABLE_WIDTH / 2)
+    // mark(TABLE_LENGTH / 2, TABLE_WIDTH / 2)
+    // mark(TABLE_LENGTH * 0.75, TABLE_WIDTH / 2)
+    // mark(TABLE_LENGTH - 324, TABLE_WIDTH / 2)
 
     const texture = new THREE.CanvasTexture(canvas)
     texture.colorSpace = THREE.SRGBColorSpace
@@ -699,7 +699,7 @@ function aimRibbonTrailTexture(): THREE.CanvasTexture {
       const across = Math.min(1, Math.min(v, 1 - v) / 0.07)
       for (let x = 0; x < w; x++) {
         const u = x / (w - 1)
-        const along = u < 0.85 ? 1 : 1 - (u - 0.85) / 0.15
+        const along = u < 0.55 ? 1 : 1 - (u - 0.55) / 0.45
         const a = Math.round(255 * across * along)
         const i = (y * w + x) * 4
         d[i] = 255
@@ -1210,16 +1210,17 @@ export class BallRig {
     // reflection of the lamp band) is what keeps it from blowing out against the
     // green it stands on. It gets a fresh instance so the "ball on" emissive can
     // drive only its surface.
-    this.material = opts.cue
+      this.material = opts.cue
       ? createCueBallMaterial()
       : new THREE.MeshPhysicalMaterial({
           color,
-          roughness: 0.34,
+          roughness: 0.3,
           metalness: 0.0,
-          clearcoat: 0.25,
-          clearcoatRoughness: 0.35,
+          clearcoat: 0,
+          clearcoatRoughness: 0.3,
+          specularIntensity: 0.45,
           emissive: 0x000000,
-          envMapIntensity: 0.3,
+          envMapIntensity: 0.15,
           ior: 1.5
         })
     this.sphere = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 28), this.material)
@@ -3602,18 +3603,19 @@ const outerL = APRON_OUTER_L
    * the line, and every ribbon takes the same one so the three lines of a
    * contact read as one guide rather than as three different pens.
    */
-  private setRibbon(ribbon: THREE.Mesh, x: number, z: number, angle: number, length: number): void {
-    if (length <= 1) {
+  private setRibbon(ribbon: THREE.Mesh, x: number, z: number, angle: number, length: number, widthScale = 1): void {
+        if (length <= 1) {
       ribbon.visible = false
       return
     }
-    const midX = x + Math.cos(angle) * length * 0.2
-    const midZ = z + Math.sin(angle) * length * 0.2
-    const distance = this.camera.position.distanceTo(this.aimMeasure.set(midX, ribbon.position.y, midZ))
+    const midX = x + Math.cos(angle) * length * 0.5
+    const midZ = z + Math.sin(angle) * length * 0.5
+    const nearX = x + Math.cos(angle) * length * 0.2
+    const nearZ = z + Math.sin(angle) * length * 0.2
+    const distance = this.camera.position.distanceTo(this.aimMeasure.set(nearX, ribbon.position.y, nearZ))
     const width = aimLineWorldWidth(distance, this.camera.fov, this.cvh)
     ribbon.scale.set(length, width, 1)
     ribbon.position.set(midX, ribbon.position.y, midZ)
-    // With the strip lying flat, its spin maps its local +X onto the cloth.
     ribbon.rotation.z = Math.atan2(-Math.sin(angle), Math.cos(angle))
     ribbon.visible = true
   }

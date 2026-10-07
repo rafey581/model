@@ -7,22 +7,22 @@ import * as THREE from 'three'
  */
 export const CUE_BALL_COLOR = 0xf4f0e4
 /** Base lacquer roughness: a soft satin under the clearcoat, not a hard plastic glint. */
-export const CUE_BALL_ROUGHNESS = 0.3
+export const CUE_BALL_ROUGHNESS = 0.28
 /** Phenolic resin is a dielectric: no metalness anywhere on this ball. */
 export const CUE_BALL_METALNESS = 0
 /** The clearcoat film, at full strength - it is what carries the one crisp highlight. */
-export const CUE_BALL_CLEARCOAT = 0.25
+export const CUE_BALL_CLEARCOAT = 0
 /** The clearcoat's own roughness: crisp, but an ellipse rather than a pinpoint. */
 export const CUE_BALL_CLEARCOAT_ROUGHNESS = 0.3
 /** Dielectric specular at its physical maximum. */
-export const CUE_BALL_SPECULAR_INTENSITY = 0.6
+export const CUE_BALL_SPECULAR_INTENSITY = 0.5
 /**
  * How strongly the scene's environment reflects in the ball between highlight and
  * horizon. Deliberately below the coloured balls' 1.0: the cue ball is the brightest
  * object on the cloth, and a full-strength reflection of the lamp band blows its
  * silhouette out into the cloth it should stand against.
  */
-export const CUE_BALL_ENV_MAP_INTENSITY = 0.4
+export const CUE_BALL_ENV_MAP_INTENSITY = 0.2
 
 /** Fresnel index for phenolic resin. */
 export const CUE_BALL_IOR = 1.5
