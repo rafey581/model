@@ -76,10 +76,17 @@ export interface ArenaBudget {
   trussSegments: number
 }
 
+/**
+ * `seatPitch` is the spacing along a row, and it deliberately did NOT scale down with the
+ * chairs' 70-percent resize: at 392 (0.7 x 560) the high tier grows from 596 to 816
+ * chairs / 29,376 triangles, above both the current count (561 / 20,196 here) and the
+ * test's 700-chair cap. If the rows ever look too sparse, lower these three numbers —
+ * the cost is chairs, and it is paid in triangles.
+ */
 const QUALITY_BUDGETS: Record<ArenaQuality, ArenaBudget> = {
   low: { tiers: 3, rows: 3, seatPitch: 900, curveSegments: 24, textureSize: 256, stepRings: false, carpetBump: false, trussSegments: 4 },
   medium: { tiers: 4, rows: 5, seatPitch: 700, curveSegments: 40, textureSize: 512, stepRings: true, carpetBump: true, trussSegments: 6 },
-  high: { tiers: 4, rows: 7, seatPitch: 560, curveSegments: 64, textureSize: 1024, stepRings: true, carpetBump: true, trussSegments: 8 }
+  high: { tiers: 4, rows: 6, seatPitch: 560, curveSegments: 64, textureSize: 1024, stepRings: true, carpetBump: true, trussSegments: 8 } // rows was 7
 }
 
 export interface ArenaConfig {
@@ -401,17 +408,19 @@ export const ARENA_CONFIG: ArenaConfig = {
     // without standing between the camera and the table.
     boardHeight: 900,
     firstRowClearance: 700,
-    // The first row's floor, 300 above the carpet. Low enough that the bowl's face runs
-    // into the carpet instead of standing in front of it, which is what lets the face and
-    // the front landing step over themselves rather than be drawn.
+    // The first row's floor, 300 above the carpet (unchanged). At the shallower rise
+    // below, the bowl's front edge lands 6mm above the carpet instead of 120mm below it,
+    // so the face draws as a sliver and the front landing draws as a walkway flush with
+    // the carpet — both were skipped entirely at the old 420mm rise.
     firstRowLift: -490,
     /**
-     * One bank of seven rows, 420mm up per 900mm out: a 25-degree rake, the steepest that
-     * still reads as seating rather than as a wall. Seven rows is what `budget.rows` caps
-     * a tier at on high quality, so the plan and the budget say the same thing; low and
-     * medium take fewer rows out of the same bank rather than a shorter one.
+     * One bank of six rows, 294mm up per 900mm out: an 18.2-degree rake, where the old
+     * bank was seven rows at 420/900 = 25 degrees. Shallower and shorter, so the far bank
+     * stops looming over the table and the top row sits 980 above the cloth instead of
+     * 2030. Six rows is what `budget.rows` caps a tier at on high quality, so the plan and
+     * the budget say the same thing; low and medium take fewer rows out of the same bank.
      */
-    tiers: [{ rows: 7, rowPitch: 900, rowRise: 420, aisle: 0 }],
+    tiers: [{ rows: 6, rowPitch: 900, rowRise: 294, aisle: 0 }], // was rows 7, rowRise 420
     wallHeight: 10000,
     wallRadius: 16000,
     fasciaHeight: 1500,
@@ -433,15 +442,18 @@ export const ARENA_CONFIG: ArenaConfig = {
     stripeColor: '#06122f',
     patternEvery: 3,
     blockSize: 8,
-    width: 470,
-    depth: 440,
-    frontGap: 60,
-    seatHeight: 450,
-    // 380 of backrest over the pan: enough to read as a chair from across the arena and
-    // no more, since a taller back hides the row behind it.
-    backHeight: 830,
+    // The chairs themselves, at 70 percent of the old 470/440/450/830/90/60 — smaller in
+    // every dimension so the bowl reads as distant detail instead of furniture in the
+    // player's lap. Spacing along the row did not scale: see QUALITY_BUDGETS.
+    width: 330, // was 470
+    depth: 310, // was 440
+    frontGap: 42, // was 60
+    seatHeight: 315, // was 450
+    // 265 of backrest over the pan (was 380): enough to read as a chair from across the
+    // arena and no more, since a taller back hides the row behind it.
+    backHeight: 580, // was 830
     backLean: 9,
-    thickness: 90
+    thickness: 63 // was 90
   },
 
   hoardings: {
