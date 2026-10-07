@@ -266,10 +266,12 @@ export interface ArenaConfig {
     /**
      * Radius of the camera stands.
      *
-     * Outside the hoardings (4300) and on the landing in front of the first row, which
-     * runs from there to `innerRadius + firstRowInset - rowPitch/2`. The landing is the
-     * only ground in the venue with no seats on it, so it is where a stand can go without
-     * being buried in the front row; the width of that landing is what caps `legSplay`.
+     * Outside the hoardings (`innerRadius`) and on the landing in front of the first row,
+     * which runs from there to `innerRadius + firstRowInset - rowPitch/2`. The landing is
+     * the only ground in the venue with no seats on it, so it is where a stand can go
+     * without being buried in the front row; the width of that landing is what caps
+     * `legSplay`. The stands are hidden (`buildCameraStands: false`), kept on the landing
+     * so re-enabling them lands somewhere sane.
      */
     radius: number
     /** How tall a stand is, measured from its own base to the head. */
@@ -372,7 +374,7 @@ export const ARENA_CONFIG: ArenaConfig = {
 
   carpetColor: '#b03038',
   carpetY: -790,
-  carpetRadius: 10800,
+    carpetRadius: 12600, // was 10800: the bowl's back edge is now 12550, so the carpet reaches it
   // Fully matte, and non-metal: a floor polish would put a moving specular highlight on
   // it, and a highlight that travels as the camera moves is what reads as a shimmering
   // surface rather than as cloth.
@@ -387,9 +389,13 @@ export const ARENA_CONFIG: ArenaConfig = {
   carpetReceiveShadow: true,
 
   bowl: {
-    innerRadius: 4300,
-    // 1100 behind the boards puts the first row's centre at 5400 and its front edge at
-    // 5180 — past the broadcast pedestal's 4534, with a 900mm walk left behind the boards.
+    // The arena distance. Everything else in the bowl is either relative to this (the
+    // first row via `firstRowInset`) or derived from it in code, so pushing the whole
+    // venue back is this one number.
+    innerRadius: 5600, // was 4300
+    // 1100 behind the boards puts the first row's centre at 6700 and its front edge at
+    // 6250 — unchanged as a gap, because the inset is relative to the boards. Past the
+    // broadcast pedestal's 4600 reach (camera.ts), with a 900mm walk left behind the boards.
     firstRowInset: 1100,
     // Low boards: 900 puts the top edge at y=110, just above the bed, so the sponsors read
     // without standing between the camera and the table.
@@ -470,10 +476,10 @@ export const ARENA_CONFIG: ArenaConfig = {
   },
 
   cameras: {
-    // On the landing between the hoardings (4300) and the front of the first row (4740),
-    // so the stand is past the playing area but still beside the front tier. The landing
-    // is 440mm deep, which is what holds the splay down.
-    radius: 4500,
+    // On the landing between the hoardings and the front of the first row (5600..6250
+    // now the boards moved to 5600), so the stand is past the playing area but still
+    // beside the front tier. The landing is 650mm deep, which is what holds the splay down.
+    radius: 5800, // was 4500
     // 2050 to the head, plus the body: about 2.5m standing on the landing, which is what
     // a venue camera on a fixed pedestal actually measures.
     height: 2050,
