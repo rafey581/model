@@ -325,6 +325,18 @@ export interface ArenaConfig {
   legacyFloorSpan: number
   /** Set to false to leave the old room alone and draw the arena over it. */
   hideLegacyRoom: boolean
+
+  /**
+   * Off: no outer wall, fascia, roof, roof mouth or structural bands. What is left is an
+   * open bowl under a dark clear colour — the old room's shell read as a bright sky-blue
+   * barrel around the table, and it is the single biggest thing behind the venue feeling
+   * like a hangar instead of a darkened hall.
+   */
+  buildShell: boolean
+  /** Off: no lighting truss. It hangs from the roof mouth, so it goes with the shell. */
+  buildRig: boolean
+  /** Off: no fixed pedestal cameras on the landing. */
+  buildCameraStands: boolean
 }
 
 /**
@@ -478,7 +490,11 @@ export const ARENA_CONFIG: ArenaConfig = {
   },
 
   legacyFloorSpan: 6500,
-  hideLegacyRoom: true
+  hideLegacyRoom: true,
+
+  buildShell: false,
+  buildRig: false,
+  buildCameraStands: false
 }
 
 /** The budget a quality level resolves to. */

@@ -125,8 +125,30 @@ export function readOpponentShot(
   }
 }
 
+/**
+ * A crowd of nobody, for a venue built with the seats plan switched off: same shape, so
+ * the scene can step, applaud and dispose without asking. It holds no meshes, so there is
+ * nothing to add and nothing to run a frame.
+ */
+function emptyAudience(): Audience {
+  const group = new THREE.Group()
+  group.name = 'audience'
+  return {
+    group,
+    step(): void {},
+    applaud(): void {},
+    clapping(): number {
+      return 0
+    },
+    size(): number {
+      return 0
+    },
+    dispose(): void {}
+  }
+}
+
 export function buildVenueEvents(host: VenueHost, config: VenueConfig = VENUE_CONFIG): VenueEvents {
-  const audience: Audience = buildAudience(host.venueSeats, config)
+  const audience: Audience = host.venueSeats.length ? buildAudience(host.venueSeats, config) : emptyAudience()
   const audio: CrowdAudio = buildCrowdAudio(config)
   const banner: TurnBanner = buildTurnBanner(config)
   const cue: OpponentCue = buildOpponentCue(config)

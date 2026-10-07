@@ -27,6 +27,9 @@ import {
   CUE_SHADOW_Y_MM
 } from './ballVisuals.js'
 const SHOW_CROWN_MOULDING = false
+// The crowd went with the old arena: the dark bowl stands empty, and an empty seat plan is
+// how the venue says so (venueEvents builds no people when it gets none).
+const SHOW_OLD_AUDIENCE = false
 import {
   type CameraRigState,
   type HeadingLatch,
@@ -159,6 +162,8 @@ let MAX_ANISO = 4
  */
 /** The scene's clear colour: dark navy, the top of the room's gradient. */
 const ROOM_BG_COLOR = '#10235a'
+/** What the camera sees past the edge of the carpet: the darkened hall itself. */
+const ROOM_DARK_COLOR = '#04060d'
 /** Gentle exponential fog in the room's own colour, per millimetre. Nothing at gameplay distances, a fade at the far wall. */
 const ROOM_FOG_DENSITY = 0.00004
 /** The blue the wall is painted at its brightest. */
@@ -632,7 +637,7 @@ function aimRibbonTexture(): THREE.CanvasTexture {
     const d = img.data
     for (let y = 0; y < h; y++) {
       const v = y / (h - 1)
-      const across = Math.min(1, Math.min(v, 1 - v) / 0.07)
+      const across = Math.min(1, Math.min(v, 1 - v) / 0.35)
       for (let x = 0; x < w; x++) {
         const u = x / (w - 1)
         const along = u < 0.93 ? 1 : 1 - (u - 0.93) / 0.07
@@ -664,7 +669,7 @@ function aimRibbonSolidTexture(): THREE.CanvasTexture {
     const d = img.data
     for (let y = 0; y < h; y++) {
       const v = y / (h - 1)
-      const across = Math.min(1, Math.min(v, 1 - v) / 0.07)
+      const across = Math.min(1, Math.min(v, 1 - v) / 0.35)
       for (let x = 0; x < w; x++) {
         const a = Math.round(255 * across)
         const i = (y * w + x) * 4
@@ -696,7 +701,7 @@ function aimRibbonTrailTexture(): THREE.CanvasTexture {
     const d = img.data
     for (let y = 0; y < h; y++) {
       const v = y / (h - 1)
-      const across = Math.min(1, Math.min(v, 1 - v) / 0.07)
+      const across = Math.min(1, Math.min(v, 1 - v) / 0.35)
       for (let x = 0; x < w; x++) {
         const u = x / (w - 1)
         const along = u < 0.15 ? 1 : Math.pow(1 - (u - 0.15) / 0.85, 1.4)
@@ -1341,6 +1346,7 @@ export class Scene3D implements VenueHost {
   private readonly aimLayout: ShotLineLayout = shotLineLayoutTarget()
   /** Scratch point for measuring a ribbon's distance to the lens, also reused per frame. */
   private readonly aimMeasure = new THREE.Vector3()
+  private readonly aimDir = new THREE.Vector3()
   private stick!: THREE.Group
   /** The stick's soft shadow strip on the cloth, following its angle and pull-back. */
   private stickShadow!: THREE.Mesh
@@ -1497,10 +1503,12 @@ export class Scene3D implements VenueHost {
     // sRGB output, by its current name (outputEncoding was retired in r152).
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
 
-    this.scene.background = new THREE.Color(ROOM_BG_COLOR)
+    this.scene.background = new THREE.Color(ROOM_DARK_COLOR)
     // A whisper of the room's own colour in the far distance: enough that the wall
     // and the floor fade out at their extremes instead of ending on a hard plane
-    // edge, and nothing at gameplay distances.
+    // edge, and nothing at gameplay distances. Still on ROOM_BG_COLOR — the fog's
+    // job is to soften what is in the scene, and the scene is the lit table and the
+    // bowl, both of which have to read exactly as bright as they did before.
     this.scene.fog = new THREE.FogExp2(ROOM_BG_COLOR, ROOM_FOG_DENSITY)
 
     // Near plane at CAMERA_NEAR_MM (20), not 0.1 — that constant's comment carries the
@@ -1526,7 +1534,7 @@ export class Scene3D implements VenueHost {
       console.info(`[arena] built at "${quality}" quality (try ?quality=high to see the full venue)`)
     }
     this.venueGroup = arena.group
-    this.venueSeats = arena.seats
+    this.venueSeats = SHOW_OLD_AUDIENCE ? arena.seats : []
     this.buildTable()
     // The old room's floor and back wall are built inside buildTable, so they can only be
     // stepped over once that has run. It has to happen: the old floor sits at exactly
@@ -3603,8 +3611,8 @@ const outerL = APRON_OUTER_L
    * the line, and every ribbon takes the same one so the three lines of a
    * contact read as one guide rather than as three different pens.
    */
-  private setRibbon(ribbon: THREE.Mesh, x: number, z: number, angle: number, length: number, widthScale = 1): void {
-        if (length <= 1) {
+    private setRibbon(ribbon: THREE.Mesh, x: number, z: number, angle: number, length: number, widthScale = 1): void {
+    if (length <= 1) {
       ribbon.visible = false
       return
     }
@@ -3614,7 +3622,19 @@ const outerL = APRON_OUTER_L
     const nearZ = z + Math.sin(angle) * length * 0.2
     const distance = this.camera.position.distanceTo(this.aimMeasure.set(nearX, ribbon.position.y, nearZ))
     const width = aimLineWorldWidth(distance, this.camera.fov, this.cvh)
-    ribbon.scale.set(length, width, 1)
+
+    // A flat strip looks thinner the more it runs across the view at a low camera angle.
+    const cam = this.camera.getWorldDirection(this.aimDir)
+    const fl = Math.hypot(cam.x, cam.z) || 1
+    const fx = cam.x / fl
+    const fz = cam.z / fl
+    const px = -Math.sin(angle)
+    const pz = Math.cos(angle)
+    const sinEl = Math.min(1, Math.abs(this.camera.position.y - ribbon.position.y) / distance)
+    const visible = Math.abs(px * -fz + pz * fx) + Math.abs(px * fx + pz * fz) * sinEl
+    const compensate = 1 / Math.max(0.35, visible)
+
+    ribbon.scale.set(length, width * widthScale * compensate, 1)
     ribbon.position.set(midX, ribbon.position.y, midZ)
     ribbon.rotation.z = Math.atan2(-Math.sin(angle), Math.cos(angle))
     ribbon.visible = true
@@ -3631,8 +3651,9 @@ const outerL = APRON_OUTER_L
       this.aimRibbon2,
       tableX(guide.contact.x + guide.lineOfCentres.x * (2 * BALL_RADIUS)),
       tableZ(guide.contact.y + guide.lineOfCentres.y * (2 * BALL_RADIUS)),
-      Math.atan2(guide.lineOfCentres.y, guide.lineOfCentres.x),
-      AIM_LINE2_LENGTH
+       Math.atan2(guide.lineOfCentres.y, guide.lineOfCentres.x),
+      AIM_LINE2_LENGTH,
+      1
     )
 
     // LINE 3: the cue ball's departure after the contact, from the ghost's
@@ -3650,7 +3671,8 @@ const outerL = APRON_OUTER_L
           tableX(first.from.x + tx * BALL_RADIUS),
           tableZ(first.from.y + ty * BALL_RADIUS),
           Math.atan2(ty, tx),
-          AIM_LINE3_LENGTH
+          AIM_LINE3_LENGTH,
+          0.7
         )
         return
       }

@@ -698,8 +698,11 @@ function buildStands(cfg: ArenaConfig, budget: ArenaBudget, materials: ArenaMate
     addRing(group, Math.max(48, budget.curveSegments), row.radius + row.pitch / 2, row.radius + row.pitch / 2, height, row.y + height / 2, materials.concrete)
   })
 
-  // The walk at the back of the top deck, out to the wall.
-  addLanding(group, Math.max(48, budget.curveSegments), topRadius, cfg.bowl.wallRadius, topY, materials.concrete)
+  // The walk at the back of the top deck, out to the wall. Only worth drawing if there is
+  // a wall to walk to: without the shell it would be a concrete ring floating in the void.
+  if (cfg.buildShell) {
+    addLanding(group, Math.max(48, budget.curveSegments), topRadius, cfg.bowl.wallRadius, topY, materials.concrete)
+  }
 
   return group
 }
@@ -1328,10 +1331,10 @@ export function buildArenaEnvironment(
   arena.add(buildFloor(config, budget, materials))
   arena.add(buildStands(config, budget, materials, rows))
   arena.add(buildHoardings(config, budget, materials))
-  arena.add(buildShell(config, budget, materials, rows))
+  if (config.buildShell) arena.add(buildShell(config, budget, materials, rows))
   arena.add(buildSeats(config, budget, materials, rows))
-  arena.add(buildRig(config, budget, materials))
-  arena.add(buildCameraStands(config, materials, rows))
+  if (config.buildRig) arena.add(buildRig(config, budget, materials))
+  if (config.buildCameraStands) arena.add(buildCameraStands(config, materials, rows))
   arena.add(buildStandLights(config))
 
   scene.add(arena)
