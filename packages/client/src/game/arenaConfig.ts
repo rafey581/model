@@ -389,7 +389,9 @@ export const ARENA_CONFIG: ArenaConfig = {
   bowl: {
     innerRadius: 4300,
     firstRowInset: 800,
-    boardHeight: 1000,
+    // Low boards: 900 puts the top edge at y=110, just above the bed, so the sponsors read
+    // without standing between the camera and the table.
+    boardHeight: 900,
     firstRowClearance: 700,
     firstRowLift: 950,
     /**
@@ -435,7 +437,7 @@ export const ARENA_CONFIG: ArenaConfig = {
   hoardings: {
     panels: 40,
     panelsPerTile: 4,
-    emissiveIntensity: 0.85,
+    emissiveIntensity: 0.25,
     slogans: ['SNOOKERX', 'WORLD CHAMPIONSHIP', 'SNOOKER ARENA', 'LIVE ON STREAM', 'TOP BREAK 112', 'NEXT FRAME']
   },
 
