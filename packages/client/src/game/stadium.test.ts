@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { APRON_OUTER_L, APRON_OUTER_W } from './tableGeometry.js'
 import { ARENA_CONFIG, resolveArenaBudget, type ArenaQuality } from './arenaConfig.js'
 import { arenaSeatPlacements, seatRows } from './arenaEnvironment.js'
+import { buildTrophy, trophyApronClearance, trophyPosition, TROPHY_PLINTH_RADIUS } from './stadium.js'
 
 const QUALITIES: ArenaQuality[] = ['low', 'medium', 'high']
 
@@ -96,5 +97,27 @@ describe('the seat plan', () => {
     // and the whole bowl has to leave the rest of the arena its 40k.
     expect(plan.length).toBeLessThanOrEqual(700)
     expect(plan.length * 36).toBeLessThanOrEqual(25200)
+  })
+})
+
+describe('the trophy', () => {
+  it('stands on the carpet beside the table, inside the ring of boards', () => {
+    const at = trophyPosition()
+    const radius = Math.hypot(at.x, at.z)
+    expect(radius + TROPHY_PLINTH_RADIUS).toBeLessThan(ARENA_CONFIG.bowl.innerRadius)
+    // Side offset inside the apron's own width, so the apron's nearest point is straight
+    // across and the clearance below really is the gap.
+    expect(Math.abs(at.z)).toBeLessThan(APRON_OUTER_W / 2)
+  })
+
+  it('clears the apron by 1100, inside the 1500 the spec asks for', () => {
+    expect(trophyApronClearance()).toBeGreaterThanOrEqual(1000)
+    expect(trophyApronClearance()).toBeLessThan(1500)
+  })
+
+  it('builds as two meshes on one group', () => {
+    const group = buildTrophy()
+    expect(group.children.length).toBe(2)
+    expect(group.name).toBe('trophy')
   })
 })
