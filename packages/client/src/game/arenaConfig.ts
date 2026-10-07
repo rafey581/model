@@ -404,9 +404,10 @@ export const ARENA_CONFIG: ArenaConfig = {
     // 6250 — unchanged as a gap, because the inset is relative to the boards. Past the
     // broadcast pedestal's 4600 reach (camera.ts), with a 900mm walk left behind the boards.
     firstRowInset: 1100,
-    // Low boards: 900 puts the top edge at y=110, just above the bed, so the sponsors read
-    // without standing between the camera and the table.
-    boardHeight: 900,
+    // Low boards: 750 (was 900) puts the top edge at y=-40, just under the bed, so the
+    // sponsors read without standing between the camera and the table — the ring is a
+    // dark band at the carpet's edge rather than a wall the eye has to climb over.
+    boardHeight: 750,
     firstRowClearance: 700,
     // The first row's floor, 300 above the carpet (unchanged). At the shallower rise
     // below, the bowl's front edge lands 6mm above the carpet instead of 120mm below it,
@@ -457,7 +458,11 @@ export const ARENA_CONFIG: ArenaConfig = {
   },
 
   hoardings: {
-    panels: 40,
+    // 64 panels at r=5600 = 550mm of arc each, against the old 40 at r=4300 = 675mm: about
+    // 20 percent shorter, so each advert sits in a frame its own size instead of being
+    // stretched around the wider ring. 64/4 = 16 whole texture tiles, so the ring closes
+    // on a seam.
+    panels: 64, // was 40
     panelsPerTile: 4,
     emissiveIntensity: 0.25,
     slogans: ['SNOOKERX', 'WORLD CHAMPIONSHIP', 'SNOOKER ARENA', 'LIVE ON STREAM', 'TOP BREAK 112', 'NEXT FRAME']
