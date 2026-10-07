@@ -272,12 +272,12 @@ export function computeAimGuide(
  * instead — a broadcast shot line is about two pixels of pure white, crisp
  * rather than glowing.
  */
-export const AIM_LINE_TARGET_PX = 3
+export const AIM_LINE_TARGET_PX = 4
 
 /** The thinnest a line is ever drawn, in millimetres: below this it aliases. */
 export const AIM_LINE_MIN_MM = 3
 /** The thickest a line is ever drawn, in millimetres: beyond this it is a stripe. */
-export const AIM_LINE_MAX_MM = 14
+export const AIM_LINE_MAX_MM = 24
 
 /**
  * The world width, in millimetres, that makes a line read as

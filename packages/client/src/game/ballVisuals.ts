@@ -22,7 +22,7 @@ export const CUE_BALL_SPECULAR_INTENSITY = 0.5
  * object on the cloth, and a full-strength reflection of the lamp band blows its
  * silhouette out into the cloth it should stand against.
  */
-export const CUE_BALL_ENV_MAP_INTENSITY = 0.2
+export const CUE_BALL_ENV_MAP_INTENSITY = 0
 
 /** Fresnel index for phenolic resin. */
 export const CUE_BALL_IOR = 1.5
@@ -55,7 +55,7 @@ export function createCueBallMaterial(): THREE.MeshPhysicalMaterial {
  * at under a table lamp, so the ball is grounded without a black coin appearing
  * under it.
  */
-export const CUE_SHADOW_PEAK_ALPHA = 0.5
+export const CUE_SHADOW_PEAK_ALPHA = 0.85
 /**
  * The cue ball's disc size, as a multiple of its radius: 1.4 times the ball's
  * whole width, a shade wider than the coloured balls' 1.3, so the brightest ball
@@ -63,7 +63,7 @@ export const CUE_SHADOW_PEAK_ALPHA = 0.5
  */
 export const CUE_SHADOW_PLANE = 3
 /** How far the cue ball's disc leans away from the lamp, in millimetres. */
-export const CUE_SHADOW_OFFSET_MM = 3
+export const CUE_SHADOW_OFFSET_MM = 1.5
 /** How far the disc stretches along that lean: an ellipse, not a circle. */
 export const CUE_SHADOW_STRETCH = 1.1
 /** How high the cue ball's disc sits above the cloth, in millimetres. */

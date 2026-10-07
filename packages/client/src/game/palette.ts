@@ -20,7 +20,7 @@ export const BALL_COLORS: Record<number, number> = {
 }
 
 /** Every red is the same red; snooker has no ball numbering to keep straight. */
-export const RED_BALL_COLOR = 0xd62828
+export const RED_BALL_COLOR = 0xd0201c
 
 export function ballColor(id: number): number {
   return BALL_COLORS[id] ?? RED_BALL_COLOR

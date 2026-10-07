@@ -221,7 +221,7 @@ const BALL_SHADOW_PLANE = 3
 /** The contact disc's height above the cloth, in millimetres. */
 const BALL_SHADOW_Y = 0.5
 /** How far the contact disc leans off the ball's centre, away from the lamp overhead. */
-const BALL_SHADOW_LEAN_MM = 4
+const BALL_SHADOW_LEAN_MM = 1.5
 /** The contact disc's stretch along that lean. */
 const BALL_SHADOW_STRETCH = 1.1
 /** The cue's silhouette: a thin tip running out to a thicker butt. */
@@ -344,12 +344,12 @@ const AIM_RING_STROKE_MM = 2.5
 const AIM_RING_Y = 1.1
 /** LINE 2 — the object ball's line, away along the line of centres. */
 const AIM_LINE2_COLOR = 0x7dff4a 
-const AIM_LINE2_LENGTH = BALL_RADIUS * 12
-const AIM_LINE2_OPACITY = 0.95
+const AIM_LINE2_LENGTH = BALL_RADIUS * 16
+const AIM_LINE2_OPACITY = 0.8
 /** LINE 3 — the cue ball's tangent after the contact, when one is worked out. */
 const AIM_LINE3_COLOR = 0xffffff
-const AIM_LINE3_LENGTH = BALL_RADIUS * 8
-const AIM_LINE3_OPACITY = 0.6
+const AIM_LINE3_LENGTH = BALL_RADIUS * 9
+const AIM_LINE3_OPACITY = 0.5
 
 function feltTexture(): THREE.CanvasTexture {
   return cachedTexture('felt', () => {
@@ -543,11 +543,11 @@ function contactShadowTexture(): THREE.CanvasTexture {
     canvas.height = size
     const ctx = canvas.getContext('2d')!
     const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2)
-    grad.addColorStop(0, 'rgba(0,0,0,0.5)')
-    grad.addColorStop(0.55, 'rgba(0,0,0,0.5)')
-    grad.addColorStop(0.67, 'rgba(0,0,0,0.42)')
-    grad.addColorStop(0.8, 'rgba(0,0,0,0.2)')
-    grad.addColorStop(0.9, 'rgba(0,0,0,0.07)')
+    grad.addColorStop(0, 'rgba(0,0,0,0.85)')
+    grad.addColorStop(0.55, 'rgba(0,0,0,0.85)')
+    grad.addColorStop(0.67, 'rgba(0,0,0,0.7)')
+    grad.addColorStop(0.8, 'rgba(0,0,0,0.3)')
+    grad.addColorStop(0.9, 'rgba(0,0,0,0.08)')
     grad.addColorStop(1, 'rgba(0,0,0,0)')
     ctx.fillStyle = grad
     ctx.fillRect(0, 0, size, size)
@@ -699,7 +699,7 @@ function aimRibbonTrailTexture(): THREE.CanvasTexture {
       const across = Math.min(1, Math.min(v, 1 - v) / 0.07)
       for (let x = 0; x < w; x++) {
         const u = x / (w - 1)
-        const along = u < 0.55 ? 1 : 1 - (u - 0.55) / 0.45
+        const along = u < 0.15 ? 1 : Math.pow(1 - (u - 0.15) / 0.85, 1.4)
         const a = Math.round(255 * across * along)
         const i = (y * w + x) * 4
         d[i] = 255
@@ -1220,7 +1220,7 @@ export class BallRig {
           clearcoatRoughness: 0.3,
           specularIntensity: 0.45,
           emissive: 0x000000,
-          envMapIntensity: 0.15,
+          envMapIntensity: 0,
           ior: 1.5
         })
     this.sphere = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 28), this.material)
@@ -1704,23 +1704,23 @@ export class Scene3D implements VenueHost {
     // the wood's figure by flooding the same value into both the lit and unlit sides,
     // which is exactly the "evenly lit, nothing has form" failure. A directional
     // contrast is what makes a bevel read as a bevel.
-    const ambient = new THREE.AmbientLight(0xdfe8ff, 0.34)
+    const ambient = new THREE.AmbientLight(0xdfe8ff, 0.45) 
     this.scene.add(ambient)
 
     // Hemisphere keeps the room warm from above and dark at the floor, so the underside
     // of the rails picks up bounce rather than reading as a black void.
-    const hemi = new THREE.HemisphereLight(0xfff1d8, 0x2e2419, 0.5)
+    const hemi = new THREE.HemisphereLight(0xfff1d8, 0x2e2419, 0.75)
     this.scene.add(hemi)
 
     // Cool fill from one side, warm key-side fill from the other, so every visible
     // surface receives light of two different hues. This is what separates the brass
     // from the wood behind it — a single-hue scene gives metal nowhere to put its
     // warm/cool split, and brass ends up looking like tinted plastic.
-    const fill = new THREE.DirectionalLight(0x9fc0e8, 0.4)
+    const fill = new THREE.DirectionalLight(0x9fc0e8, 0.12) 
     fill.position.set(2200, 1200, -1100)
     this.scene.add(fill)
 
-    const warm = new THREE.DirectionalLight(0xffd9a8, 0.32)
+    const warm = new THREE.DirectionalLight(0xffd9a8, 0.1)
     warm.position.set(-2200, 1400, 1600)
     this.scene.add(warm)
 
@@ -1730,13 +1730,13 @@ export class Scene3D implements VenueHost {
     // is where a premium table is actually read. Without it the whole body of the table
     // sits in the lamp's ambient wash and the milled detail has no edge to catch.
     // No shadow: this is a shaping light, and a second shadow map is not worth it.
-    const kicker = new THREE.DirectionalLight(0xfff0d4, 0.55)
+    const kicker = new THREE.DirectionalLight(0xfff0d4, 0.15)
     kicker.position.set(2600, 320, 1900)
     this.scene.add(kicker)
 
     // A tight specular source placed for the highlight it draws down the brass rail,
     // not for the light it contributes. Warm and narrow, aimed at the rail line.
-    const railSpec = new THREE.DirectionalLight(0xfff4e0, 0.4)
+    const railSpec = new THREE.DirectionalLight(0xfff4e0, 0)  
     railSpec.position.set(900, 900, 2400)
     this.scene.add(railSpec)
   }
