@@ -77,9 +77,9 @@ export interface ArenaBudget {
 }
 
 const QUALITY_BUDGETS: Record<ArenaQuality, ArenaBudget> = {
-  low: { tiers: 3, rows: 3, seatPitch: 820, curveSegments: 24, textureSize: 256, stepRings: false, carpetBump: false, trussSegments: 4 },
-  medium: { tiers: 4, rows: 3, seatPitch: 620, curveSegments: 40, textureSize: 512, stepRings: true, carpetBump: true, trussSegments: 6 },
-  high: { tiers: 4, rows: 3, seatPitch: 520, curveSegments: 64, textureSize: 1024, stepRings: true, carpetBump: true, trussSegments: 8 }
+  low: { tiers: 3, rows: 3, seatPitch: 900, curveSegments: 24, textureSize: 256, stepRings: false, carpetBump: false, trussSegments: 4 },
+  medium: { tiers: 4, rows: 5, seatPitch: 700, curveSegments: 40, textureSize: 512, stepRings: true, carpetBump: true, trussSegments: 6 },
+  high: { tiers: 4, rows: 7, seatPitch: 560, curveSegments: 64, textureSize: 1024, stepRings: true, carpetBump: true, trussSegments: 8 }
 }
 
 export interface ArenaConfig {
@@ -362,7 +362,7 @@ export const ARENA_CONFIG: ArenaConfig = {
   },
 
   palette: {
-    concrete: '#4d5a78',
+    concrete: '#0a1226',
     wall: '#9aa6bd',
     fascia: '#3b4767',
     darkSteel: '#39415a',
@@ -372,7 +372,7 @@ export const ARENA_CONFIG: ArenaConfig = {
 
   carpetColor: '#b03038',
   carpetY: -790,
-  carpetRadius: 16500,
+  carpetRadius: 10800,
   // Fully matte, and non-metal: a floor polish would put a moving specular highlight on
   // it, and a highlight that travels as the camera moves is what reads as a shimmering
   // surface rather than as cloth.
@@ -388,24 +388,24 @@ export const ARENA_CONFIG: ArenaConfig = {
 
   bowl: {
     innerRadius: 4300,
-    firstRowInset: 800,
+    // 1100 behind the boards puts the first row's centre at 5400 and its front edge at
+    // 5180 — past the broadcast pedestal's 4534, with a 900mm walk left behind the boards.
+    firstRowInset: 1100,
     // Low boards: 900 puts the top edge at y=110, just above the bed, so the sponsors read
     // without standing between the camera and the table.
     boardHeight: 900,
     firstRowClearance: 700,
-    firstRowLift: 950,
+    // The first row's floor, 300 above the carpet. Low enough that the bowl's face runs
+    // into the carpet instead of standing in front of it, which is what lets the face and
+    // the front landing step over themselves rather than be drawn.
+    firstRowLift: -490,
     /**
-     * Four decks of three rows, 340mm up per 720mm out: a 26-degree rake, which is what a
-     * compact arena needs to get twelve rows inside the far plane. The first deck takes no
-     * aisle because it starts behind the walkway in front of the hoardings; each deck after
-     * it steps back 620mm further, which is the aisle that deck's own landing sits in.
+     * One bank of seven rows, 420mm up per 900mm out: a 25-degree rake, the steepest that
+     * still reads as seating rather than as a wall. Seven rows is what `budget.rows` caps
+     * a tier at on high quality, so the plan and the budget say the same thing; low and
+     * medium take fewer rows out of the same bank rather than a shorter one.
      */
-    tiers: [
-      { rows: 3, rowPitch: 720, rowRise: 340, aisle: 0 },
-      { rows: 3, rowPitch: 720, rowRise: 340, aisle: 620 },
-      { rows: 3, rowPitch: 720, rowRise: 340, aisle: 620 },
-      { rows: 3, rowPitch: 720, rowRise: 340, aisle: 620 }
-    ],
+    tiers: [{ rows: 7, rowPitch: 900, rowRise: 420, aisle: 0 }],
     wallHeight: 10000,
     wallRadius: 16000,
     fasciaHeight: 1500,
@@ -421,15 +421,19 @@ export const ARENA_CONFIG: ArenaConfig = {
   },
 
   seats: {
-    palette: ['#9c2732', '#2e4a80', '#1f6a6a'],
-    stripeColor: '#1b2440',
+    // One dark blue everywhere, and a stripe a shade darker rather than a second colour:
+    // the bowl has to read as a single mass of blue under one lamp, not as a pattern.
+    palette: ['#0a1c4a'],
+    stripeColor: '#06122f',
     patternEvery: 3,
     blockSize: 8,
     width: 470,
     depth: 440,
     frontGap: 60,
     seatHeight: 450,
-    backHeight: 1020,
+    // 380 of backrest over the pan: enough to read as a chair from across the arena and
+    // no more, since a taller back hides the row behind it.
+    backHeight: 830,
     backLean: 9,
     thickness: 90
   },

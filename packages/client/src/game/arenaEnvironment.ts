@@ -476,7 +476,7 @@ function buildMaterials(cfg: ArenaConfig, budget: ArenaBudget, anisotropy: numbe
  * ------------------------------------------------------------------ */
 
 /** Every row of seats in the arena, innermost first. */
-function seatRows(cfg: ArenaConfig, budget: ArenaBudget): ArenaSeatRow[] {
+export function seatRows(cfg: ArenaConfig, budget: ArenaBudget): ArenaSeatRow[] {
   const rows: ArenaSeatRow[] = []
   const tiers = cfg.bowl.tiers.slice(0, Math.max(1, Math.min(budget.tiers, cfg.bowl.tiers.length)))
   let radius = cfg.bowl.innerRadius + cfg.bowl.firstRowInset
@@ -686,8 +686,12 @@ function buildStands(cfg: ArenaConfig, budget: ArenaBudget, materials: ArenaMate
     addRing(group, Math.max(48, budget.curveSegments), bottomRadius, bottomRadius, faceHeight, (bottomY + cfg.carpetY) / 2, materials.concrete)
   }
 
-  // The landing in front of the first deck, between the hoardings and the first row.
-  addLanding(group, Math.max(48, budget.curveSegments), cfg.bowl.innerRadius, bottomRadius, bottomY, materials.concrete)
+  // The landing in front of the first deck, between the hoardings and the first row. Only
+  // when it is above the carpet: a bowl that starts below floor level has its front landing
+  // buried under the carpet, and a ring nobody can see is geometry the frame still pays for.
+  if (bottomY > cfg.carpetY + 1) {
+    addLanding(group, Math.max(48, budget.curveSegments), cfg.bowl.innerRadius, bottomRadius, bottomY, materials.concrete)
+  }
 
   // One riser per row boundary: from a row's floor up to the next one's.
   rows.forEach((row, i) => {
@@ -1329,8 +1333,8 @@ export function buildArenaEnvironment(
 
   const materials = buildMaterials(config, budget, renderer ? renderer.capabilities.getMaxAnisotropy() : 8)
   arena.add(buildFloor(config, budget, materials))
-  arena.add(buildStands(config, budget, materials, rows))
-  arena.add(buildHoardings(config, budget, materials))
+  arena.add(mergeStaticMeshes(buildStands(config, budget, materials, rows), 'stands'))
+  arena.add(mergeStaticMeshes(buildHoardings(config, budget, materials), 'hoardings'))
   if (config.buildShell) arena.add(buildShell(config, budget, materials, rows))
   arena.add(buildSeats(config, budget, materials, rows))
   if (config.buildRig) arena.add(buildRig(config, budget, materials))
