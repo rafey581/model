@@ -30,18 +30,8 @@ const TIPS = [
 ] as const
 
 const TIP_MS = 2400
-const READY_MS = 250
+const READY_MS = 280
 const FADE_MS = 400
-
-/** Snooker colours for the 6 colour balls (CSS). */
-const COLOUR_FILLS = [
-  '#e8c84a', // yellow
-  '#2e8b57', // green
-  '#8b5a2b', // brown
-  '#2f6bff', // blue
-  '#e85a9a', // pink
-  '#1a1a1a' // black
-] as const
 
 /**
  * Show the match loading overlay above everything.
@@ -68,30 +58,7 @@ export function showMatchLoading(opts: MatchLoadingShowOpts): MatchLoadingHandle
   mode.className = 'ml-mode'
   mode.textContent = opts.modeLabel
 
-  const rackWrap = document.createElement('div')
-  rackWrap.className = 'ml-rack-wrap'
-  rackWrap.setAttribute('aria-hidden', 'true')
-  rackWrap.innerHTML = buildRackSvg()
-  const ballEls = Array.from(rackWrap.querySelectorAll<SVGElement>('.ml-ball'))
-
-  const cue = document.createElement('div')
-  cue.className = 'ml-cue'
-  rackWrap.appendChild(cue)
-
-  const dust = document.createElement('div')
-  dust.className = 'ml-dust'
-  if (!reduced) {
-    for (let i = 0; i < 10; i++) {
-      const speck = document.createElement('span')
-      speck.className = 'ml-speck'
-      speck.style.left = `${8 + ((i * 9) % 84)}%`
-      speck.style.bottom = `${6 + (i % 5) * 8}%`
-      speck.style.setProperty('--ml-dur', `${8 + (i % 7)}s`)
-      speck.style.setProperty('--ml-delay', `${(i * 0.7) % 5}s`)
-      dust.appendChild(speck)
-    }
-  }
-  rackWrap.appendChild(dust)
+  const stage = buildClubStage(reduced)
 
   const title = document.createElement('h1')
   title.className = 'ml-title'
@@ -117,7 +84,10 @@ export function showMatchLoading(opts: MatchLoadingShowOpts): MatchLoadingHandle
   bar.className = 'ml-bar'
   const fill = document.createElement('span')
   fill.className = 'ml-bar-fill'
-  bar.appendChild(fill)
+  const sheen = document.createElement('span')
+  sheen.className = 'ml-bar-sheen'
+  sheen.setAttribute('aria-hidden', 'true')
+  bar.append(fill, sheen)
 
   const pctEl = document.createElement('span')
   pctEl.className = 'ml-pct'
@@ -133,12 +103,11 @@ export function showMatchLoading(opts: MatchLoadingShowOpts): MatchLoadingHandle
   longer.className = 'ml-longer'
   longer.textContent = 'Taking a little longer than usual, thanks for your patience.'
 
-  center.append(mode, rackWrap, title, status, tip, progressRow, readyLabel, longer)
+  center.append(mode, stage, title, status, tip, progressRow, readyLabel, longer)
   root.append(bg, center)
   document.body.appendChild(root)
 
   let tipIndex = 0
-  let ballsLit = 0
   let currentPhase: LoadPhase = 'fonts'
   let finishStarted = false
   let goneResolve!: () => void
@@ -152,11 +121,6 @@ export function showMatchLoading(opts: MatchLoadingShowOpts): MatchLoadingHandle
       fill.style.transform = `scaleX(${Math.min(1, pct / 100)})`
       pctEl.textContent = `${shown}%`
       progressRow.setAttribute('aria-valuenow', String(shown))
-      const nextBalls = Math.min(21, Math.floor((pct / 100) * 21 + 1e-6))
-      while (ballsLit < nextBalls) {
-        ballEls[ballsLit]?.classList.add('ml-ball--on')
-        ballsLit++
-      }
     },
     onLonger: () => {
       longer.classList.add('ml-longer--on')
@@ -200,9 +164,7 @@ export function showMatchLoading(opts: MatchLoadingShowOpts): MatchLoadingHandle
 
     await controller.whenReady()
 
-    // Light remaining balls + ready glow.
-    for (const el of ballEls) el.classList.add('ml-ball--on')
-    rackWrap.classList.add('ml-rack-wrap--ready')
+    stage.classList.add('ml-stage--ready')
     root.classList.add('ml-root--ready')
     status.textContent = 'ALMOST READY'
     fill.style.transform = 'scaleX(1)'
@@ -218,7 +180,6 @@ export function showMatchLoading(opts: MatchLoadingShowOpts): MatchLoadingHandle
     return gone
   }
 
-  // Trap focus lightly: keep Tab inside overlay.
   const onKey = (e: KeyboardEvent): void => {
     if (e.key === 'Tab') {
       e.preventDefault()
@@ -229,7 +190,7 @@ export function showMatchLoading(opts: MatchLoadingShowOpts): MatchLoadingHandle
   root.focus({ preventScroll: true })
   root.addEventListener('keydown', onKey)
 
-  const handle: MatchLoadingHandle = {
+  return {
     report(phase, fraction) {
       setPhaseStatus(phase)
       try {
@@ -241,8 +202,6 @@ export function showMatchLoading(opts: MatchLoadingShowOpts): MatchLoadingHandle
     finish: () => finishInternal(false),
     gone
   }
-
-  return handle
 }
 
 /** Prefetch lobby background so the overlay paint is warm. */
@@ -261,61 +220,76 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function buildRackSvg(): string {
-  // Triangle of 15 reds (rows 1..5) + 6 colours below in snooker order.
-  const r = 9.2
-  const gap = 19.2
-  const reds: Array<{ cx: number; cy: number }> = []
-  const startY = 28
-  for (let row = 0; row < 5; row++) {
-    const count = row + 1
-    const y = startY + row * gap * 0.9
-    const width = (count - 1) * gap
-    const x0 = 100 - width / 2
-    for (let i = 0; i < count; i++) {
-      reds.push({ cx: x0 + i * gap, cy: y })
+/** Snooker-club vignette: felt table, cue stroke, orbit, chalk — CSS-only motion. */
+function buildClubStage(reduced: boolean): HTMLElement {
+  const stage = document.createElement('div')
+  stage.className = 'ml-stage'
+  stage.setAttribute('aria-hidden', 'true')
+
+  const orbit = document.createElement('div')
+  orbit.className = 'ml-orbit'
+  const beadA = document.createElement('span')
+  beadA.className = 'ml-orbit-bead'
+  const beadB = document.createElement('span')
+  beadB.className = 'ml-orbit-bead ml-orbit-bead--dim'
+  orbit.append(beadA, beadB)
+
+  const table = document.createElement('div')
+  table.className = 'ml-table'
+
+  const rail = document.createElement('div')
+  rail.className = 'ml-table-rail'
+  table.appendChild(rail)
+
+  for (const pos of ['tl', 'tr', 'bl', 'br', 'ml', 'mr'] as const) {
+    const pocket = document.createElement('span')
+    pocket.className = `ml-pocket ml-pocket--${pos}`
+    table.appendChild(pocket)
+  }
+
+  const baulk = document.createElement('span')
+  baulk.className = 'ml-baulk'
+  const dZone = document.createElement('span')
+  dZone.className = 'ml-d'
+  table.append(baulk, dZone)
+
+  for (const spot of ['blue', 'pink', 'black'] as const) {
+    const el = document.createElement('span')
+    el.className = `ml-spot ml-spot--${spot}`
+    table.appendChild(el)
+  }
+
+  const cueball = document.createElement('div')
+  cueball.className = 'ml-cueball'
+
+  const cue = document.createElement('div')
+  cue.className = 'ml-cue'
+  const shaft = document.createElement('div')
+  shaft.className = 'ml-cue-shaft'
+  const tip = document.createElement('div')
+  tip.className = 'ml-cue-tip'
+  cue.append(shaft, tip)
+
+  const chalk = document.createElement('div')
+  chalk.className = 'ml-chalk'
+
+  const dust = document.createElement('div')
+  dust.className = 'ml-dust'
+  if (!reduced) {
+    for (let i = 0; i < 8; i++) {
+      const speck = document.createElement('span')
+      speck.className = 'ml-speck'
+      speck.style.left = `${10 + ((i * 11) % 80)}%`
+      speck.style.bottom = `${8 + (i % 4) * 10}%`
+      speck.style.setProperty('--ml-dur', `${9 + (i % 5)}s`)
+      speck.style.setProperty('--ml-delay', `${(i * 0.8) % 6}s`)
+      dust.appendChild(speck)
     }
   }
 
-  const colourY = startY + 5 * gap * 0.9 + 8
-  const colours = [
-    { cx: 55, cy: colourY }, // Y
-    { cx: 75, cy: colourY }, // G
-    { cx: 95, cy: colourY }, // Br
-    { cx: 115, cy: colourY }, // Bl
-    { cx: 100, cy: colourY + gap * 0.95 }, // P
-    { cx: 100, cy: colourY + gap * 1.9 } // Bk
-  ]
-
-  const parts: string[] = [
-    '<svg class="ml-rack" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">'
-  ]
-
-  let idx = 0
-  for (const p of reds) {
-    parts.push(ballCircle(idx++, p.cx, p.cy, r, '#c62828'))
-  }
-  COLOUR_FILLS.forEach((fill, i) => {
-    const p = colours[i]!
-    parts.push(ballCircle(idx++, p.cx, p.cy, r, fill))
-  })
-  parts.push('</svg>')
-  return parts.join('')
+  stage.append(orbit, table, cueball, cue, chalk, dust)
+  return stage
 }
 
-function ballCircle(index: number, cx: number, cy: number, r: number, fill: string): string {
-  const highlight = fill === '#1a1a1a' ? '#5a5a5a' : '#ffffff'
-  return (
-    `<g class="ml-ball" data-i="${index}">` +
-    `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}"/>` +
-    `<circle cx="${cx - r * 0.28}" cy="${cy - r * 0.32}" r="${r * 0.34}" fill="url(#ml-hl-${index})"/>` +
-    `<defs><radialGradient id="ml-hl-${index}" cx="35%" cy="30%" r="65%">` +
-    `<stop offset="0%" stop-color="${highlight}" stop-opacity="0.55"/>` +
-    `<stop offset="100%" stop-color="${highlight}" stop-opacity="0"/>` +
-    `</radialGradient></defs></g>`
-  )
-}
-
-/** Exported for callers that want phase labels. */
 export { STATUS_FOR_PHASE }
 export type { LoadPhase }
