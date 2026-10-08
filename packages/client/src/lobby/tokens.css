@@ -1,0 +1,60 @@
+/* Gaming lobby design tokens — single source for palette, type, motion, radii. */
+@import '@fontsource/oxanium/700.css';
+@import '@fontsource/oxanium/800.css';
+@import '@fontsource/rajdhani/700.css';
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+
+:root {
+  --ink-950: #060b1a;
+  --ink-900: #0a1228;
+  --navy-800: #0e1b3d;
+  --navy-700: #162a57;
+  --blue-500: #2f7bff;
+  --blue-600: #1f5fe0;
+  --amber-400: #ffc24a;
+  --amber-500: #ffb020;
+  --amber-600: #e08a00;
+  --ivory: #f4f1ea;
+  --mist: #a9b5d1;
+  --danger: #e5484d;
+  --success: #22c55e;
+
+  --tile-controls: linear-gradient(145deg, #2a3a66, #18264a);
+  --tile-statistics: linear-gradient(145deg, #0f8f8c, #0a4a58);
+  --tile-vs-ai: linear-gradient(145deg, #2f7bff, #1a46b8);
+  --tile-online: linear-gradient(145deg, #7a3bc2, #3a1a66);
+  --tile-rules: linear-gradient(145deg, #3a4668, #222c48);
+  --hero-overlay: linear-gradient(
+    to top,
+    rgba(6, 11, 26, 0.92) 0%,
+    rgba(6, 11, 26, 0.15) 60%,
+    rgba(6, 11, 26, 0.05) 100%
+  );
+  --bg-overlay: rgba(7, 13, 31, 0.62);
+  --panel-bg: rgba(14, 27, 61, 0.88);
+  --panel-border: rgba(255, 255, 255, 0.12);
+  --primary-action: linear-gradient(145deg, var(--amber-400), var(--amber-600));
+  --selected-fill: linear-gradient(145deg, var(--blue-500), var(--blue-600));
+
+  --font-display: 'Oxanium', 'Segoe UI', system-ui, sans-serif;
+  --font-label: 'Rajdhani', 'Segoe UI', system-ui, sans-serif;
+  --font-body: 'Inter', 'Segoe UI', system-ui, sans-serif;
+
+  --radius-panel: 12px;
+  --radius-btn: 10px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --motion-press: 160ms;
+  --motion-hover: 260ms;
+  --motion-screen: 320ms;
+  --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  --lobby-bg-image: url('/lobby-pic-blurred.jpg');
+}

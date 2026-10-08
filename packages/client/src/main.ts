@@ -12,7 +12,7 @@ import { createShotTimer } from './game/shotTimerView.js'
 import type { TurnTiming } from './game/shotTimer.js'
 import type { ShotInput, ShotPlayback } from '@snooker/shared'
 import { APP_TITLE, STAKE_TIERS, COLOR_VALUES } from '@snooker/shared'
-import type { PracticeAiLevel } from '@snooker/shared'
+import type { MatchFormat, PracticeAiLevel } from '@snooker/shared'
 import { createAvatarBadge } from './game/avatar.js'
 import {
   DEFAULT_DIFFICULTY,
@@ -24,6 +24,14 @@ import {
   comingSoonMessage
 } from './lobbyModel.js'
 import type { AppScreen } from './lobbyModel.js'
+import {
+  USE_NEW_LOBBY,
+  USE_LOADING_SCREEN,
+  mountGamingLobby,
+  showMatchLoading,
+  ensureLobbyBgReady
+} from './lobby/index.js'
+import type { LobbyBridge, LobbySession, LoadPhase } from './lobby/index.js'
 import type { Socket } from 'socket.io-client'
 import { playCushion, playFoul, playFrameEnd, playMatchEnd, playPot, setSoundMuted, isSoundMuted, unlockAudio } from './game/audio.js'
 import { ShotPlayer } from './game/playback.js'
@@ -102,6 +110,8 @@ let mySeat: number | undefined
 let frame: FrameSnapshotData | null = null
 let cueController: CueController | null = null
 let scene3d: Scene3D | null = null
+/** One-shot build progress for the loading screen; cleared after Scene3D.create. */
+let pendingSceneBuildProgress: ((fraction: number) => void) | undefined
 /**
  * Which of the views the player has asked for. The camera follows this rather than
  * being told where to go, so the choice survives every shot: watching a shot put the camera
@@ -175,6 +185,13 @@ let connected = true
 let activeMatchIsPractice = false
 let activeTournamentId: string | null = null
 let tournamentTimer: number | undefined
+/**
+ * The mounted gaming lobby, so the next render can tear it down before drawing.
+ *
+ * The lobby holds document-level listeners (escape, fullscreen, resize); dropping its
+ * DOM without `destroy()` would leave one set behind per home ↔ tournaments round trip.
+ */
+let lobbySession: LobbySession | null = null
 let maintenanceMode = false
 let maintenanceEl: HTMLElement | null = null
 let opponentGone = false
@@ -1148,6 +1165,9 @@ async function finishMatch(winnerSeat: number, reason?: string): Promise<void> {
  * to be told so before its first child is measured, not after.
  */
 function render(): void {
+  // The lobby owns document-level listeners, so it is torn down before the page is cleared.
+  lobbySession?.destroy()
+  lobbySession = null
   app.innerHTML = ''
   hud = null
   document.body.classList.remove('game-mode', 'home-mode', 'practice-mode')
@@ -1173,6 +1193,12 @@ function render(): void {
   } else if (activeTournamentId) {
     app.appendChild(header())
     void renderTournament()
+  } else if (USE_NEW_LOBBY && activeScreen !== 'tournaments') {
+    // New gaming lobby UI (presentation only). Flip USE_NEW_LOBBY in lobby/flag.ts to restore the old lobby.
+    // `tournaments` is the exception: its tile hands back to the existing screen below,
+    // which is the same one the old lobby's Tournament card has always opened.
+    app.className = 'app-root app-home'
+    lobbySession = mountGamingLobby(app, createLobbyBridge())
   } else if (activeScreen === 'home') {
     app.appendChild(header({ home: true }))
     renderHome()
@@ -1182,6 +1208,74 @@ function render(): void {
   } else {
     app.appendChild(header())
     void renderScreen(activeScreen)
+  }
+}
+
+/**
+ * Read-only bridge from the new lobby views into existing main.ts handlers and state.
+ * Does not change match start, audio, wallet, or API contracts — only exposes them.
+ */
+function createLobbyBridge(): LobbyBridge {
+  const logoSvg =
+    '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" fill="#c9a84c"/><circle cx="12" cy="12" r="7" fill="#0a0a0f"/><circle cx="9.5" cy="9.5" r="2.5" fill="#e8c872"/></svg>'
+  return {
+    appTitle: APP_TITLE,
+    username: currentUser?.username ?? 'Player',
+    userId: currentUser?.id ?? '',
+    walletBalance: wallet.balance,
+    logoSvg,
+    formatCash,
+    createAvatar: (name) => createAvatarBadge({ name, isBot: false }),
+    getSoundMuted: () => isSoundMuted(),
+    setSoundMuted: (muted) => setSoundMuted(muted),
+    practiceDifficulty,
+    setPracticeDifficulty: (level) => {
+      practiceDifficulty = level
+    },
+    getStakeTiers: () => tiers.map((t) => ({ id: t.id, label: t.label, credits: t.credits })),
+    getDefaultStakeTierId: () => activeTierId ?? tiers[0]?.id ?? null,
+    refreshWallet: async () => {
+      await Promise.all([refreshWallet(), loadTiers()])
+    },
+    fetchProfileStats: async () => {
+      try {
+        const profile = await api<MyProfile>('/me')
+        return profile.stats
+      } catch {
+        return null
+      }
+    },
+    fetchMatchHistory: async () => {
+      try {
+        return await api<HistoryMatch[]>('/matches/history')
+      } catch {
+        return []
+      }
+    },
+    startPractice: async (aiLevel) => {
+      practiceDifficulty = aiLevel
+      if (!USE_LOADING_SCREEN) {
+        const data = await api<{ id: string }>('/practice/start', { method: 'POST', body: { aiLevel } })
+        enterMatch(data.id, true)
+        return
+      }
+      await startPracticeWithLoadingScreen(aiLevel)
+    },
+    startOnlineMatch: async (opts) => {
+      const data = await api<{ id: string }>('/matches', {
+        method: 'POST',
+        body: { stakeTier: opts.stakeTier, format: opts.format as MatchFormat }
+      })
+      enterMatch(data.id, false)
+    },
+    toast: (message, kind) => toast(message, kind),
+    onProfileActivate: () => {
+      /* Settings tab is opened by the lobby shell; no separate profile route exists. */
+    },
+    openTournaments: () => {
+      activeScreen = 'tournaments'
+      render()
+    }
   }
 }
 
@@ -2078,6 +2172,132 @@ async function profileStatsCard(): Promise<HTMLElement> {
   return c
 }
 
+/**
+ * VS AI start path with the match loading overlay: real phase progress, GPU warm-up,
+ * then handover. Online play keeps using `startOnlineMatch` unchanged — wire the same
+ * helper there later when that flow should share this screen.
+ */
+async function startPracticeWithLoadingScreen(aiLevel: PracticeAiLevel): Promise<void> {
+  const loading = showMatchLoading({ modeLabel: 'VS AI' })
+  const perf = new URLSearchParams(location.search).has('perf')
+  const phaseMs: Partial<Record<LoadPhase | 'total', number>> = {}
+  const runPhase = async (phase: LoadPhase, work: () => Promise<void> | void): Promise<void> => {
+    const t0 = performance.now()
+    loading.report(phase, 0)
+    try {
+      await work()
+    } catch (err) {
+      console.warn(`[match-loading] phase ${phase} failed; continuing`, err)
+    }
+    loading.report(phase, 1)
+    phaseMs[phase] = performance.now() - t0
+  }
+
+  const tAll = performance.now()
+  try {
+    await runPhase('fonts', async () => {
+      await Promise.all([document.fonts.ready.catch(() => undefined), ensureLobbyBgReady()])
+    })
+
+    // Network must succeed: without a match id there is nothing to warm. Do not swallow.
+    loading.report('network', 0)
+    const tNet = performance.now()
+    let matchId: string
+    try {
+      const data = await api<{ id: string }>('/practice/start', { method: 'POST', body: { aiLevel } })
+      matchId = data.id
+      loading.report('network', 1)
+      phaseMs.network = performance.now() - tNet
+    } catch (err) {
+      await loading.finish().catch(() => undefined)
+      throw err
+    }
+
+    await runPhase('scene', async () => {
+      pendingSceneBuildProgress = (fraction) => loading.report('scene', fraction)
+      enterMatch(matchId, true)
+      pendingSceneBuildProgress = undefined
+    })
+
+    await runPhase('audio', async () => {
+      await warmMatchAudioBuffers()
+    })
+
+    if (scene3d) {
+      const warmPhases: Array<'textures' | 'shaders' | 'bakes' | 'warmup'> = [
+        'textures',
+        'shaders',
+        'bakes',
+        'warmup'
+      ]
+      const seen = new Set<string>()
+      const tWarm = performance.now()
+      await scene3d.warmUp(
+        (phase, fraction) => {
+          loading.report(phase, fraction)
+          if (fraction >= 1 && !seen.has(phase)) {
+            seen.add(phase)
+            phaseMs[phase] = performance.now() - tWarm
+          }
+        },
+        { perf }
+      )
+      for (const p of warmPhases) {
+        if (!seen.has(p)) loading.report(p, 1)
+      }
+    } else {
+      for (const p of ['textures', 'shaders', 'bakes', 'warmup'] as const) {
+        loading.report(p, 1)
+      }
+    }
+
+    const before = scene3d?.rendererInfo() ?? { programs: 0, textures: 0 }
+    if (perf) {
+      phaseMs.total = performance.now() - tAll
+      console.info('[perf] match loading phases (ms)', phaseMs)
+      console.info('[perf] renderer.info before handover', before)
+    }
+
+    await loading.finish()
+
+    if (perf) {
+      window.setTimeout(() => {
+        const after = scene3d?.rendererInfo() ?? { programs: 0, textures: 0 }
+        console.info('[perf] renderer.info 3s after handover', after)
+        if (before.programs !== after.programs || before.textures !== after.textures) {
+          console.warn('[perf] renderer.info mismatch after handover', { before, after })
+        }
+      }, 3000)
+    }
+  } catch (err) {
+    console.warn('[match-loading] aborting overlay after error', err)
+    await loading.finish().catch(() => undefined)
+    throw err
+  }
+}
+
+/** Prefetch / decode crowd applause and unlock the audio context hooks. */
+async function warmMatchAudioBuffers(): Promise<void> {
+  unlockAudio()
+  try {
+    const res = await fetch('/audio/clapping-best.mp4', { cache: 'force-cache' })
+    if (!res.ok) return
+    const bytes = await res.arrayBuffer()
+    const AC =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!AC) return
+    const ctx = new AC()
+    try {
+      await ctx.decodeAudioData(bytes.slice(0))
+    } finally {
+      await ctx.close().catch(() => undefined)
+    }
+  } catch {
+    /* crowd file missing or decode unsupported — skip */
+  }
+}
+
 function enterMatch(matchId: string, isPractice = false): void {
   activeMatchId = matchId
   activeMatchIsPractice = isPractice
@@ -2379,7 +2599,11 @@ function renderGame(): void {
   slowFrames = 0
 
   scene3d?.dispose()
-  scene3d = Scene3D.create(canvas, canvas.width, canvas.height)
+  const buildOpts = pendingSceneBuildProgress
+    ? { onBuildProgress: pendingSceneBuildProgress }
+    : undefined
+  pendingSceneBuildProgress = undefined
+  scene3d = Scene3D.create(canvas, canvas.width, canvas.height, buildOpts)
 
   // A new scene has no camera move in it and is not holding the overhead placement view,
   // so a placement that was mid-flight against the old one would be describing a camera

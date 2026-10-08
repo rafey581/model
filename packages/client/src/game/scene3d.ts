@@ -47,9 +47,12 @@ import {
   stepPlacementTransition,
   placementTransitionEndPose,
   topDownPose,
+  aimPose,
+  aimFovDeg,
   resolveCameraTarget,
   followHeadingLatch,
-  PLACEMENT_TRANSITION_SECONDS
+  PLACEMENT_TRANSITION_SECONDS,
+  type CameraPose
 } from './camera.js'
 import {
   ballRadiusPx,
@@ -78,6 +81,25 @@ import {
 
 const HALF_L = TABLE_LENGTH / 2
 const HALF_W = TABLE_WIDTH / 2
+
+/** Optional hooks for Scene3D.create — omit for identical legacy behaviour. */
+export interface Scene3DCreateOptions {
+  onBuildProgress?: (fraction: number) => void
+}
+
+/** Progress phases reported by Scene3D.warmUp. */
+export type WarmUpPhase = 'textures' | 'shaders' | 'bakes' | 'warmup'
+
+function yieldMain(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve())
+    else setTimeout(resolve, 16)
+  })
+}
 /** Kept as an alias so the scene's own reads stay terse; the value lives with the geometry. */
 const CUSHION_H = CUSHION_H_MM
 /**
@@ -1406,17 +1428,233 @@ export class Scene3D implements VenueHost {
    */
   private placementCueLock: { x: number; y: number } | null = null
 
-  static create(canvas: HTMLCanvasElement, width: number, height: number): Scene3D | null {
+  /**
+   * GPU warm-up used only by the match loading screen. Uploads textures, compiles
+   * shaders (forcing normally-hidden objects visible for the compile pass), warms both
+   * start camera poses, and draws a handful of real frames including one shadow bake.
+   * Restores every visibility flip. Does not change materials, lights, or look.
+   */
+  async warmUp(
+    onProgress?: (phase: WarmUpPhase, fraction: number) => void,
+    opts?: { perf?: boolean }
+  ): Promise<void> {
+    const t0 = performance.now()
+    const phaseAt: Partial<Record<WarmUpPhase, number>> = {}
+    const mark = (phase: WarmUpPhase): void => {
+      phaseAt[phase] = performance.now() - t0
+    }
+
+    const report = (phase: WarmUpPhase, fraction: number): void => {
+      try {
+        onProgress?.(phase, fraction)
+      } catch (err) {
+        console.warn('[scene3d.warmUp] progress callback failed', phase, err)
+      }
+    }
+
+    // --- textures ---
     try {
-      return new Scene3D(canvas, width, height)
+      const textures = this.collectGpuTextures()
+      const batch = 4
+      for (let i = 0; i < textures.length; i++) {
+        try {
+          this.renderer.initTexture(textures[i]!)
+        } catch {
+          /* skip a bad texture; never stall the loader */
+        }
+        if ((i + 1) % batch === 0 || i === textures.length - 1) {
+          report('textures', textures.length ? (i + 1) / textures.length : 1)
+          await yieldMain()
+        }
+      }
+      if (textures.length === 0) report('textures', 1)
+    } catch (err) {
+      console.warn('[scene3d.warmUp] textures phase failed', err)
+      report('textures', 1)
+    }
+    mark('textures')
+
+    // --- shaders (temporarily reveal hidden meshes so compile sees them) ---
+    try {
+      await this.withForcedVisibility(async () => {
+        const aspect = this.cvw / Math.max(1, this.cvh)
+        const overhead = topDownPose(aspect)
+        this.applyWarmPose(overhead)
+        const compiler = this.renderer as THREE.WebGLRenderer & {
+          compileAsync?: (scene: THREE.Scene, camera: THREE.Camera) => Promise<void>
+        }
+        report('shaders', 0.2)
+        if (typeof compiler.compileAsync === 'function') {
+          await compiler.compileAsync(this.scene, this.camera)
+        } else {
+          this.renderer.compile(this.scene, this.camera)
+        }
+        report('shaders', 0.7)
+        await yieldMain()
+        // Second compile from the aim pose so the cue-view programs are warm too.
+        const cue = { x: TABLE_LENGTH * 0.25, y: TABLE_WIDTH * 0.5 }
+        this.applyWarmPose(aimPose(cue, 0, aimFovDeg(aspect)))
+        if (typeof compiler.compileAsync === 'function') {
+          await compiler.compileAsync(this.scene, this.camera)
+        } else {
+          this.renderer.compile(this.scene, this.camera)
+        }
+        report('shaders', 1)
+      })
+    } catch (err) {
+      console.warn('[scene3d.warmUp] shaders phase failed', err)
+      report('shaders', 1)
+    }
+    mark('shaders')
+
+    // --- static bakes: shadow map + one draw ---
+    try {
+      report('bakes', 0.2)
+      this.renderer.shadowMap.needsUpdate = true
+      this.warmDraw()
+      report('bakes', 1)
+      await yieldMain()
+    } catch (err) {
+      console.warn('[scene3d.warmUp] bakes phase failed', err)
+      report('bakes', 1)
+    }
+    mark('bakes')
+
+    // --- warm-up frames across both start poses ---
+    try {
+      const aspect = this.cvw / Math.max(1, this.cvh)
+      const poses: CameraPose[] = [
+        topDownPose(aspect),
+        aimPose({ x: TABLE_LENGTH * 0.25, y: TABLE_WIDTH * 0.5 }, 0, aimFovDeg(aspect))
+      ]
+      const frames = 8
+      for (let i = 0; i < frames; i++) {
+        this.applyWarmPose(poses[i % poses.length]!)
+        if (i === 0) this.renderer.shadowMap.needsUpdate = true
+        this.warmDraw()
+        report('warmup', (i + 1) / frames)
+        await nextAnimationFrame()
+      }
+      // Leave the camera on the default aim-ish pose the constructor started with.
+      this.applyWarmPose(aimPose({ x: TABLE_LENGTH * 0.25, y: TABLE_WIDTH * 0.5 }, 0, aimFovDeg(aspect)))
+      this.warmDraw()
+      report('warmup', 1)
+    } catch (err) {
+      console.warn('[scene3d.warmUp] warmup frames failed', err)
+      report('warmup', 1)
+    }
+    mark('warmup')
+
+    if (opts?.perf) {
+      const info = this.renderer.info
+      console.info('[perf] warmUp phases (ms)', phaseAt, {
+        programs: info.programs?.length ?? 0,
+        textures: info.memory.textures,
+        totalMs: performance.now() - t0
+      })
+    }
+  }
+
+  /** Programs / texture counts for loading-screen handover checks. */
+  rendererInfo(): { programs: number; textures: number } {
+    const info = this.renderer.info
+    return {
+      programs: info.programs?.length ?? 0,
+      textures: info.memory.textures
+    }
+  }
+
+  private collectGpuTextures(): THREE.Texture[] {
+    const found = new Set<THREE.Texture>()
+    const add = (tex: THREE.Texture | null | undefined): void => {
+      if (tex) found.add(tex)
+    }
+    this.scene.traverse((obj) => {
+      const mesh = obj as THREE.Mesh
+      if (!mesh.isMesh) return
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+      for (const mat of mats) {
+        if (!mat) continue
+        const m = mat as THREE.MeshStandardMaterial & Record<string, unknown>
+        add(m.map)
+        add(m.normalMap)
+        add(m.roughnessMap)
+        add(m.metalnessMap)
+        add(m.aoMap)
+        add(m.emissiveMap)
+        add(m.envMap)
+        add(m.alphaMap)
+        add(m.lightMap)
+        add(m.bumpMap as THREE.Texture | null | undefined)
+        add(m.displacementMap)
+      }
+    })
+    if (this.scene.environment) add(this.scene.environment)
+    const bg = this.scene.background
+    if (bg && (bg as THREE.Texture).isTexture) add(bg as THREE.Texture)
+    return [...found]
+  }
+
+  private applyWarmPose(pose: CameraPose): void {
+    this.camera.position.set(tableX(pose.x), pose.height, tableZ(pose.y))
+    this.camera.lookAt(tableX(pose.lookX), pose.lookHeight, tableZ(pose.lookY))
+    if (this.camera.fov !== pose.fov) {
+      this.camera.fov = pose.fov
+      this.camera.updateProjectionMatrix()
+    }
+    this.camera.updateMatrixWorld(true)
+  }
+
+  private warmDraw(): void {
+    if (this.renderer.shadowMap.needsUpdate) {
+      const shadowCam = this.lamp.shadow.camera
+      shadowCam.position.set(0, 1750, 0)
+      shadowCam.up.set(0, 0, -1)
+      shadowCam.lookAt(0, 0, 0)
+      shadowCam.updateMatrixWorld(true)
+    }
+    this.renderer.render(this.scene, this.camera)
+  }
+
+  private async withForcedVisibility(run: () => Promise<void>): Promise<void> {
+    const saved: Array<{ obj: THREE.Object3D; visible: boolean }> = []
+    this.scene.traverse((obj) => {
+      saved.push({ obj, visible: obj.visible })
+      obj.visible = true
+    })
+    try {
+      await run()
+    } finally {
+      for (const entry of saved) entry.obj.visible = entry.visible
+    }
+  }
+
+  /**
+   * Optional build/warm-up hooks. Unused callers keep the previous create(canvas, w, h)
+   * behaviour unchanged.
+   */
+  static create(
+    canvas: HTMLCanvasElement,
+    width: number,
+    height: number,
+    opts?: Scene3DCreateOptions
+  ): Scene3D | null {
+    try {
+      return new Scene3D(canvas, width, height, opts)
     } catch {
       return null
     }
   }
 
-  private constructor(canvas: HTMLCanvasElement, width: number, height: number) {
+  private constructor(
+    canvas: HTMLCanvasElement,
+    width: number,
+    height: number,
+    opts?: Scene3DCreateOptions
+  ) {
     this.cvw = width
     this.cvh = height
+    const onBuild = opts?.onBuildProgress
     // The canvas backing store is already sized with the device pixel ratio by the
     // caller (capped at 1.5 in main.ts), so the renderer draws at one pixel per backing
     // pixel. AA is decided once from the device rather than asked for unconditionally:
@@ -1467,6 +1705,7 @@ export class Scene3D implements VenueHost {
     this.camera.lookAt(0, 0, 0)
 
     this.buildLighting()
+    onBuild?.(0.12)
     // How much of that arena this device gets to have: the seat and texture budget, the
     // lamp's shadow map and the number of stand washes are all read during the build
     // below, so this is the one moment the choice can still be made.
@@ -1481,6 +1720,7 @@ export class Scene3D implements VenueHost {
     }
     this.venueGroup = arena.group
     this.venueSeats = SHOW_OLD_AUDIENCE ? arena.seats : []
+    onBuild?.(0.32)
     this.buildTable()
     // The old room's floor and back wall are built inside buildTable, so they can only be
     // stepped over once that has run. It has to happen: the old floor sits at exactly
@@ -1488,17 +1728,21 @@ export class Scene3D implements VenueHost {
     // they trade wins from pixel to pixel as the camera moves — the carpet reads as a
     // flickering plane rather than as cloth.
     hideLegacyRoom(this.scene)
+    onBuild?.(0.58)
     this.buildAim()
     this.buildPlacement()
+    onBuild?.(0.72)
 
     // The crowd, the applause and the turn presentation. Added after the freeze on
     // purpose: these are the only venue objects that move, and a frozen matrix is the whole
     // point of the freeze.
     this.venue = buildVenueEvents(this)
+    onBuild?.(0.86)
 
     const pmrem = new THREE.PMREMGenerator(this.renderer)
     this.scene.environment = pmrem.fromEquirectangular(envTexture()).texture
     pmrem.dispose()
+    onBuild?.(1)
 
     // The one and only shadow bake, over the finished static set: cushions, pockets,
     // floor, lamp shade. Every later frame reuses this map at zero shadow cost.

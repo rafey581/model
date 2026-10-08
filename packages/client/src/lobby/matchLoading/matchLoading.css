@@ -1,0 +1,304 @@
+/* Match loading overlay — compositor-friendly motion only (transform / opacity). */
+
+.ml-root {
+  --u: max(min(calc(100dvh / 1080), calc(100vw / 1600)), 0.46px);
+  --ml-amber: var(--amber-400, #ffc24a);
+  --ml-ivory: var(--ivory, #f4f1ea);
+  --ml-mist: var(--mist, #a9b5d1);
+  --ml-navy-overlay: rgba(6, 11, 26, 0.78);
+  --font-display: 'Oxanium', 'Segoe UI', system-ui, sans-serif;
+  --font-label: 'Rajdhani', 'Segoe UI', system-ui, sans-serif;
+  --font-body: 'Inter', 'Segoe UI', system-ui, sans-serif;
+
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  isolation: isolate;
+  overflow: hidden;
+  color: var(--ml-ivory);
+  font-family: var(--font-body);
+  pointer-events: auto;
+  opacity: 1;
+  transition: opacity 400ms ease;
+}
+
+.ml-root.ml-root--fade {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ml-bg {
+  position: absolute;
+  inset: -2%;
+  background:
+    linear-gradient(var(--ml-navy-overlay), var(--ml-navy-overlay)),
+    var(--lobby-bg-image, url('/lobby-pic-blurred.jpg')) center / cover no-repeat;
+  transform: scale(1);
+  animation: ml-drift 40s linear forwards;
+  will-change: transform;
+}
+
+.ml-center {
+  position: relative;
+  z-index: 1;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: calc(var(--u) * 32);
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.ml-mode {
+  margin: 0 0 calc(var(--u) * 18);
+  font-family: var(--font-label);
+  font-size: calc(var(--u) * 18);
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ml-mist);
+}
+
+.ml-rack-wrap {
+  position: relative;
+  width: min(calc(var(--u) * 420), 78vw);
+  aspect-ratio: 1.15 / 1;
+  margin: 0 auto calc(var(--u) * 28);
+}
+
+.ml-rack {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.ml-ball {
+  transform-box: fill-box;
+  transform-origin: center;
+  opacity: 0;
+  transform: scale(0.6);
+  transition:
+    opacity 420ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    transform 420ms cubic-bezier(0.34, 1.45, 0.64, 1);
+}
+
+.ml-ball.ml-ball--on {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.ml-rack-wrap.ml-rack-wrap--ready .ml-rack {
+  filter: drop-shadow(0 0 calc(var(--u) * 10) rgba(255, 194, 74, 0.45));
+  transition: filter 250ms ease;
+}
+
+.ml-cue {
+  position: absolute;
+  left: 4%;
+  bottom: 2%;
+  width: calc(var(--u) * 36);
+  height: calc(var(--u) * 36);
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fffef8 0%, #e8e4d8 42%, #b8b3a4 100%);
+  box-shadow: 0 0 0 calc(var(--u) * 2) rgba(255, 194, 74, 0.15);
+  animation: ml-breathe 3.2s ease-in-out infinite;
+}
+
+.ml-dust {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.ml-speck {
+  position: absolute;
+  width: calc(var(--u) * 2);
+  height: calc(var(--u) * 2);
+  border-radius: 50%;
+  background: rgba(244, 241, 234, 0.22);
+  animation: ml-dust-rise var(--ml-dur, 11s) linear infinite;
+  animation-delay: var(--ml-delay, 0s);
+  opacity: 0;
+}
+
+.ml-title {
+  margin: 0 0 calc(var(--u) * 14);
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(calc(var(--u) * 26), 3.2vw, calc(var(--u) * 40));
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.15;
+}
+
+.ml-title-amber {
+  color: var(--ml-amber);
+}
+
+.ml-status {
+  margin: 0 0 calc(var(--u) * 10);
+  min-height: calc(var(--u) * 22);
+  font-family: var(--font-label);
+  font-size: calc(var(--u) * 16);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ml-mist);
+}
+
+.ml-tip {
+  margin: 0 0 calc(var(--u) * 22);
+  min-height: calc(var(--u) * 40);
+  max-width: min(calc(var(--u) * 520), 88vw);
+  font-family: var(--font-body);
+  font-size: calc(var(--u) * 16);
+  line-height: 1.45;
+  color: rgba(244, 241, 234, 0.85);
+  transition: opacity 300ms ease;
+}
+
+.ml-tip.ml-tip--swap {
+  opacity: 0;
+}
+
+.ml-progress-row {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 14);
+  width: min(calc(var(--u) * 420), 78vw);
+}
+
+.ml-bar {
+  flex: 1;
+  height: calc(var(--u) * 3);
+  border-radius: calc(var(--u) * 3);
+  background: rgba(244, 241, 234, 0.12);
+  overflow: hidden;
+}
+
+.ml-bar-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ml-amber);
+  transform-origin: left center;
+  transform: scaleX(0);
+  will-change: transform;
+}
+
+.ml-pct {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: calc(var(--u) * 18);
+  font-variant-numeric: tabular-nums;
+  min-width: calc(var(--u) * 52);
+  text-align: right;
+  color: var(--ml-ivory);
+}
+
+.ml-ready {
+  margin: calc(var(--u) * 12) 0 0;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: calc(var(--u) * 20);
+  letter-spacing: 0.2em;
+  color: var(--ml-amber);
+  opacity: 0;
+  transform: translateY(calc(var(--u) * 4));
+  transition:
+    opacity 200ms ease,
+    transform 200ms ease;
+}
+
+.ml-root.ml-root--ready .ml-ready {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.ml-longer {
+  margin: calc(var(--u) * 16) 0 0;
+  max-width: min(calc(var(--u) * 480), 88vw);
+  font-size: calc(var(--u) * 14);
+  color: var(--ml-mist);
+  opacity: 0;
+  transition: opacity 400ms ease;
+}
+
+.ml-longer.ml-longer--on {
+  opacity: 1;
+}
+
+@keyframes ml-drift {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.04);
+  }
+}
+
+@keyframes ml-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 calc(var(--u) * 2) rgba(255, 194, 74, 0.12);
+  }
+  50% {
+    box-shadow: 0 0 calc(var(--u) * 14) calc(var(--u) * 3) rgba(255, 194, 74, 0.35);
+  }
+}
+
+@keyframes ml-dust-rise {
+  0% {
+    transform: translateY(0) translateX(0);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.35;
+  }
+  100% {
+    transform: translateY(calc(var(--u) * -180)) translateX(calc(var(--u) * 12));
+    opacity: 0;
+  }
+}
+
+@media (max-width: 900px), (max-aspect-ratio: 3/4) {
+  .ml-rack-wrap {
+    width: min(calc(var(--u) * 340), 82vw);
+  }
+
+  .ml-title {
+    font-size: clamp(calc(var(--u) * 22), 5.5vw, calc(var(--u) * 32));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ml-bg {
+    animation: none;
+  }
+
+  .ml-cue {
+    animation: none;
+  }
+
+  .ml-speck {
+    animation: none;
+    display: none;
+  }
+
+  .ml-ball {
+    transition: opacity 200ms linear;
+    transform: scale(1);
+  }
+
+  .ml-ball.ml-ball--on {
+    transform: scale(1);
+  }
+
+  .ml-tip {
+    transition: none;
+  }
+}
