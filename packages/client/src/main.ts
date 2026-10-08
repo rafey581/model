@@ -58,6 +58,12 @@ const PLACEMENT_CAMERA_SECONDS = PLACEMENT_TRANSITION_SECONDS
 const app = document.querySelector<HTMLDivElement>('#app')!
 const toast = makeToast(document.body)
 
+/** Lobby cash HUD: balance as a dollar amount, no coin/gem metaphor. */
+function formatCash(amount: number | string): string {
+  const n = typeof amount === 'number' ? amount : Number(amount)
+  return `$${Math.max(0, Math.round(Number.isFinite(n) ? n : 0)).toLocaleString('en-US')}`
+}
+
 let token = localStorage.getItem('token') ?? ''
 let currentUser: { id: string; username: string; role: string; status: string } | null = null
 let wallet = { balance: 0, locked: 0 }
@@ -273,16 +279,11 @@ function profileBadgeFrameSvg(): string {
 }
 
 /**
- * The top bar.
- *
- * `home: true` is the home screen's version, and the only difference is what the bar is
- * for. There, the player's identity is the headline — it is what says which account you
- * are about to play on — so it carries the shared avatar and the balance chip steps out.
- * The balance is not lost from the app: it is on the tables screen beside the stake tiers
- * it pays for, which is the only point in this flow at which it changes anything.
+ * Lobby Header HUD: brand + single $ cash balance + slim profile menu.
+ * Match screens keep their own overlay; this bar is for lobby / setup only.
  */
-function header(options: { home?: boolean } = {}): HTMLElement {
-  const head = el('header')
+function header(_options: { home?: boolean } = {}): HTMLElement {
+  const head = el('header', 'lobby-header')
 
   const brand = el('a', 'brand') as HTMLAnchorElement
   brand.href = '#'
@@ -297,21 +298,25 @@ function header(options: { home?: boolean } = {}): HTMLElement {
 
   const right = el('div', 'row header-actions')
   if (currentUser) {
-    // The avatar carries the first letter, so the player is recognisable at a glance
-    // and the two names in a scoreboard are told apart without reading them. It is the
-    // same component the match HUD draws, so the face here is the face at the table.
-    const chip = el('div', 'user-chip')
-    // The avatar itself is the shared component the HUD draws, so it is left exactly as it
-    // is; the frame around it is this screen's. A wrapper rather than a new class on the
-    // avatar, because that class belongs to the match HUD as well and the two frames are
-    // meant to look different.
+    // Single cash counter — no coins, gems, or CR suffix.
+    const walletChip = el('div', 'wallet-chip cash-hud')
+    walletChip.id = 'wallet-chip'
+    walletChip.title = 'Account balance'
+    walletChip.appendChild(el('span', 'wallet-amount', formatCash(wallet.balance)))
+    right.appendChild(walletChip)
+
+    right.appendChild(renderBell())
+
+    // Avatar opens a compact menu for account actions so the HUD stays one balance + face.
+    const menuWrap = el('div', 'profile-menu')
+    const chip = el('button', 'user-chip user-chip-btn') as HTMLButtonElement
+    chip.type = 'button'
+    chip.setAttribute('aria-haspopup', 'menu')
+    chip.setAttribute('aria-expanded', 'false')
+    chip.title = currentUser.username
     const badge = el('span', 'profile-badge')
     badge.innerHTML = profileBadgeFrameSvg()
     badge.appendChild(createAvatarBadge({ name: currentUser.username, isBot: false }))
-    // The socket state rides on the badge's corner now instead of sitting beside it as a
-    // word. It is still the same element the connection update has always written to, with
-    // the same id, the same classes and the same live-region role, so what changed is only
-    // where it is drawn.
     const conn = el('span', connected ? 'chip-ok' : 'chip-bad', connected ? 'online' : 'reconnecting…')
     conn.id = 'conn-chip'
     conn.setAttribute('role', 'status')
@@ -320,39 +325,23 @@ function header(options: { home?: boolean } = {}): HTMLElement {
     const name = el('span', 'user-name')
     name.appendChild(el('strong', undefined, currentUser.username))
     chip.appendChild(name)
-    right.appendChild(chip)
 
-// The balance is its own chip so it is the thing that reads as a number, rather
-    // than a run-on sentence with the username. The home screen drops the chip but not
-    // the balance: a number there would compete with the three things that screen is
-    // for, so it waits until the player is choosing a stake.
-    if (!options.home) {
-      const walletChip = el('div', 'wallet-chip')
-      walletChip.id = 'wallet-chip'
-      walletChip.title = 'Virtual credits — no real money'
-      const coin = el('span', 'wallet-coin')
-      coin.setAttribute('aria-hidden', 'true')
-      coin.textContent = '◈'
-      walletChip.append(coin, el('span', 'wallet-amount', `${wallet.balance} CR`))
-      right.appendChild(walletChip)
-    }
-
-    right.appendChild(renderBell())
+    const dropdown = el('div', 'profile-menu-panel')
+    dropdown.setAttribute('role', 'menu')
+    dropdown.hidden = true
 
     if (currentUser.role === 'ADMIN' || currentUser.role === 'SUPERADMIN') {
-      const adminBtn = el('button', 'ghost', 'Admin') as HTMLButtonElement
+      const adminBtn = el('button', 'profile-menu-item', 'Admin') as HTMLButtonElement
       adminBtn.type = 'button'
+      adminBtn.setAttribute('role', 'menuitem')
       adminBtn.onclick = () => {
-        // A navigation, not a panel toggle. The admin surface authenticates with its
-        // own session and its own second factor, so it cannot be reached by
-        // flipping a flag in the player app - and the player bundle is never left
-        // holding the panel.
         window.location.href = '/admin'
       }
-      right.appendChild(adminBtn)
+      dropdown.appendChild(adminBtn)
     }
-    const logout = el('button', 'ghost header-logout', 'Logout') as HTMLButtonElement
+    const logout = el('button', 'profile-menu-item', 'Logout') as HTMLButtonElement
     logout.type = 'button'
+    logout.setAttribute('role', 'menuitem')
     logout.onclick = () => {
       token = ''
       localStorage.removeItem('token')
@@ -364,7 +353,25 @@ function header(options: { home?: boolean } = {}): HTMLElement {
       leaveGameState()
       render()
     }
-    right.appendChild(logout)
+    dropdown.appendChild(logout)
+
+    chip.onclick = (e) => {
+      e.stopPropagation()
+      const open = dropdown.hidden
+      dropdown.hidden = !open
+      chip.setAttribute('aria-expanded', String(open))
+      if (open) {
+        const onDoc = (): void => {
+          dropdown.hidden = true
+          chip.setAttribute('aria-expanded', 'false')
+          document.removeEventListener('click', onDoc)
+        }
+        Promise.resolve().then(() => document.addEventListener('click', onDoc))
+      }
+    }
+
+    menuWrap.append(chip, dropdown)
+    right.appendChild(menuWrap)
   }
   head.appendChild(right)
   return head
@@ -743,7 +750,7 @@ async function refreshWallet(): Promise<void> {
   // the balance moves as stakes lock and settle, and the header is not re-rendered
   // for every state update, so without this the number on screen goes stale.
   const amount = document.querySelector<HTMLElement>('#wallet-chip .wallet-amount')
-  if (amount) amount.textContent = `${wallet.balance} CR`
+  if (amount) amount.textContent = formatCash(wallet.balance)
 }
 
 async function loadTiers(): Promise<void> {
@@ -1015,7 +1022,7 @@ async function renderTournament(): Promise<void> {
     banner.appendChild(el('div', 'champ-name', champion?.user.username ?? '?'))
     banner.appendChild(el('div', 'meta-line', runnerUp ? `runner-up: ${runnerUp.user.username}` : 'runner-up: —'))
     const mine = data.players.find((p) => p.userId === currentUser?.id)
-    banner.appendChild(el('div', 'meta-line', mine?.status === 'CHAMPION' ? 'This is you — take a bow.' : 'Free tournament · all 8 players started on even credits'))
+    banner.appendChild(el('div', 'meta-line', mine?.status === 'CHAMPION' ? 'This is you — take a bow.' : 'Free tournament · all 8 players started even'))
     box.appendChild(banner)
   }
 
@@ -1115,12 +1122,12 @@ async function finishMatch(winnerSeat: number, reason?: string): Promise<void> {
   const box = card('Match finished')
   box.appendChild(el('div', 'end-winner', `${winnerName} wins`))
   if (activeMatchIsPractice) {
-    box.appendChild(el('div', 'muted', 'Practice session — no credits involved'))
+    box.appendChild(el('div', 'muted', 'Practice session — free play'))
   } else {
     box.appendChild(el('div', 'muted', `Frames: ${framesWon[0]}-${framesWon[1]}`))
     const prize = meta?.resultJson?.prize
     if (typeof prize === 'number' && prize > 0) {
-      box.appendChild(el('div', 'end-prize', `Winner receives ${prize} CR`))
+      box.appendChild(el('div', 'end-prize', `Winner receives ${formatCash(prize)}`))
     } else {
       box.appendChild(el('div', 'muted', 'Settlement pending…'))
     }
@@ -1199,37 +1206,20 @@ function renderHome(): void {
 
   const cards = el('div', 'home-cards')
   for (const spec of HOME_CARDS) {
-    // Two elements, not one. The button is the hit area and never moves: it is a fixed box
-    // that receives the hover and hands it down. The card face inside it is what lifts, so a
-    // pointer resting on the Play button keeps hitting the same pixels for as long as it
-    // rests there - the surface moving out from under a stationary cursor is what used to
-    // make these cards feel like they were dodging the mouse.
+    // Hit box stays fixed; the face lifts. Card chrome is trimmed to emblem + title +
+    // one line + one fact + CTA so the home screen reads as a game lobby, not a dashboard.
     const card = el('button', `home-card home-card--${spec.id}`) as HTMLButtonElement
     card.type = 'button'
 
     const face = el('span', 'home-card-face')
-    // Five flat layers under the words: one carries the scrim, the pattern and the mesh glow
-    // as a single background stack (fewer layers than one element each, and the same paint),
-    // then the grain, then the shine, then the two ambient layers - the radar sweep and the
-    // centre spark. Which of them a card shows is the stylesheet's decision, not this loop's.
-    // None of them takes a pointer event.
     face.appendChild(el('span', 'home-card-skin'))
     face.appendChild(el('span', 'home-card-grain'))
     face.appendChild(el('span', 'home-card-shine'))
     face.appendChild(el('span', 'home-card-sweep'))
     face.appendChild(el('span', 'home-card-spark'))
 
-    const top = el('span', 'home-card-top')
-    top.appendChild(el('span', 'home-card-badge', spec.badge))
-    // The state is one of the two facts, promoted: a claim about right now gets the corner,
-    // and the chip row below the description keeps the claims about the format.
-    top.appendChild(el('span', 'home-card-status', spec.chips[spec.statusIndex] ?? ''))
-    face.appendChild(top)
-
     const emblem = el('span', 'home-card-emblem')
     emblem.innerHTML = spec.emblem
-    // Behind the drawing, not in front of it: the trophy's aura. It goes in first so the
-    // strokes the emblem is made of stay on top of its own light.
     emblem.insertBefore(el('span', 'home-card-emblem-aura'), emblem.firstChild)
     face.appendChild(emblem)
 
@@ -1237,9 +1227,7 @@ function renderHome(): void {
     face.appendChild(el('span', 'home-card-desc', spec.blurb))
 
     const chips = el('span', 'home-card-chips')
-    spec.chips.forEach((chip, index) => {
-      if (index !== spec.statusIndex) chips.appendChild(el('span', 'home-chip', chip))
-    })
+    chips.appendChild(el('span', 'home-chip', spec.chips[spec.statusIndex] ?? ''))
     face.appendChild(chips)
 
     const cta = el('span', 'home-card-cta')
@@ -1272,13 +1260,20 @@ function homeBar(): HTMLElement {
   const bar = el('nav', 'home-bar glass glass-edge')
   bar.setAttribute('aria-label', 'More screens')
   for (const item of HOME_BAR) {
-    const btn = el('button', 'home-bar-item') as HTMLButtonElement
+    const destination = barDestination(item.id)
+    const locked = destination === null
+    const active = destination !== null && destination === activeScreen
+    const btn = el(
+      'button',
+      `home-bar-item${locked ? ' home-bar-item--locked' : ''}${active ? ' home-bar-item--active' : ''}`
+    ) as HTMLButtonElement
     btn.type = 'button'
+    if (locked) btn.setAttribute('aria-disabled', 'true')
+    if (active) btn.setAttribute('aria-current', 'page')
     const icon = el('span', 'home-bar-icon')
     icon.innerHTML = item.icon
     btn.append(icon, el('span', undefined, item.label))
     btn.onclick = () => {
-      const destination = barDestination(item.id)
       if (!destination) {
         toast(comingSoonMessage(item.label))
         return
@@ -1406,8 +1401,8 @@ function renderSettingsScreen(wrap: HTMLElement): void {
       joined.appendChild(el('div', 'meta', new Date(profile.user.createdAt).toLocaleDateString()))
       rows.appendChild(joined)
       const credits = el('div', 'table-row')
-      credits.appendChild(el('div', undefined, 'Credits available'))
-      credits.appendChild(el('div', 'meta', `${profile.user.wallet.available} CR`))
+      credits.appendChild(el('div', undefined, 'Balance'))
+      credits.appendChild(el('div', 'meta', formatCash(profile.user.wallet.available)))
       rows.appendChild(credits)
     })
     .catch((error: Error) => {
@@ -1520,7 +1515,7 @@ function renderPracticeSetup(): void {
       })
   }
   actions.appendChild(play)
-  actions.appendChild(el('div', 'practice-note', 'Practice costs no credits and does not count toward your record.'))
+  actions.appendChild(el('div', 'practice-note', 'Practice is free and does not count toward your record.'))
   panel.appendChild(actions)
 
   page.appendChild(panel)
@@ -1568,7 +1563,7 @@ async function featuredTournamentHero(): Promise<HTMLElement> {
         'p',
         undefined,
         `${featured._count?.players ?? 0}/${featured.size} players signed up · ` +
-          `${fee > 0 ? `${fee} CR entry` : 'free entry'} · ${statusLabel(featured.status)}`
+          `${fee > 0 ? `${formatCash(fee)} entry` : 'free entry'} · ${statusLabel(featured.status)}`
       )
     )
 
@@ -1667,7 +1662,7 @@ function openTableCard(match: LobbyMatch, isMine: boolean): HTMLElement {
   const host = match.players[0]?.user.username ?? 'Unknown'
   c.appendChild(el('div', 'table-name', isMine ? 'Your table' : `${host} · ${match.format}`))
   c.appendChild(el('div', 'table-players', isMine ? 'Waiting for an opponent' : 'Open seat'))
-  c.appendChild(el('div', 'table-score', `${match.stakePerPlayer} CR`))
+  c.appendChild(el('div', 'table-score', formatCash(match.stakePerPlayer)))
 
   if (isMine) {
     const badge = el('span', 'badge', 'waiting')
@@ -1706,12 +1701,12 @@ function createMatchCard(): HTMLElement {
   // new home flow where the number is worth showing: the home screen leads with who you
   // are, and this screen is where credits are about to be committed to a table.
   const balance = el('div', 'stake-wallet')
-  balance.appendChild(el('span', undefined, 'Balance available'))
-  balance.appendChild(el('strong', undefined, `${wallet.balance} CR`))
+  balance.appendChild(el('span', undefined, 'Balance'))
+  balance.appendChild(el('strong', undefined, formatCash(wallet.balance)))
   c.appendChild(balance)
 
   for (const tier of tiers) {
-    const chip = el('button', 'tier-chip', `${tier.label} · ${tier.credits} CR`)
+    const chip = el('button', 'tier-chip', `${tier.label} · ${formatCash(tier.credits)}`)
     chip.dataset.tier = tier.id
     if (tier.id === createTier) chip.classList.add('active')
     chip.onclick = () => {
@@ -1911,7 +1906,7 @@ async function tablesCard(): Promise<HTMLElement> {
       const section = el('div', 'tier-section')
       section.dataset.tier = tier.id
       if (tier.id !== activeTierId) section.classList.add('hidden')
-      section.appendChild(el('div', 'muted', `${tier.usd} USD · ${tier.credits} CR stake per player`))
+      section.appendChild(el('div', 'muted', `${formatCash(tier.credits)} stake per player`))
       if (!matches.length) {
         section.appendChild(el('div', 'muted', 'No tables waiting at this price. Create one above.'))
       } else {
@@ -1921,7 +1916,7 @@ async function tablesCard(): Promise<HTMLElement> {
           const mine = host !== undefined && host.userId === currentUser?.id
           const info = el('div')
           info.appendChild(el('div', undefined, `${mine ? 'You' : host?.user.username ?? '?'} · ${match.format}`))
-          info.appendChild(el('div', 'meta', `${match.stakePerPlayer} CR · waiting 1/2 · ${timeAgo(match.createdAt)}`))
+          info.appendChild(el('div', 'meta', `${formatCash(match.stakePerPlayer)} · waiting 1/2 · ${timeAgo(match.createdAt)}`))
           wait.appendChild(info)
           if (mine) {
             wait.appendChild(el('span', 'badge', 'waiting for opponent'))

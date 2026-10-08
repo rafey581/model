@@ -269,10 +269,10 @@ export function computeAimGuide(
  * The lines are drawn as strips lying on the cloth, so their world width has to
  * change with the lens: a fixed millimetre width is a hairline at the overhead
  * camera and a bar at the cue camera. This is the thickness they are held to
- * instead — a broadcast shot line is about two pixels of pure white, crisp
- * rather than glowing.
+ * instead — a broadcast shot line is about five pixels of solid colour, crisp
+ * rather than glowing or feathered.
  */
-export const AIM_LINE_TARGET_PX = 4
+export const AIM_LINE_TARGET_PX = 5
 
 /** The thinnest a line is ever drawn, in millimetres: below this it aliases. */
 export const AIM_LINE_MIN_MM = 3

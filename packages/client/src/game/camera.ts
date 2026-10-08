@@ -71,14 +71,15 @@ export function aimFovDeg(aspect: number): number {
 }
 
 /** Vertical field of view for the overhead camera, in degrees. */
-export const TOP_DOWN_FOV_DEG = 50
+export const TOP_DOWN_FOV_DEG = 48
 /**
  * Extra room around the table for the overhead camera, as a multiple of the half-extent.
  *
  * Covers the cushions and the pocket jaws, which sit outside the cloth, so that the
  * overhead view is of the whole table and not of the bed with its edges shaved off.
+ * Kept tight so balls read larger in top-down without changing physics scale.
  */
-export const TOP_DOWN_MARGIN = 1.1
+export const TOP_DOWN_MARGIN = 1.03
 /** A floor under the overhead height, so it never drops onto the cloth on a wide canvas. */
 export const TOP_DOWN_MIN_HEIGHT_MM = 1500
 
@@ -171,8 +172,8 @@ export const MAX_FOV_DEG = 75
  * How much of the table the overhead camera has to show: the cloth, the cushions, and
  * the pocket mouths, which all reach past the cushion line.
  */
-export const VISIBLE_HALF_LENGTH = HALF_L + POCKET_RADIUS_CORNER + 60
-export const VISIBLE_HALF_WIDTH = HALF_W + POCKET_RADIUS_CORNER + 60
+export const VISIBLE_HALF_LENGTH = HALF_L + POCKET_RADIUS_CORNER + 45
+export const VISIBLE_HALF_WIDTH = HALF_W + POCKET_RADIUS_CORNER + 45
 
 /**
  * The things the camera can be doing.

@@ -18,6 +18,7 @@ import { buildVenueEvents, type VenueEvents, type VenueHost } from './venueEvent
 import type { OpponentShot } from './opponentCue.js'
 import { ballColor } from './palette.js'
 import {
+  createColouredBallMaterial,
   createCueBallMaterial,
   cueShadowPixels,
   CUE_SHADOW_OFFSET_MM,
@@ -26,6 +27,7 @@ import {
   CUE_SHADOW_TEXTURE_SIZE,
   CUE_SHADOW_Y_MM
 } from './ballVisuals.js'
+import { qualityConfig } from './qualityConfig.js'
 const SHOW_CROWN_MOULDING = false
 // The crowd went with the old arena: the dark bowl stands empty, and an empty seat plan is
 // how the venue says so (venueEvents builds no people when it gets none).
@@ -172,8 +174,8 @@ const ROOM_WALL_COLOR = '#1b4bb0'
 const ROOM_WALL_TOP_COLOR = '#0b1a45'
 /** The floor: dark, so the lit table is the subject of the picture. */
 const ROOM_FLOOR_COLOR = '#9a3340'
-/** The bed's colour: bright, saturated tournament green. */
-const CLOTH_COLOR = '#1a9a2e'
+/** The bed's colour: deep tournament snooker green. */
+const CLOTH_COLOR = '#116834'
 
 /** How much of the cushions' shared normal map is left standing. */
 const CUSHION_NORMAL_STRENGTH = 0.12
@@ -182,53 +184,48 @@ const RAIL_EARLY = { r: 92, g: 45, b: 24 }
 /** The rail wood's dark stripe colour (latewood). */
 const RAIL_LATE = { r: 74, g: 34, b: 20 }
 /** Cushion cloth: a brighter green than the bed so the raised edge reads. */
-const CUSHION_COLOR = 0x1fae4a
+const CUSHION_COLOR = 0x189a42
 /** The cushion nose strip: brighter still, catching the lamp. */
-const NOSE_COLOR = 0x2bc75a
+const NOSE_COLOR = 0x24b852
 
 /*
  * STEP 3 — the balls, their contact with the cloth, and the cue stick.
  */
 /** Ball resin: tight diffuse under the lacquer film. */
-// Renderer/tone mapping
-const TONE_MAPPING_MODE: 'neutral' | 'aces' = 'neutral'
-const TONE_EXPOSURE = 1.1
+// Renderer/tone mapping — ACES for rich filmic contrast; Neutral remains an A/B flag.
+const TONE_MAPPING_MODE: 'neutral' | 'aces' = 'aces'
+const TONE_EXPOSURE = 1.07
 
 // Wood / rails
 const RAIL_WOOD_TINT = '#5a2520'
 const APRON_SIDE_TINT = '#4a1d1a'
 
-// Cushions
-const CUSHION_FACE_COLOR = '#12782a'
-const CUSHION_TOP_COLOR = '#33c44d'
-const CUSHION_NOSE_COLOR = '#3fd05a'
+// Cushions — one step darker so they sit against the deeper bed without glowing.
+const CUSHION_FACE_COLOR = '#0e5e2e'
+const CUSHION_TOP_COLOR = '#1fae4a'
+const CUSHION_NOSE_COLOR = '#2bc75a'
 
-// Cloth / baize
-const CLOTH_COLOR_CENTER = '#20a63a'
-const CLOTH_COLOR_MID = '#1a952f'
-const CLOTH_COLOR_EDGE = '#127a28'
-const CLOTH_ROUGHNESS = 0.96
+// Cloth / baize — Tournament Snooker Green with darker corner falloff.
+const CLOTH_COLOR_CENTER = '#147a3c'
+const CLOTH_COLOR_MID = '#116834'
+const CLOTH_COLOR_EDGE = '#083d1e'
+const CLOTH_ROUGHNESS = 0.9
 const CLOTH_METALNESS = 0
-const CLOTH_SHEEN = 0.1
-const CLOTH_SHEEN_COLOR = '#4fd07a'
-const CLOTH_SHEEN_ROUGHNESS = 0.8
-const CLOTH_NORMAL_STRENGTH = 0.01
-const CLOTH_NOISE_STRENGTH = 0.02 // max 2% luminance
-const CLOTH_NOISE_SCALE_MM = 2 // cells < 2mm
+const CLOTH_SHEEN = 0.42
+const CLOTH_SHEEN_COLOR = '#2a9a55'
+const CLOTH_SHEEN_ROUGHNESS = 0.62
+const CLOTH_NORMAL_STRENGTH = 0.07
+const CLOTH_NOISE_STRENGTH = 0.028
 const CLOTH_MIPMAPS = true
-const CLOTH_ANISO_CAP = 16
 
-const BALL_ROUGHNESS = 0.2
-/** The clearcoat's own roughness - the one crisp highlight a ball is known by. */
-const BALL_CLEARCOAT_ROUGHNESS = 0.1
 /** The contact disc's size, as a multiple of the ball's radius. */
-const BALL_SHADOW_PLANE = 3
+const BALL_SHADOW_PLANE = 2.4
 /** The contact disc's height above the cloth, in millimetres. */
 const BALL_SHADOW_Y = 0.5
 /** How far the contact disc leans off the ball's centre, away from the lamp overhead. */
-const BALL_SHADOW_LEAN_MM = 1.5
+const BALL_SHADOW_LEAN_MM = 2.5
 /** The contact disc's stretch along that lean. */
-const BALL_SHADOW_STRETCH = 1.1
+const BALL_SHADOW_STRETCH = 1.15
 /** The cue's silhouette: a thin tip running out to a thicker butt. */
 const STICK_TIP_R = 5.5
 const STICK_SHAFT_BUTT_R = 13
@@ -266,6 +263,10 @@ const POCKET_RIM_COLOR = '#e9dfc6'
 const POCKET_RIM_WIDTH_MM = 26
 /** How tall the cream cap stands above its own base, in mm. */
 const POCKET_RIM_HEIGHT_MM = 10
+/** Thin brass outer ring: major radius offset from the cream rim's outer edge, in mm. */
+const POCKET_BRASS_RING_INSET_MM = 3
+/** Brass torus tube radius, in mm. */
+const POCKET_BRASS_TUBE_MM = 2.2
 /** The dark jaali hanging inside the pocket cavity. */
 const POCKET_NET_DARK_COLOR = '#14100c'
 /** How far the jaali hangs below the cloth, in mm. */
@@ -338,23 +339,23 @@ const RAIL_WOOD_UV_TILE_MM = 500
  * named in millimetres for that reason: the millimetres are computed.
  */
 /** The ribbons' height above the cloth, in millimetres. */
-const AIM_RIBBON_Y = 0.8
-/** LINE 1 — the shot line, from the cue ball's surface to the ghost ball or the cushion. Thin and precise, the way a snooker broadcast draws the shot. */
+const AIM_RIBBON_Y = 0.5
+/** LINE 1 — cue path: solid white rectangular strip to ghost ball or cushion. */
 const AIM_LINE1_COLOR = 0xffffff
-const AIM_LINE1_OPACITY = 0.85
+const AIM_LINE1_OPACITY = 1.0
 /** The contact ring — hollow, the size of the ball it wraps, nothing inside. */
 const AIM_RING_COLOR = 0xffffff
 const AIM_RING_OPACITY = 0.95
 const AIM_RING_STROKE_MM = 2.5
 const AIM_RING_Y = 1.1
-/** LINE 2 — the object ball's line, away along the line of centres. */
-const AIM_LINE2_COLOR = 0x7dff4a 
+/** LINE 2 — object ball path along the line of centres: neon green. */
+const AIM_LINE2_COLOR = 0x00ff33
 const AIM_LINE2_LENGTH = BALL_RADIUS * 16
-const AIM_LINE2_OPACITY = 0.8
-/** LINE 3 — the cue ball's tangent after the contact, when one is worked out. */
+const AIM_LINE2_OPACITY = 1.0
+/** LINE 3 — cue ball deflection after contact: solid white. */
 const AIM_LINE3_COLOR = 0xffffff
 const AIM_LINE3_LENGTH = BALL_RADIUS * 9
-const AIM_LINE3_OPACITY = 0.5
+const AIM_LINE3_OPACITY = 1.0
 
 function feltTexture(): THREE.CanvasTexture {
   return cachedTexture('felt', () => {
@@ -367,12 +368,12 @@ function feltTexture(): THREE.CanvasTexture {
     canvas.width = size
     canvas.height = size
     const ctx = canvas.getContext('2d')!
-    // Tournament baize, tuned bright and saturated: the broadcast look has the bed
-    // as the colour anchor of the picture, holding its green under the warm lamp
-    // rather than darkening down toward it.
-    const g = ctx.createRadialGradient(size * 0.5, size * 0.2, size * 0.1, size * 0.5, size * 0.5, size * 0.6)
+    // Tournament baize: deep snooker green with a centred spotlight and darker
+    // corners / pocket mouths so the bed reads as lit cloth rather than flat paint.
+    const g = ctx.createRadialGradient(size * 0.5, size * 0.48, size * 0.12, size * 0.5, size * 0.5, size * 0.82)
     g.addColorStop(0, CLOTH_COLOR_CENTER)
     g.addColorStop(0.5, CLOTH_COLOR_MID)
+    g.addColorStop(0.72, '#0e5e2e')
     g.addColorStop(1, CLOTH_COLOR_EDGE)
     ctx.fillStyle = g
     ctx.fillRect(0, 0, size, size)
@@ -383,7 +384,7 @@ function feltTexture(): THREE.CanvasTexture {
       return seed / 0x7fffffff
     }
     ctx.fillStyle = `rgba(255,255,255,${CLOTH_NOISE_STRENGTH * 0.5})`
-    const noiseCount = 2200
+    const noiseCount = 1300
     for (let i = 0; i < noiseCount; i++) {
       const x = rand() * size
       const y = rand() * size
@@ -404,15 +405,26 @@ function feltTexture(): THREE.CanvasTexture {
       }
     }
 
-    // Crossed nap. Cloth is milled in two directions and brushed along one, so under a
-    // raking light it shows faint diagonal weave rather than isotropic speckle. Without
-    // this the bed reads as flat matte paint no matter how the roughness is tuned.
-    // Kept at a few percent so it survives mipmapping without ever becoming a pattern.
+    // Crossed nap. Kept faint and spaced so overhead view does not read as scanlines.
     ctx.save()
     ctx.translate(size / 2, size / 2)
     ctx.rotate(-Math.PI / 5)
     ctx.translate(-size / 2, -size / 2)
-
+    ctx.strokeStyle = 'rgba(255,255,255,0.02)'
+    ctx.lineWidth = 1
+    for (let y = -size; y < size * 2; y += 6) {
+      ctx.beginPath()
+      ctx.moveTo(-size, y)
+      ctx.lineTo(size * 2, y + 8)
+      ctx.stroke()
+    }
+    ctx.strokeStyle = 'rgba(0,0,0,0.016)'
+    for (let y = -size; y < size * 2; y += 9) {
+      ctx.beginPath()
+      ctx.moveTo(-size, y + 1.5)
+      ctx.lineTo(size * 2, y + 9.5)
+      ctx.stroke()
+    }
     ctx.restore()
 
     // Baulk line, the D and the spot marks, baked into the cloth: no line meshes,
@@ -423,14 +435,14 @@ function feltTexture(): THREE.CanvasTexture {
       const v = (tableYmm / TABLE_WIDTH) * size
       ctx.fillStyle = '#e6d9ae'
       ctx.beginPath()
-      ctx.arc(u, v, 3, 0, Math.PI * 2)
+      ctx.arc(u, v, 2.25, 0, Math.PI * 2)
       ctx.fill()
     }
 
     const bx = (BAULK_LINE_X / TABLE_LENGTH) * size
     const mid = size / 2
-    ctx.strokeStyle = '#d8b15c'
-    ctx.lineWidth = 3
+    ctx.strokeStyle = '#e8d090'
+    ctx.lineWidth = 1.85
     ctx.beginPath()
     ctx.moveTo(bx, 0)
     ctx.lineTo(bx, size)
@@ -450,12 +462,12 @@ function feltTexture(): THREE.CanvasTexture {
     ctx.ellipse(bx, mid, (D_RADIUS / TABLE_LENGTH) * size, (D_RADIUS / TABLE_WIDTH) * size, 0, Math.PI * 0.5, Math.PI * 1.5)
     ctx.stroke()
 
-    // mark(BAULK_LINE_X, TABLE_WIDTH / 2 + D_RADIUS * 0.9)
-    // mark(BAULK_LINE_X, TABLE_WIDTH / 2 - D_RADIUS * 0.9)
-    // mark(BAULK_LINE_X, TABLE_WIDTH / 2)
-    // mark(TABLE_LENGTH / 2, TABLE_WIDTH / 2)
-    // mark(TABLE_LENGTH * 0.75, TABLE_WIDTH / 2)
-    // mark(TABLE_LENGTH - 324, TABLE_WIDTH / 2)
+    mark(BAULK_LINE_X, TABLE_WIDTH / 2 + D_RADIUS * 0.9)
+    mark(BAULK_LINE_X, TABLE_WIDTH / 2 - D_RADIUS * 0.9)
+    mark(BAULK_LINE_X, TABLE_WIDTH / 2)
+    mark(TABLE_LENGTH / 2, TABLE_WIDTH / 2)
+    mark(TABLE_LENGTH * 0.75, TABLE_WIDTH / 2)
+    mark(TABLE_LENGTH - 324, TABLE_WIDTH / 2)
 
     const texture = new THREE.CanvasTexture(canvas)
     texture.colorSpace = THREE.SRGBColorSpace
@@ -622,99 +634,23 @@ function stickShadowTexture(): THREE.CanvasTexture {
 }
 
 /**
- * Open-table aim ribbon: feathered across width, solid first 80%,
- * last 20% fading to 0 toward the cushion.
- */
-function aimRibbonTexture(): THREE.CanvasTexture {
-  return cachedTexture('aim-ribbon', () => {
-    const w = 256
-    const h = 64
-    const canvas = document.createElement('canvas')
-    canvas.width = w
-    canvas.height = h
-    const ctx = canvas.getContext('2d')!
-    const img = ctx.createImageData(w, h)
-    const d = img.data
-    for (let y = 0; y < h; y++) {
-      const v = y / (h - 1)
-      const across = Math.min(1, Math.min(v, 1 - v) / 0.35)
-      for (let x = 0; x < w; x++) {
-        const u = x / (w - 1)
-        const along = u < 0.93 ? 1 : 1 - (u - 0.93) / 0.07
-        const a = Math.round(255 * across * along * along)
-        const i = (y * w + x) * 4
-        d[i] = 255
-        d[i + 1] = 255
-        d[i + 2] = 255
-        d[i + 3] = a
-      }
-    }
-    ctx.putImageData(img, 0, 0)
-    return new THREE.CanvasTexture(canvas)
-  })
-}
-
-/**
- * Aim ribbon for ball contact: feathered across width, solid to the contact point.
+ * Solid rectangular aim strip: full opaque white, no edge feather or length fade.
+ * Tint comes from MeshBasicMaterial.color (white cue path / neon object path).
  */
 function aimRibbonSolidTexture(): THREE.CanvasTexture {
   return cachedTexture('aim-ribbon-solid', () => {
-    const w = 256
-    const h = 64
+    const w = 8
+    const h = 8
     const canvas = document.createElement('canvas')
     canvas.width = w
     canvas.height = h
     const ctx = canvas.getContext('2d')!
-    const img = ctx.createImageData(w, h)
-    const d = img.data
-    for (let y = 0; y < h; y++) {
-      const v = y / (h - 1)
-      const across = Math.min(1, Math.min(v, 1 - v) / 0.35)
-      for (let x = 0; x < w; x++) {
-        const a = Math.round(255 * across)
-        const i = (y * w + x) * 4
-        d[i] = 255
-        d[i + 1] = 255
-        d[i + 2] = 255
-        d[i + 3] = a
-      }
-    }
-    ctx.putImageData(img, 0, 0)
-    return new THREE.CanvasTexture(canvas)
-  })
-}
-
-/**
- * Aim ribbon trail: feathered across width, solid for the first 60% and fading
- * out over the last 40%, so the departure lines point rather than trail off from
- * the moment of contact.
- */
-function aimRibbonTrailTexture(): THREE.CanvasTexture {
-  return cachedTexture('aim-ribbon-trail', () => {
-    const w = 256
-    const h = 64
-    const canvas = document.createElement('canvas')
-    canvas.width = w
-    canvas.height = h
-    const ctx = canvas.getContext('2d')!
-    const img = ctx.createImageData(w, h)
-    const d = img.data
-    for (let y = 0; y < h; y++) {
-      const v = y / (h - 1)
-      const across = Math.min(1, Math.min(v, 1 - v) / 0.35)
-      for (let x = 0; x < w; x++) {
-        const u = x / (w - 1)
-        const along = u < 0.15 ? 1 : Math.pow(1 - (u - 0.15) / 0.85, 1.4)
-        const a = Math.round(255 * across * along)
-        const i = (y * w + x) * 4
-        d[i] = 255
-        d[i + 1] = 255
-        d[i + 2] = 255
-        d[i + 3] = a
-      }
-    }
-    ctx.putImageData(img, 0, 0)
-    return new THREE.CanvasTexture(canvas)
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, w, h)
+    const texture = new THREE.CanvasTexture(canvas)
+    texture.magFilter = THREE.NearestFilter
+    texture.minFilter = THREE.NearestFilter
+    return texture
   })
 }
 
@@ -1098,22 +1034,22 @@ function envTexture(): THREE.CanvasTexture {
     grad.addColorStop(1, ROOM_FLOOR_COLOR)
     ctx.fillStyle = grad
     ctx.fillRect(0, 0, w, h)
-    // The overhead lamp as a bright soft-edged band. This is the single most important
-    // element in the map: it is what the clearcoat on the wood and the metalness of the
-    // brass both reflect, and a thin hard-edged line here is what produces the long
-    // specular streak running down a polished rail. Soft edges and a secondary
-    // lower-intensity pass give the highlight some structure rather than one hard line.
-    ctx.fillStyle = 'rgba(255,248,226,0.92)'
-    ctx.fillRect(w * 0.26, h * 0.345, w * 0.48, 9)
-    ctx.fillStyle = 'rgba(255,240,206,0.55)'
-    ctx.fillRect(w * 0.23, h * 0.375, w * 0.54, 5)
-    ctx.fillRect(w * 0.29, h * 0.40, w * 0.42, 3)
-    // Two dimmer fittings further round the room, so the reflection in the brass is not
-    // a single lonely streak. A polished metal part reads as expensive when it has
-    // several highlights to choose between.
-    ctx.fillStyle = 'rgba(255,236,198,0.3)'
-    ctx.fillRect(w * 0.03, h * 0.4, w * 0.13, 4)
-    ctx.fillRect(w * 0.84, h * 0.4, w * 0.13, 4)
+    // Soft studio softboxes: the clearcoat on wood/balls and brass metalness both reflect
+    // these. Soft elliptical lamps read as phenolic highlights; hard rectangles read as CGI.
+    const softbox = (cx: number, cy: number, rw: number, rh: number, a: number): void => {
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(rw, rh))
+      g.addColorStop(0, `rgba(255,248,226,${a})`)
+      g.addColorStop(0.45, `rgba(255,240,206,${a * 0.55})`)
+      g.addColorStop(1, 'rgba(255,240,206,0)')
+      ctx.fillStyle = g
+      ctx.beginPath()
+      ctx.ellipse(cx, cy, rw, rh, 0, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    softbox(w * 0.5, h * 0.36, w * 0.28, 14, 0.95)
+    softbox(w * 0.5, h * 0.4, w * 0.22, 8, 0.45)
+    softbox(w * 0.12, h * 0.42, w * 0.08, 5, 0.35)
+    softbox(w * 0.88, h * 0.42, w * 0.08, 5, 0.35)
     // The warm band where wall meets floor — the room's bounce, and what keeps the
     // underside of the rails from reflecting pure black.
     ctx.fillStyle = 'rgba(150,112,72,0.92)'
@@ -1201,34 +1137,20 @@ export class BallRig {
    * cloth needs to stay planted.
    */
   private readonly cueShadow: boolean
+  private readonly radius: number
+  private readonly prevVisual = new THREE.Vector3()
+  private hasPrevVisual = false
+  private readonly rollAxis = new THREE.Vector3()
 
   constructor(radius: number, color: number, shadowTex: THREE.CanvasTexture, opts: BallRigOptions = {}) {
     this.cueShadow = opts.cue === true
-    // Phenolic resin: a tight diffuse under a clearcoat film. The coat is what
-    // carries the ball's one crisp highlight off the lamp, and the env map's
-    // bright band is what the coat reflects between that highlight and the
-    // horizon. Emissive stays zero: it is only ever set on highlight, and setting
-    // it costs nothing while unlit.
-    //
-    // The cue ball does not share this material: it is the brightest object on
-    // the cloth, and its own lacquer (warm cream, softer clearcoat, a tamed
-    // reflection of the lamp band) is what keeps it from blowing out against the
-    // green it stands on. It gets a fresh instance so the "ball on" emissive can
-    // drive only its surface.
-      this.material = opts.cue
-      ? createCueBallMaterial()
-      : new THREE.MeshPhysicalMaterial({
-          color,
-          roughness: 0.3,
-          metalness: 0.0,
-          clearcoat: 0,
-          clearcoatRoughness: 0.3,
-          specularIntensity: 0.45,
-          emissive: 0x000000,
-          envMapIntensity: 0,
-          ior: 1.5
-        })
-    this.sphere = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 28), this.material)
+    this.radius = radius
+    // Phenolic resin: tight diffuse under a clearcoat film. The coat carries the
+    // crisp lamp highlight; the env map supplies the curved studio reflection.
+    // Cue ball uses its own cream albedo with red spin dots so roll is readable.
+    this.material = opts.cue ? createCueBallMaterial() : createColouredBallMaterial(color)
+    const [segW, segH] = qualityConfig().ballSegments
+    this.sphere = new THREE.Mesh(new THREE.SphereGeometry(radius, segW, segH), this.material)
     // Balls never cast into the scene's one static shadow map: a shadow baked at
     // frame one would sit forever where the ball first stood. Grounding is sold by
     // the soft contact blob under the ball instead, which moves with it and costs
@@ -1252,6 +1174,28 @@ export class BallRig {
     this.blob.position.y = 0.6
     this.blob.renderOrder = 1
     this.group.add(this.blob)
+  }
+
+  /**
+   * Visual-only roll: rotates the sphere from cloth-space translation so spin
+   * dots (and phenolic highlights) track motion. Does not touch physics state.
+   */
+  stepRoll(): void {
+    const p = this.group.position
+    if (!this.hasPrevVisual) {
+      this.prevVisual.copy(p)
+      this.hasPrevVisual = true
+      return
+    }
+    const dx = p.x - this.prevVisual.x
+    const dz = p.z - this.prevVisual.z
+    const dist = Math.hypot(dx, dz)
+    if (dist > 1e-4) {
+      // Axis = up × displacement, so the ball rolls in the direction of travel.
+      this.rollAxis.set(dz, 0, -dx).normalize()
+      this.sphere.rotateOnWorldAxis(this.rollAxis, dist / this.radius)
+    }
+    this.prevVisual.copy(p)
   }
 
   setVisible(visible: boolean): void {
@@ -1289,6 +1233,7 @@ export class BallRig {
     if (reset) {
       this.group.position.set(targetX, BALL_RADIUS, targetZ)
       this.firstSeen = false
+      this.hasPrevVisual = false
     }
     this.target.set(targetX, BALL_RADIUS, targetZ)
     // The contact disc leans and stretches away from the table's centre, where the
@@ -1477,21 +1422,22 @@ export class Scene3D implements VenueHost {
     // pixel. AA is decided once from the device rather than asked for unconditionally:
     // MSAA costs fill rate on every pass, and a weak GPU with a small backing store
     // does better spending it on pixels than on edges.
+    const tier = qualityConfig()
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: (window.devicePixelRatio || 1) < 1.75,
+      antialias: tier.antialias,
       powerPreference: 'high-performance'
     })
     this.renderer.setPixelRatio(1)
     this.renderer.setSize(width, height, false)
     // One query, one clamp, shared by every texture built after this line.
-    MAX_ANISO = Math.min(this.renderer.capabilities.getMaxAnisotropy(), CLOTH_ANISO_CAP)
+    MAX_ANISO = Math.min(this.renderer.capabilities.getMaxAnisotropy(), tier.anisotropy)
     this.renderer.shadowMap.enabled = true
     // PCFSoftShadowMap was deprecated in r186; PCFShadowMap with a radius is the
     // supported soft look, and the map is baked once so the filter costs per frame
     // nothing anyway.
     this.renderer.shadowMap.type = THREE.PCFShadowMap
-    // Everything this light can see is static, so the map is rendered exactly once —
+    // Everything this light can see is static, so the map is rendered exactly once —
     // the flag is raised after the scene is fully built and never touched again.
     this.renderer.shadowMap.autoUpdate = false
     if (TONE_MAPPING_MODE === 'neutral' && (THREE as any).NeutralToneMapping) {
@@ -1672,7 +1618,7 @@ export class Scene3D implements VenueHost {
     // spotlights with 1024² maps — three shadow renders every frame for pools of light
     // that baked textures and contact blobs already supply — which is exactly the
     // overhead a low-end GPU does not have to spend.
-    const lamp = (this.lamp = new THREE.SpotLight(0xffd9a0, 5400000, 0, Math.PI / 4.6, 0.6, 2))
+    const lamp = (this.lamp = new THREE.SpotLight(0xffd9a0, 6350000, 0, Math.PI / 4.8, 0.72, 2))
     lamp.position.set(0, 1750, 0)
     lamp.target.position.set(0, 0, 0)
     lamp.castShadow = true
@@ -1712,7 +1658,7 @@ export class Scene3D implements VenueHost {
     // the wood's figure by flooding the same value into both the lit and unlit sides,
     // which is exactly the "evenly lit, nothing has form" failure. A directional
     // contrast is what makes a bevel read as a bevel.
-    const ambient = new THREE.AmbientLight(0xdfe8ff, 0.45) 
+    const ambient = new THREE.AmbientLight(0xdfe8ff, 0.36) 
     this.scene.add(ambient)
 
     // Hemisphere keeps the room warm from above and dark at the floor, so the underside
@@ -1737,6 +1683,8 @@ export class Scene3D implements VenueHost {
     // — but it rakes across the vertical faces of the apron and the cushion ends, which
     // is where a premium table is actually read. Without it the whole body of the table
     // sits in the lamp's ambient wash and the milled detail has no edge to catch.
+
+    
     // No shadow: this is a shaping light, and a second shadow map is not worth it.
     const kicker = new THREE.DirectionalLight(0xfff0d4, 0.15)
     kicker.position.set(2600, 320, 1900)
@@ -1744,7 +1692,7 @@ export class Scene3D implements VenueHost {
 
     // A tight specular source placed for the highlight it draws down the brass rail,
     // not for the light it contributes. Warm and narrow, aimed at the rail line.
-    const railSpec = new THREE.DirectionalLight(0xfff4e0, 0)  
+    const railSpec = new THREE.DirectionalLight(0xfff4e0, 0.08)
     railSpec.position.set(900, 900, 2400)
     this.scene.add(railSpec)
   }
@@ -1818,21 +1766,22 @@ export class Scene3D implements VenueHost {
       }
       bedGeo.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
     }
-    const cloth = new THREE.Mesh(
-      bedGeo,
-      new THREE.MeshPhysicalMaterial({
-        map: (this.feltTex = feltTexture()),
-        normalMap: feltNormalTexture(),
-        normalScale: new THREE.Vector2(CLOTH_NORMAL_STRENGTH, CLOTH_NORMAL_STRENGTH),
-        color: 0xffffff,
-        roughness: CLOTH_ROUGHNESS,
-        metalness: CLOTH_METALNESS,
-        sheen: CLOTH_SHEEN,
-        sheenColor: new THREE.Color(CLOTH_SHEEN_COLOR),
-        sheenRoughness: CLOTH_SHEEN_ROUGHNESS,
-        envMapIntensity: 0.08
-      })
-    )
+    const clothMat = new THREE.MeshPhysicalMaterial({
+      map: (this.feltTex = feltTexture()),
+      color: 0xffffff,
+      roughness: CLOTH_ROUGHNESS,
+      metalness: CLOTH_METALNESS,
+      sheen: CLOTH_SHEEN,
+      sheenColor: new THREE.Color(CLOTH_SHEEN_COLOR),
+      sheenRoughness: CLOTH_SHEEN_ROUGHNESS,
+      envMapIntensity: 0.12
+    })
+    // Cloth normal is the biggest sampling cost on the bed; low tier drops it.
+    if (qualityConfig().clothNormal) {
+      clothMat.normalMap = feltNormalTexture()
+      clothMat.normalScale = new THREE.Vector2(CLOTH_NORMAL_STRENGTH, CLOTH_NORMAL_STRENGTH)
+    }
+    const cloth = new THREE.Mesh(bedGeo, clothMat)
     cloth.rotation.x = -Math.PI / 2
     // The bed never samples the depth map. A coplanar-ish plane lit from above is
     // the textbook generator of shadow acne: every texel of a 2048² map stretched
@@ -2498,14 +2447,12 @@ const outerL = APRON_OUTER_L
       sheenColor: new THREE.Color(0xa8794a),
       envMapIntensity: 0.8
     })
-    const TRIM_COLOR = '#6b4a22'
-    const SHOW_BRASS_TRIM = false
     const brassLipMat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(TRIM_COLOR),
-      metalness: 0.6,
-      roughness: 0.55,
+      color: 0xd8b878,
+      metalness: 1,
+      roughness: 0.2,
       roughnessMap: brassRoughnessTexture(),
-      envMapIntensity: 0.15
+      envMapIntensity: 1.35
     })
     const pocketGeo = new Map<
       number,
@@ -2523,6 +2470,7 @@ const outerL = APRON_OUTER_L
         jawZ: THREE.BufferGeometry
         jawX: THREE.BufferGeometry
         jawXFar: THREE.BufferGeometry
+        brassRing: THREE.BufferGeometry
       }
     >()
     const pocketHoleMat = new THREE.MeshBasicMaterial({
@@ -2657,7 +2605,14 @@ const outerL = APRON_OUTER_L
         // physics radius, so the nose rolls over the lip without narrowing the drawn mouth.
         jawZ: new THREE.LatheGeometry(jawProfile(radius), 14, jawPhi(0), jawArc()),
         jawX: new THREE.LatheGeometry(jawProfile(radius), 14, jawPhi(90), jawArc()),
-        jawXFar: new THREE.LatheGeometry(jawProfile(radius), 14, jawPhi(270), jawArc())
+        jawXFar: new THREE.LatheGeometry(jawProfile(radius), 14, jawPhi(270), jawArc()),
+        // Thin polished brass ring sitting on the cream rim's outer edge.
+        brassRing: new THREE.TorusGeometry(
+          radius + POCKET_RIM_WIDTH_MM - POCKET_BRASS_RING_INSET_MM,
+          POCKET_BRASS_TUBE_MM,
+          10,
+          36
+        )
       }
       pocketGeo.set(radius, made)
       return made
@@ -2734,6 +2689,18 @@ const outerL = APRON_OUTER_L
         netDisc.rotation.x = -Math.PI / 2
         netDisc.position.set(x, -POCKET_NET_DEPTH_MM, z)
         this.scene.add(netDisc)
+
+        // Cream rim + thin brass outer ring: premium arena pocket trim without replacing
+        // the ivory cap. Rim sits on cushion height; brass hugs the outer edge.
+        const rim = new THREE.Mesh(geo.rim, pocketRimMat)
+        rim.name = 'pocket-rim'
+        rim.position.set(x, CUSHION_H - POCKET_RIM_HEIGHT_MM, z)
+        this.scene.add(rim)
+        const brassRing = new THREE.Mesh(geo.brassRing, brassLipMat)
+        brassRing.name = 'pocket-brass-ring'
+        brassRing.rotation.x = -Math.PI / 2
+        brassRing.position.set(x, CUSHION_H - 1.5, z)
+        this.scene.add(brassRing)
 
         // The green jaws, one per cushion that meets this pocket. They are lathes centred on
         // the pocket itself, so they are automatically concentric with the bowl, and which
@@ -3016,17 +2983,13 @@ const outerL = APRON_OUTER_L
   }
 
   private buildAim(): void {
-    // The aim guide is three thin ribbons and one hollow ring, in the broadcast
-    // style: no dashes, no arrowheads, no dots, no glow — the lines themselves
-    // carry the whole story. All of them are strips of cloth-level light sharing
-    // one feathered, far-fading texture, re-pointed every frame.
-    const ribbonTexSolid = aimRibbonSolidTexture()
-    const ribbonTexFade = aimRibbonTexture()
-    const ribbonTexTrail = aimRibbonTrailTexture()
-    this.aimRibbon1 = this.buildRibbon(ribbonTexSolid, AIM_LINE1_COLOR, AIM_LINE1_OPACITY, AIM_RIBBON_Y)
-    this.aimRibbon1Open = this.buildRibbon(ribbonTexFade, AIM_LINE1_COLOR, AIM_LINE1_OPACITY, AIM_RIBBON_Y)
-    this.aimRibbon2 = this.buildRibbon(ribbonTexTrail, AIM_LINE2_COLOR, AIM_LINE2_OPACITY, AIM_RIBBON_Y + 0.1)
-    this.aimRibbon3 = this.buildRibbon(ribbonTexTrail, AIM_LINE3_COLOR, AIM_LINE3_OPACITY, AIM_RIBBON_Y + 0.2)
+    // The aim guide is three solid rectangular strips and one hollow ring:
+    // white cue path + deflection, neon object path — no feathers or length fades.
+    const ribbonTex = aimRibbonSolidTexture()
+    this.aimRibbon1 = this.buildRibbon(ribbonTex, AIM_LINE1_COLOR, AIM_LINE1_OPACITY, AIM_RIBBON_Y)
+    this.aimRibbon1Open = this.buildRibbon(ribbonTex, AIM_LINE1_COLOR, AIM_LINE1_OPACITY, AIM_RIBBON_Y)
+    this.aimRibbon2 = this.buildRibbon(ribbonTex, AIM_LINE2_COLOR, AIM_LINE2_OPACITY, AIM_RIBBON_Y + 0.1)
+    this.aimRibbon3 = this.buildRibbon(ribbonTex, AIM_LINE3_COLOR, AIM_LINE3_OPACITY, AIM_RIBBON_Y + 0.2)
 
     // The contact ring: a hollow circle the size of the ball it wraps, with
     // nothing inside it, at the cushion end when aiming at open table.
@@ -3672,7 +3635,7 @@ const outerL = APRON_OUTER_L
           tableZ(first.from.y + ty * BALL_RADIUS),
           Math.atan2(ty, tx),
           AIM_LINE3_LENGTH,
-          0.7
+          1
         )
         return
       }
@@ -3945,14 +3908,20 @@ const outerL = APRON_OUTER_L
     // `dt` rather than on their own.
     this.presentationClock += dt
     if (this.presentationLeft > 0) this.presentationLeft = Math.max(0, this.presentationLeft - dt)
-    this.venue?.step(dt)
+    // `immediate` is true while a shot replay is on screen, which is the beat the venue
+    // uses to flush a turn announcement it held behind the player's own shot.
+    this.venue?.step(dt, this.immediate)
     this.drainPresentation()
     if (dt > 0) {
       // A streamed shot hands over positions that are already sampled from the
       // simulation, so they are applied as-is instead of being smoothed again.
       const k = this.immediate ? 1 : 1 - Math.exp(-dt * 14)
       for (const rig of this.balls.values()) {
-        if (rig.group.visible && !rig.sinking && !rig.rising) rig.group.position.lerp(rig.target, k)
+        if (rig.group.visible && !rig.sinking && !rig.rising) {
+          rig.group.position.lerp(rig.target, k)
+          // Visual roll from cloth translation (spin dots / phenolic highlights track motion).
+          rig.stepRoll()
+        }
       }
       for (const rig of this.balls.values()) {
         if (rig.rising) {

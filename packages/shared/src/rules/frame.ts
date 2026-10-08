@@ -204,6 +204,7 @@ export function applyCuePlacement(frame: FrameState, cuePos: { x: number; y: num
   cue.pos.y = pos.y
   cue.vel = { x: 0, y: 0 }
   cue.spin = { x: 0, y: 0 }
+  cue.angularVel = 0
   frame.cueInHand = false
   // The D restriction belongs to the break-off alone, and it is spent either way: a ball
   // that has been placed at the break and potted again is a mid-frame in-off, and real
@@ -257,6 +258,7 @@ function placeCueIfInHand(frame: FrameState, shot: { cuePos?: { x: number; y: nu
   cue.pos.y = pos.y
   cue.vel = { x: 0, y: 0 }
   cue.spin = { x: 0, y: 0 }
+  cue.angularVel = 0
 }
 
 /**
@@ -409,6 +411,7 @@ export function frameFromSnapshot(snapshot: FrameSnapshot): FrameState {
       pos: vec(b.x, b.y),
       vel: vec(0, 0),
       spin: vec(0, 0),
+      angularVel: 0,
       potted: b.potted
     }
   })

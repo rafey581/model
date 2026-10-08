@@ -159,10 +159,9 @@ export interface HomeCardSpec {
   /**
    * Which of `chips` is the card's *state* rather than one of its attributes.
    *
-   * "No credits" and "8 players" are claims about right now; "Knockout" is a claim about the
+   * "Free play" and "8 players" are claims about right now; "Knockout" is a claim about the
    * format. Printing one of them twice on the same card is the fastest way to make a design
-   * look unfinished, so the state gets its own chip at the top right and the chip row below
-   * the description carries whatever facts are left.
+   * look unfinished, so the state chip is the one fact shown on the card face.
    */
   statusIndex: 0 | 1
   /** Two facts about the mode, taken from what the app already knows. Never a price or a prize. */
@@ -186,7 +185,7 @@ export const HOME_CARDS: readonly HomeCardSpec[] = [
     badge: 'Training',
     emblem: EMBLEMS.practice,
     statusIndex: 1,
-    chips: ['Easy / Medium / Hard', 'No credits']
+    chips: ['Easy / Medium / Hard', 'Free play']
   },
   {
     id: 'multiplayer',
@@ -196,7 +195,7 @@ export const HOME_CARDS: readonly HomeCardSpec[] = [
     badge: 'Online',
     emblem: EMBLEMS.multiplayer,
     statusIndex: 0,
-    chips: ['Real players', 'Entry by price']
+    chips: ['Real players', 'Stake tables']
   },
   {
     id: 'tournament',
@@ -206,7 +205,7 @@ export const HOME_CARDS: readonly HomeCardSpec[] = [
     badge: 'Knockout',
     emblem: EMBLEMS.tournament,
     statusIndex: 0,
-    chips: ['8 players', 'Knockout']
+    chips: ['8 players', 'Single elim']
   }
 ]
 

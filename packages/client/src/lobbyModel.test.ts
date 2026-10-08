@@ -56,7 +56,7 @@ describe('the home screen cards', () => {
       expect(card.chips[card.statusIndex]).toBeTruthy()
     }
     expect(HOME_CARDS.map((c) => c.badge)).toEqual(['Training', 'Online', 'Knockout'])
-    expect(HOME_CARDS.map((c) => c.chips[c.statusIndex])).toEqual(['No credits', 'Real players', '8 players'])
+    expect(HOME_CARDS.map((c) => c.chips[c.statusIndex])).toEqual(['Free play', 'Real players', '8 players'])
   })
 
   it('states two facts per card, and no price or prize among them', () => {

@@ -57,19 +57,25 @@
   --glass-fill: linear-gradient(160deg, rgba(13, 20, 27, 0.62), rgba(9, 13, 18, 0.78));
   --glass-border: rgba(255, 255, 255, 0.09);
   --glass-border-strong: rgba(255, 255, 255, 0.16);
-  --glass-blur: 12px;
   --glass-saturate: 1.25;
   --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.07);
   /* The fill a raised pane inside a pane gets: the same family, one step more solid. */
   --glass-fill-raised: rgba(255, 255, 255, 0.06);
   --glass-fill-raised-on: rgba(255, 255, 255, 0.12);
 
+  /* The quality blur budget: cards, toolbars and light chrome, and the larger panels.
+     High keeps a lighter blur than Phase H did (6px where it was 12), medium halves it
+     again, low has none — the low tier's "none" is enforced by the blanket rule at the
+     end of this file, so a site that forgets to use the token still pays nothing. */
+  --blur-card: 6px;
+  --blur-panel: 14px;
+
   /* Background art slots.
      These are the only places a real photograph or illustration is expected to arrive.
      Each is a single variable, so swapping the art is one line and needs no code change.
      `public/` is served at the site root by Vite, so the file is addressed from here. */
-  --img-home-bg: url('/lobby-pic.jpeg');
-  --img-practice-bg: url('/lobby-pic.jpeg');
+  --img-home-bg: url('/lobby-pic-blurred.jpg');
+  --img-practice-bg: url('/lobby-pic-blurred.jpg');
 
   /* The tint over the venue photograph.
      A green-teal wash rather than a neutral black one: the table is green, the gold
@@ -144,9 +150,11 @@ body {
  *
  * Fixed to the viewport rather than attached to a screen, so it covers the whole window at
  * every width instead of filling only the centred column and leaving bars either side.
- * `scale(1.05)` is what the blur needs: `filter` samples from the edges of the element,
- * so without it the blur pulls the border pixels inwards and leaves a soft unfocused
- * frame around the picture.
+ *
+ * The softness is baked into `lobby-pic-blurred.jpg` — a 1280px copy pre-blurred to match
+ * the CSS `blur(3px)` this layer used to run, at a ninth of the bytes — so the browser
+ * never runs a full-screen filter pass for a look that never changes. `scale(1.05)` is
+ * kept from that era: it is the framing this picture has always had, filter or not.
  *
  * The gradient is listed first, so it paints over the photograph, and it is darkest at
  * the top and bottom where the header and the bottom bar sit.
@@ -180,7 +188,6 @@ body.practice-mode::before {
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  filter: blur(3px);
   transform: scale(1.05);
 }
 
@@ -381,8 +388,8 @@ header {
   top: 0;
   z-index: 20;
   background: color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(var(--blur-card));
+  -webkit-backdrop-filter: blur(var(--blur-card));
   margin-inline: -16px;
   padding-inline: 16px;
 }
@@ -467,21 +474,90 @@ header {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
-  background: var(--panel);
-  border: 1px solid rgba(201, 168, 76, 0.25);
-  border-radius: 999px;
+  padding: 6px 14px;
+  background: rgba(8, 20, 14, 0.55);
+  border: 1px solid rgba(201, 168, 76, 0.35);
+  border-radius: 10px;
   font-family: var(--font-score);
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
   color: var(--gold-light);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  letter-spacing: 0.02em;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.wallet-chip.cash-hud .wallet-amount {
+  color: var(--gold-light);
 }
 
 .wallet-coin {
-  color: var(--gold);
+  display: none;
+}
+
+.profile-menu {
+  position: relative;
+}
+
+button.user-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.user-chip-btn::after {
+  display: none;
+}
+
+.profile-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  min-width: 140px;
+  padding: 6px;
+  border-radius: 12px;
+  background: rgba(10, 16, 14, 0.92);
+  border: 1px solid var(--glass-border-strong);
+  box-shadow: var(--shadow-elevated);
+  backdrop-filter: blur(var(--blur-card));
+  -webkit-backdrop-filter: blur(var(--blur-card));
+}
+
+.profile-menu-item {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
   font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.profile-menu-item::after {
+  display: none;
+}
+
+.profile-menu-item:hover,
+.profile-menu-item:focus-visible {
+  background: var(--glass-fill-raised-on);
+  color: var(--gold-light);
 }
 
 .card {
@@ -490,7 +566,7 @@ header {
   border-radius: var(--radius);
   padding: 20px;
   margin-bottom: 16px;
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(var(--blur-card));
   box-shadow: var(--shadow-card);
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
@@ -968,8 +1044,8 @@ th {
   background: var(--glass-fill);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg);
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--blur-card)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--blur-card)) saturate(var(--glass-saturate));
   box-shadow: var(--glass-shadow);
 }
 
@@ -1050,8 +1126,8 @@ th {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(14px) saturate(130%);
-  -webkit-backdrop-filter: blur(14px) saturate(130%);
+  backdrop-filter: blur(var(--blur-panel)) saturate(130%);
+  -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(130%);
   box-shadow:
     0 4px 10px rgba(0, 0, 0, 0.25),
     0 12px 28px rgba(0, 0, 0, 0.3);
@@ -1514,8 +1590,8 @@ th {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(14px) saturate(130%);
-  -webkit-backdrop-filter: blur(14px) saturate(130%);
+  backdrop-filter: blur(var(--blur-panel)) saturate(130%);
+  -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(130%);
   box-shadow:
     0 4px 10px rgba(0, 0, 0, 0.25),
     0 12px 28px rgba(0, 0, 0, 0.3);
@@ -1549,8 +1625,8 @@ th {
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 14px;
-  backdrop-filter: blur(14px) saturate(130%);
-  -webkit-backdrop-filter: blur(14px) saturate(130%);
+  backdrop-filter: blur(var(--blur-panel)) saturate(130%);
+  -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(130%);
   box-shadow:
     0 4px 10px rgba(0, 0, 0, 0.25),
     0 12px 28px rgba(0, 0, 0, 0.3);
@@ -1572,8 +1648,8 @@ th {
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 999px;
-  backdrop-filter: blur(14px) saturate(130%);
-  -webkit-backdrop-filter: blur(14px) saturate(130%);
+  backdrop-filter: blur(var(--blur-panel)) saturate(130%);
+  -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(130%);
   box-shadow:
     0 4px 10px rgba(0, 0, 0, 0.25),
     0 12px 28px rgba(0, 0, 0, 0.3);
@@ -1880,8 +1956,8 @@ th {
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.14);
-    backdrop-filter: blur(14px) saturate(130%);
-    -webkit-backdrop-filter: blur(14px) saturate(130%);
+    backdrop-filter: blur(var(--blur-panel)) saturate(130%);
+    -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(130%);
     box-shadow:
       0 4px 10px rgba(0, 0, 0, 0.25),
       0 12px 28px rgba(0, 0, 0, 0.3);
@@ -2018,8 +2094,8 @@ th {
      on. */
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(14px) saturate(130%);
-  -webkit-backdrop-filter: blur(14px) saturate(130%);
+  backdrop-filter: blur(var(--blur-panel)) saturate(130%);
+  -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(130%);
   box-shadow:
     0 4px 10px rgba(0, 0, 0, 0.25),
     0 12px 28px rgba(0, 0, 0, 0.3);
@@ -2167,8 +2243,8 @@ th {
      the cloth with the same weight as the capsule sits above it. */
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(14px) saturate(130%);
-  -webkit-backdrop-filter: blur(14px) saturate(130%);
+  backdrop-filter: blur(var(--blur-panel)) saturate(130%);
+  -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(130%);
   box-shadow:
     inset 0 2px 6px rgba(0, 0, 0, 0.3),
     0 4px 10px rgba(0, 0, 0, 0.25),
@@ -2266,8 +2342,8 @@ th {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.04) 100%);
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 999px;
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(var(--blur-card));
+  backdrop-filter: blur(var(--blur-card));
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
   cursor: pointer;
   color: #ffd98a;
@@ -3374,7 +3450,7 @@ button.mini {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 20px;
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(var(--blur-card));
   box-shadow: var(--shadow-card);
   transition: all 0.2s ease;
   cursor: pointer;
@@ -3452,7 +3528,7 @@ button.mini {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 16px;
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(var(--blur-card));
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -3501,7 +3577,7 @@ button.mini {
   border-radius: var(--radius);
   padding: 16px;
   text-align: center;
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(var(--blur-card));
 }
 
 .stat-value {
@@ -3963,8 +4039,8 @@ button.mini {
   color: var(--gold-light);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.04) 100%);
   border: 1px solid rgba(255, 201, 76, 0.38);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(var(--blur-card));
+  backdrop-filter: blur(var(--blur-card));
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
 
@@ -4249,8 +4325,8 @@ button.home-card::after {
   isolation: isolate;
 
   background: linear-gradient(160deg, rgba(255, 255, 255, 0.12) 0%, rgba(0, 0, 0, 0.3) 100%);
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(var(--blur-panel)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(140%);
   /* Four shadows doing four jobs, tightest first: the card's own edge against whatever is
      behind it, then the mass of it, then the room it is standing in, then the theme's own
      colour thrown back off the surface. The tinted one is what keeps a gold card from
@@ -4602,14 +4678,7 @@ button.home-card::before {
  * screen with a colour on it.
  */
 .home-card-top {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 22px;
-  pointer-events: none;
+  display: none;
 }
 
 .home-card-badge,
@@ -4634,7 +4703,7 @@ button.home-card::before {
 }
 
 /* The state is a fact, so it is set in sentence case at a readable size rather than as a
-   shout: "No credits" and "8 players" are not labels, they are answers. */
+   shout: "Free play" and "8 players" are not labels, they are answers. */
 .home-card-status {
   border: 1px solid rgba(255, 255, 255, 0.16);
   background: rgba(6, 16, 24, 0.5);
@@ -4847,8 +4916,8 @@ button.home-card:active .home-card-face {
 
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  backdrop-filter: blur(var(--blur-panel)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(140%);
   box-shadow:
     0 8px 24px rgba(0, 0, 0, 0.28),
     inset 0 1px 0 rgba(255, 255, 255, 0.12);
@@ -4887,6 +4956,24 @@ button.home-card:active .home-card-face {
   border-color: var(--glass-border);
   color: var(--text);
   transform: translateY(-1px);
+}
+
+.home-bar-item--active {
+  background: var(--glass-fill-raised-on);
+  border-color: rgba(201, 168, 76, 0.35);
+  color: var(--gold-light);
+}
+
+.home-bar-item--locked {
+  opacity: 0.45;
+}
+
+.home-bar-item--locked:hover,
+.home-bar-item--locked:active {
+  transform: none;
+  color: var(--muted);
+  border-color: transparent;
+  background: transparent;
 }
 
 .home-bar-icon {
@@ -4928,12 +5015,7 @@ button.home-card:active .home-card-face {
 }
 
 /**
- * The stake-tier wallet readout.
- *
- * The balance has a job on this screen and only this one: it is what a player checks
- * before committing credits to a table, so it sits beside the tier chips it pays for
- * rather than in the home screen's top bar, where it would be a number competing with the
- * three things the screen is actually for.
+ * Stake-tier balance echo — mirrors the header cash HUD beside the tiers.
  */
 .stake-wallet {
   display: flex;
@@ -5276,4 +5358,117 @@ button.difficulty[aria-checked='true'] {
   button.home-card .home-card-emblem-aura {
     animation: none;
   }
+}
+
+/* =============================================================================
+ * Quality tier budget (see public/quality-boot.js and game/qualityConfig.ts)
+ * ========================================================================== */
+
+/**
+ * The blur tokens, per tier: high's 6/14, medium's 3/8, low's nothing. The high values
+ * live in the main :root block so an untagged page falls back to them.
+ */
+html[data-quality='medium'] {
+  --blur-card: 3px;
+  --blur-panel: 8px;
+}
+
+html[data-quality='low'] {
+  --blur-card: 0px;
+  --blur-panel: 0px;
+}
+
+/**
+ * The blur budget's enforcement half.
+ *
+ * The tokens carry high's and medium's values; the low tier skips the compositing
+ * entirely — backdrop-filter with a zero radius still allocates a backdrop root and a
+ * pass per element, and "no blur" has to mean no pass. The auth card is excluded: the
+ * login screens are out of scope for this pass and keep their look on every tier.
+ */
+html[data-quality='low'] *:not(.auth-card) {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/**
+ * The HUD's glass, off on every tier except behind the score.
+ *
+ * The HUD sits directly over the moving table: a backdrop pass per tool button blurs a
+ * picture that is changing underneath it anyway — the grey-soup problem the .hud-glass
+ * comment warns about, paid for on every frame. The score capsule is the one surface
+ * that keeps its glass, and only on high; on medium and low it reads as a plain pill.
+ */
+.hud-glass,
+.hud-inhand,
+.hud-tools--right.hud-more-open,
+.spin-dial,
+.power-rail-track {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html:not([data-quality='low']):not([data-quality='medium']) .hud-capsule.hud-glass {
+  backdrop-filter: blur(var(--blur-panel)) saturate(130%);
+  -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(130%);
+}
+
+/**
+ * Decorative loops, off on low.
+ *
+ * The card shine, the practice radar sweep, the multiplayer spark, the tournament
+ * aura's breath and the home background's two slow layers are all ambience: nothing
+ * reports state and nothing is missed when they do not run. The functional animations
+ * — the urgent shot timer's pulse and the loading skeleton's sweep — are deliberately
+ * not in this list; they stay on every tier.
+ */
+html[data-quality='low'] .home-card-shine,
+html[data-quality='low'] .home-card-sweep,
+html[data-quality='low'] .home-card-spark,
+html[data-quality='low'] .home-card-emblem-aura,
+html[data-quality='low'] body.home-mode::after,
+html[data-quality='low'] body.practice-mode::after {
+  animation: none;
+}
+
+/**
+ * The tab is hidden: stop everything that moves.
+ *
+ * Set and cleared by public/quality-boot.js on visibilitychange. Play state rather than
+ * duration, so a paused card resumes mid-glow instead of snapping to a new phase — and
+ * one rule covers every animation the page owns, whatever tier it is on.
+ */
+html[data-hidden] *,
+html[data-hidden] *::before,
+html[data-hidden] *::after {
+  animation-play-state: paused !important;
+}
+
+/**
+ * Layout containment on the discrete tiles.
+ *
+ * `layout style` and nothing more: paint containment would clip the cards' shadows and
+ * glows, and there is no reason to pay for that. What containment buys is isolation —
+ * each tile's layout is resolved without consulting its neighbours, which is what makes
+ * the next rule's deferred rendering safe.
+ */
+.lobby-card,
+.live-table-card,
+.stat-tile,
+.card {
+  contain: layout style;
+}
+
+/**
+ * The lists that can be long render only what is near the viewport.
+ *
+ * `content-visibility: auto` skips layout and paint for offscreen cards; the `auto`
+ * intrinsic size remembers each card's real height once it has been on screen, so the
+ * scrollbar does not hunt while it is guessing. Above-the-fold cards are never skipped,
+ * so first paint is untouched.
+ */
+.lobby-grid > .lobby-card,
+.grid > .card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
 }

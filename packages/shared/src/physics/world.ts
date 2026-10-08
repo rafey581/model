@@ -6,10 +6,14 @@ import {
   CUSHION_RESTITUTION_LONG,
   CUSHION_RESTITUTION_SHORT,
   CUSHION_TANGENTIAL_DAMP,
+  CUSHION_SIDESPIN_KICK,
   ROLL_FRICTION,
   SLIDE_FRICTION,
   SLIDE_SPEED_THRESHOLD,
+  SLIDE_ROLL_CATCHUP,
   SPIN_FRICTION,
+  SIDE_SPIN_FRICTION,
+  SPIN_TRANSFER,
   MIN_SPEED,
   MAX_SIM_TICKS,
   TICK_DT,
@@ -260,28 +264,37 @@ function integrate(ball: BallState, dt: number): void {
     // The deceleration is applied along the direction of travel (a fixed slice
     // of speed per second, whichever way the ball is heading), so the stop is a
     // smooth exponential run-out rather than a linear drop to a cliff edge.
-    const deceleration = speed > SLIDE_SPEED_THRESHOLD ? SLIDE_FRICTION : ROLL_FRICTION
+    const sliding = speed > SLIDE_SPEED_THRESHOLD
+    const deceleration = sliding ? SLIDE_FRICTION : ROLL_FRICTION
     const nextSpeed = speed - deceleration * dt
     if (nextSpeed <= MIN_SPEED) {
       ball.vel.x = 0
       ball.vel.y = 0
+      ball.angularVel = 0
     } else {
       const f = nextSpeed / speed
       ball.vel.x = vx * f
       ball.vel.y = vy * f
+      // Natural roll: ω → v/R. Catch up while sliding; lock once rolling.
+      const natural = nextSpeed / BALL_RADIUS
+      if (sliding) {
+        const t = Math.min(1, SLIDE_ROLL_CATCHUP * dt)
+        ball.angularVel += (natural - ball.angularVel) * t
+      } else {
+        ball.angularVel = natural
+      }
     }
+  } else {
+    ball.angularVel = 0
   }
   const sx = ball.spin.x
   const sy = ball.spin.y
   if (sx !== 0 || sy !== 0) {
-    // Spin bleeds off proportionally, not linearly. A linear ramp to zero means
-    // a shot that takes longer than (spin / SPIN_FRICTION) to reach its target
-    // cancels the spin outright, which leaves the bottom of the spin control
-    // range doing nothing at all. Proportional decay keeps the effect in
-    // proportion to the spin applied at every shot distance.
-    const retain = Math.max(0, 1 - SPIN_FRICTION * dt)
-    ball.spin.x = sx * retain
-    ball.spin.y = sy * retain
+    // Sidespin and topspin/backspin decay at different rates on cloth.
+    const sideRetain = Math.max(0, 1 - SIDE_SPIN_FRICTION * dt)
+    const vertRetain = Math.max(0, 1 - SPIN_FRICTION * dt)
+    ball.spin.x = sx * sideRetain
+    ball.spin.y = sy * vertRetain
   }
   ball.pos.x += ball.vel.x * dt
   ball.pos.y += ball.vel.y * dt
@@ -293,22 +306,28 @@ function reflectOffCushions(ball: BallState, events: SimEvent[], tick: number): 
   const top = BALL_RADIUS
   const bottom = TABLE_WIDTH - BALL_RADIUS
   const damping = cushionDamping(ball)
+  const side = clamp(ball.spin.x, -1, 1)
 
   if (ball.pos.y < top && ball.vel.y < 0) {
     ball.vel = reflectCushionY(ball.vel, CUSHION_RESTITUTION_SHORT * damping)
+    // Light sidespin influence along the rail (keep reflect helpers unchanged).
+    ball.vel.x += side * Math.abs(ball.vel.y) * CUSHION_SIDESPIN_KICK
     ball.pos.y = top
     events.push({ type: 'CUSHION', tick, ballId: ball.id })
   } else if (ball.pos.y > bottom && ball.vel.y > 0) {
     ball.vel = reflectCushionY(ball.vel, CUSHION_RESTITUTION_SHORT * damping)
+    ball.vel.x -= side * Math.abs(ball.vel.y) * CUSHION_SIDESPIN_KICK
     ball.pos.y = bottom
     events.push({ type: 'CUSHION', tick, ballId: ball.id })
   }
   if (ball.pos.x < left && ball.vel.x < 0) {
     ball.vel = reflectCushionX(ball.vel, CUSHION_RESTITUTION_LONG * damping)
+    ball.vel.y -= side * Math.abs(ball.vel.x) * CUSHION_SIDESPIN_KICK
     ball.pos.x = left
     events.push({ type: 'CUSHION', tick, ballId: ball.id })
   } else if (ball.pos.x > right && ball.vel.x > 0) {
     ball.vel = reflectCushionX(ball.vel, CUSHION_RESTITUTION_LONG * damping)
+    ball.vel.y += side * Math.abs(ball.vel.x) * CUSHION_SIDESPIN_KICK
     ball.pos.x = right
     events.push({ type: 'CUSHION', tick, ballId: ball.id })
   }
@@ -330,6 +349,7 @@ function checkPockets(ball: BallState, pockets: Pocket[], events: SimEvent[], ti
       ball.vel.y = 0
       ball.spin.x = 0
       ball.spin.y = 0
+      ball.angularVel = 0
       events.push({
         type: ball.isCue ? 'CUE_POTTED' : 'POTTED',
         tick,
@@ -364,6 +384,15 @@ function resolveCollisionPair(a: BallState, b: BallState): boolean {
   a.vel.y -= iy
   b.vel.x += ix
   b.vel.y += iy
+  // Sidespin + angularVel transfer only — vertical tip spin is spent by follow/draw.
+  const asx = a.spin.x
+  const bsx = b.spin.x
+  a.spin.x += (bsx - asx) * SPIN_TRANSFER
+  b.spin.x += (asx - bsx) * SPIN_TRANSFER
+  const aw = a.angularVel
+  const bw = b.angularVel
+  a.angularVel += (bw - aw) * SPIN_TRANSFER
+  b.angularVel += (aw - bw) * SPIN_TRANSFER
   const overlap = minDist - d
   const cx = nx * (overlap / 2)
   const cy = ny * (overlap / 2)
@@ -419,6 +448,7 @@ function cloneBall(ball: BallState): BallState {
     ...ball,
     pos: vec(ball.pos.x, ball.pos.y),
     vel: vec(ball.vel.x, ball.vel.y),
-    spin: vec(ball.spin.x, ball.spin.y)
+    spin: vec(ball.spin.x, ball.spin.y),
+    angularVel: ball.angularVel ?? 0
   }
 }

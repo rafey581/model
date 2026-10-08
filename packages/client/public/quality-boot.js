@@ -1,0 +1,47 @@
+/*
+ * quality-boot.js — runs before any module, so <html data-quality> is set for both the
+ * CSS tier rules and game/qualityConfig.ts to read, and so the tab-hidden pause class
+ * exists from the first paint.
+ *
+ * The detection ladder below is mirrored verbatim in src/game/qualityConfig.ts
+ * (detectQualityTier) — keep the two comment blocks identical when either changes:
+ *
+ *   - mobile user agent .................... low
+ *   - phone-sized screen with dpr >= 2 ..... low   (webviews and small windows)
+ *   - hardwareConcurrency <= 4 or
+ *     deviceMemory <= 4 .................... medium
+ *   - dpr >= 2.5 on a <= 6-core or
+ *     <= 6GB device ....................... medium  (many pixels on a weak GPU)
+ *   - otherwise ............................ high
+ */
+;(function () {
+  try {
+    var tier = null
+    var asked = new URLSearchParams(location.search).get('quality')
+    if (asked === 'low' || asked === 'medium' || asked === 'high') tier = asked
+    if (!tier) {
+      var mobileUA = /Android|iPhone|iPad|iPod|Mobile|Silk/i.test(navigator.userAgent)
+      var cores = navigator.hardwareConcurrency || 8
+      var mem = navigator.deviceMemory || 8
+      var dpr = window.devicePixelRatio || 1
+      var smallScreen = window.screen ? Math.min(window.screen.width, window.screen.height) < 760 : false
+      if (mobileUA) tier = 'low'
+      else if (smallScreen && dpr >= 2) tier = 'low'
+      else if (cores <= 4 || mem <= 4) tier = 'medium'
+      else if (dpr >= 2.5 && (cores <= 6 || mem <= 6)) tier = 'medium'
+      else tier = 'high'
+    }
+    document.documentElement.dataset.quality = tier
+
+    // The pause switch for decorative motion: while the tab is hidden the CSS stops
+    // every animation and the page stops trying to be anywhere in particular.
+    var sync = function () {
+      if (document.hidden) document.documentElement.setAttribute('data-hidden', '')
+      else document.documentElement.removeAttribute('data-hidden')
+    }
+    document.addEventListener('visibilitychange', sync)
+    sync()
+  } catch (e) {
+    /* No document or location: the CSS falls back to its default tier. */
+  }
+})()

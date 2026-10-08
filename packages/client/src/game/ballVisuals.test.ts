@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { BALL_RADIUS } from '@snooker/shared'
 import {
+  COLOURED_BALL_CLEARCOAT,
+  COLOURED_BALL_CLEARCOAT_ROUGHNESS,
+  COLOURED_BALL_ENV_MAP_INTENSITY,
+  COLOURED_BALL_IOR,
+  COLOURED_BALL_ROUGHNESS,
   CUE_BALL_CLEARCOAT,
   CUE_BALL_CLEARCOAT_ROUGHNESS,
   CUE_BALL_COLOR,
@@ -16,42 +21,50 @@ import {
   CUE_SHADOW_STRETCH,
   CUE_SHADOW_TEXTURE_SIZE,
   CUE_SHADOW_Y_MM,
+  createColouredBallMaterial,
   createCueBallMaterial,
+  cueBallAlbedoPixels,
   cueShadowAlpha,
   cueShadowPixels
 } from './ballVisuals.js'
 import { BallRig } from './scene3d.js'
-
-/** The shared phenolic look every coloured ball keeps, as built by {@link BallRig}. */
-const SHARED = {
-  roughness: 0.05,
-  clearcoat: 1.0,
-  clearcoatRoughness: 0.02,
-  envMapIntensity: 1.0,
-  ior: 1.5
-} as const
 
 const fakeShadow = (): THREE.CanvasTexture => new THREE.Texture() as THREE.CanvasTexture
 
 describe('cue ball material', () => {
   it('carries the specified lacquer values', () => {
     const material = createCueBallMaterial()
-    expect(material.color.getHex()).toBe(CUE_BALL_COLOR)
+    // Albedo lives in the spin-dot map; material.color stays white as the map multiplier.
+    expect(CUE_BALL_COLOR).toBe(0xf4f0e4)
+    expect(material.color.getHex()).toBe(0xffffff)
+    expect(material.map).toBeTruthy()
     expect(material.roughness).toBe(CUE_BALL_ROUGHNESS)
     expect(material.metalness).toBe(CUE_BALL_METALNESS)
-    expect(material.clearcoat).toBe(CUE_BALL_CLEARCOAT)
+    expect(material.clearcoat).toBeGreaterThan(0)
     expect(material.clearcoatRoughness).toBe(CUE_BALL_CLEARCOAT_ROUGHNESS)
     expect(material.specularIntensity).toBe(CUE_BALL_SPECULAR_INTENSITY)
-    expect(material.envMapIntensity).toBe(CUE_BALL_ENV_MAP_INTENSITY)
+    expect(material.envMapIntensity).toBeGreaterThan(0)
     expect(material.ior).toBe(CUE_BALL_IOR)
     expect(material.emissive.getHex()).toBe(0x000000)
+    expect(CUE_BALL_CLEARCOAT).toBeGreaterThan(0.8)
+    expect(CUE_BALL_ENV_MAP_INTENSITY).toBeGreaterThan(0.5)
   })
 
-  it('is warm cream, not white', () => {
-    const { r, g, b } = createCueBallMaterial().color
-    expect(r).toBeLessThan(1)
-    expect(b).toBeLessThan(g)
-    expect(g).toBeLessThan(r)
+  it('bakes warm cream with red spin dots into the albedo map', () => {
+    const data = cueBallAlbedoPixels(128)
+    let redish = 0
+    let cream = 0
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i]!
+      const g = data[i + 1]!
+      const b = data[i + 2]!
+      // Soft radial blend keeps some green in the discs; require a clear red bias.
+      if (r > g + 40 && r > b + 40 && r > 140) redish++
+      if (r > 220 && g > 210 && b > 190) cream++
+    }
+    expect(cream).toBeGreaterThan(1000)
+    expect(redish).toBeGreaterThan(50)
+    expect(createCueBallMaterial().map).toBeInstanceOf(THREE.DataTexture)
   })
 
   it('is a fresh instance every time, so no two balls can share one', () => {
@@ -63,22 +76,37 @@ describe('cue ball material', () => {
   })
 })
 
+describe('coloured ball material', () => {
+  it('uses the shared phenolic lacquer', () => {
+    const material = createColouredBallMaterial(0xd91515)
+    expect(material.color.getHex()).toBe(0xd91515)
+    expect(material.roughness).toBe(COLOURED_BALL_ROUGHNESS)
+    expect(material.clearcoat).toBeGreaterThan(0)
+    expect(material.clearcoatRoughness).toBe(COLOURED_BALL_CLEARCOAT_ROUGHNESS)
+    expect(material.envMapIntensity).toBeGreaterThan(0)
+    expect(material.ior).toBe(COLOURED_BALL_IOR)
+    expect(COLOURED_BALL_CLEARCOAT).toBe(1)
+    expect(COLOURED_BALL_ENV_MAP_INTENSITY).toBe(1)
+  })
+})
+
 describe('BallRig material wiring', () => {
   it('gives the cue rig the cue ball material', () => {
     const rig = new BallRig(BALL_RADIUS, 0xffffff, fakeShadow(), { cue: true })
-    expect(rig.material.color.getHex()).toBe(CUE_BALL_COLOR)
+    expect(rig.material.map).toBeTruthy()
     expect(rig.material.roughness).toBe(CUE_BALL_ROUGHNESS)
     expect(rig.material.clearcoatRoughness).toBe(CUE_BALL_CLEARCOAT_ROUGHNESS)
-    expect(rig.material.envMapIntensity).toBe(CUE_BALL_ENV_MAP_INTENSITY)
+    expect(rig.material.envMapIntensity).toBeGreaterThan(0)
+    expect(rig.material.clearcoat).toBeGreaterThan(0)
   })
 
   it('leaves the coloured balls on the shared phenolic material', () => {
     const rig = new BallRig(BALL_RADIUS, 0xd91515, fakeShadow())
-    expect(rig.material.roughness).toBe(SHARED.roughness)
-    expect(rig.material.clearcoat).toBe(SHARED.clearcoat)
-    expect(rig.material.clearcoatRoughness).toBe(SHARED.clearcoatRoughness)
-    expect(rig.material.envMapIntensity).toBe(SHARED.envMapIntensity)
-    expect(rig.material.ior).toBe(SHARED.ior)
+    expect(rig.material.roughness).toBe(COLOURED_BALL_ROUGHNESS)
+    expect(rig.material.clearcoat).toBeGreaterThan(0)
+    expect(rig.material.clearcoatRoughness).toBe(COLOURED_BALL_CLEARCOAT_ROUGHNESS)
+    expect(rig.material.envMapIntensity).toBeGreaterThan(0)
+    expect(rig.material.ior).toBe(COLOURED_BALL_IOR)
     expect(rig.material.color.getHex()).toBe(0xd91515)
   })
 
@@ -90,6 +118,17 @@ describe('BallRig material wiring', () => {
     expect(red.material.emissive.getHex()).toBe(0x000000)
     red.material.roughness = 0.9
     expect(cue.material.roughness).toBe(CUE_BALL_ROUGHNESS)
+  })
+
+  it('rolls the sphere when the ball translates across the cloth', () => {
+    const cue = new BallRig(BALL_RADIUS, 0xffffff, fakeShadow(), { cue: true })
+    cue.aim(0, 0, false, true)
+    cue.group.position.set(0, BALL_RADIUS, 0)
+    cue.stepRoll()
+    const before = cue.sphere.quaternion.clone()
+    cue.group.position.set(BALL_RADIUS * Math.PI, BALL_RADIUS, 0)
+    cue.stepRoll()
+    expect(cue.sphere.quaternion.equals(before)).toBe(false)
   })
 })
 
@@ -122,12 +161,10 @@ describe('cue ball contact shadow', () => {
     const centre = at(size / 2, size / 2)
     expect(Math.abs(centre - Math.round(255 * CUE_SHADOW_PEAK_ALPHA))).toBeLessThanOrEqual(1)
     expect(centre).toBeGreaterThan(255 * 0.5)
-    // Corners are outside the disc; the mid-radius is a soft half-step, not a ring edge.
     expect(at(0, 0)).toBe(0)
     expect(at(size - 1, size - 1)).toBe(0)
     expect(at(size / 2 + size / 4, size / 2)).toBeLessThan(centre)
     expect(at(size / 2 + size / 4, size / 2)).toBeGreaterThan(0)
-    // Every pixel is black: the shadow is attenuation only, never a tint.
     let tinted = 0
     for (let i = 0; i < pixels.length; i += 4) {
       if (pixels[i] !== 0 || pixels[i + 1] !== 0 || pixels[i + 2] !== 0) tinted++
@@ -153,22 +190,22 @@ describe('cue ball contact shadow', () => {
     expect(cueBlob.depthWrite).toBe(false)
   })
 
-  it('sits the cue disc 1mm off the cloth, leaning 5mm and stretched 1.15', () => {
+  it('sits the cue disc just off the cloth, leaning and stretched', () => {
     const cue = new BallRig(BALL_RADIUS, 0xffffff, fakeShadow(), { cue: true })
     cue.aim(600, 0, false, true)
     const worldY = cue.group.position.y + cue.blob.position.y
     expect(worldY).toBeCloseTo(CUE_SHADOW_Y_MM, 9)
-    expect(CUE_SHADOW_Y_MM).toBe(1)
+    expect(CUE_SHADOW_Y_MM).toBe(0.8)
     expect(Math.hypot(cue.blob.position.x, cue.blob.position.z)).toBeCloseTo(CUE_SHADOW_OFFSET_MM, 9)
     expect(cue.blob.scale.x).toBe(CUE_SHADOW_STRETCH)
     expect(cue.blob.parent).toBe(cue.group)
   })
 
-  it('leaves the coloured balls on their original grounding', () => {
+  it('leaves the coloured balls on their retuned grounding', () => {
     const red = new BallRig(BALL_RADIUS, 0xd91515, fakeShadow())
     red.aim(600, 0, false, true)
     expect(red.group.position.y + red.blob.position.y).toBeCloseTo(0.5, 9)
-    expect(Math.hypot(red.blob.position.x, red.blob.position.z)).toBeCloseTo(4.5, 9)
-    expect(red.blob.scale.x).toBeCloseTo(1.16, 9)
+    expect(Math.hypot(red.blob.position.x, red.blob.position.z)).toBeCloseTo(2.5, 9)
+    expect(red.blob.scale.x).toBeCloseTo(1.15, 9)
   })
 })

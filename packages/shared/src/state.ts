@@ -10,7 +10,10 @@ export interface BallState {
   isColor: boolean
   pos: Vec2
   vel: Vec2
+  /** Tip offset: x = sidespin (−1..1), y = topspin/backspin (−1..1). */
   spin: Vec2
+  /** Angular speed about the vertical plane of travel (rad/s, mm-based). */
+  angularVel: number
   potted: boolean
   colorName?: string
 }
@@ -45,6 +48,7 @@ function makeBall(
     pos: vec(0, 0),
     vel: vec(0, 0),
     spin: vec(0, 0),
+    angularVel: 0,
     potted: false,
     colorName
   }
@@ -120,7 +124,8 @@ export function cloneBall(b: BallState): BallState {
     ...b,
     pos: vec(b.pos.x, b.pos.y),
     vel: vec(b.vel.x, b.vel.y),
-    spin: vec(b.spin.x, b.spin.y)
+    spin: vec(b.spin.x, b.spin.y),
+    angularVel: b.angularVel ?? 0
   }
 }
 

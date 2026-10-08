@@ -27,6 +27,8 @@
  *    own flag) and this file only sets the exposure it is given.
  */
 
+import { QUALITY_TIERS, detectQualityTier, requestedQualityTier } from './qualityConfig.js'
+
 /** How much geometry the arena is allowed to cost. One enum, one switch, three sizes. */
 export type ArenaQuality = 'low' | 'medium' | 'high'
 
@@ -363,7 +365,7 @@ export const ARENA_CONFIG: ArenaConfig = {
 
   // Tone mapping stays where the scene put it: ACES by default, Neutral behind its flag.
   render: {
-    exposure: 1.1,
+    exposure: 0.98,
     shadowSize: 2048,
     ambientColor: '#dfe8ff',
     ambientIntensity: 0.45,
@@ -546,10 +548,12 @@ function isArenaQuality(value: unknown): value is ArenaQuality {
 /**
  * The quality this device should build the arena at.
  *
- * Three sources, in this order: `?quality=low|medium|high` in the URL, which is the
- * override that lets every size be seen from one machine without a rebuild;
- * `localStorage['snooker.quality']`, which is a player's own remembered choice; and a
- * guess from what the browser says about the device.
+ * Three sources, in this order: `?quality=low|medium|high` in the URL (and the
+ * `data-quality` attribute the boot script writes from it), which is the override that
+ * lets every size be seen from one machine without a rebuild; `localStorage
+ * ['snooker.quality']`, which is a player's own remembered choice; and the device guess
+ * — both now shared with the renderer through qualityConfig.ts, so the arena and the
+ * scene can never disagree about which tier they are on.
  *
  * The guess is biased towards the smaller budgets on purpose. A venue one tier short reads
  * as a slightly smaller arena and nothing else, while a venue that costs a dropped frame
@@ -558,37 +562,22 @@ function isArenaQuality(value: unknown): value is ArenaQuality {
  */
 export function pickArenaQuality(): ArenaQuality {
   try {
-    const search = globalThis.location?.search
-    if (search) {
-      const fromUrl = new URLSearchParams(search).get('quality')
-      if (isArenaQuality(fromUrl)) return fromUrl
-    }
+    const requested = requestedQualityTier()
+    if (requested) return requested
     const stored = globalThis.localStorage?.getItem(QUALITY_STORAGE_KEY)
     if (isArenaQuality(stored)) return stored
   } catch {
     // Storage refused, or there is no location at all (the unit tests). Either way the
     // guess below needs neither, so there is nothing to fall back from.
   }
-  return autoArenaQuality()
+  return detectQualityTier()
 }
 
-/** What the device itself looks like, when no quality has been asked for by name. */
-function autoArenaQuality(): ArenaQuality {
-  const nav = globalThis.navigator as (Navigator & { deviceMemory?: number }) | undefined
-  if (!nav) return 'medium'
-  // A coarse pointer means a phone or a tablet, and those run out of fill rate first: the
-  // small budget is the difference between the venue playing and the venue not.
-  if (globalThis.matchMedia?.('(pointer: coarse)').matches) return 'low'
-  const memory = nav.deviceMemory
-  if ((memory !== undefined && memory <= 4) || (nav.hardwareConcurrency ?? 8) <= 4) return 'medium'
-  return 'high'
-}
-
-/** What each quality asks of the two renderer-side numbers, both of which are expensive. */
-const QUALITY_RENDER: Record<ArenaQuality, { shadowSize: number; standLights: number }> = {
-  low: { shadowSize: 1024, standLights: 2 },
-  medium: { shadowSize: 2048, standLights: 4 },
-  high: { shadowSize: 2048, standLights: 4 }
+/** What each quality asks of the stand washes; the shadow map comes from qualityConfig. */
+const QUALITY_STAND_LIGHTS: Record<ArenaQuality, number> = {
+  low: 2,
+  medium: 4,
+  high: 4
 }
 
 /**
@@ -603,9 +592,10 @@ export function applyArenaQuality(
   config: ArenaConfig = ARENA_CONFIG,
   quality: ArenaQuality = pickArenaQuality()
 ): ArenaQuality {
-  const render = QUALITY_RENDER[quality]
   config.quality = quality
-  config.render.shadowSize = render.shadowSize
-  config.lights.standCount = render.standLights
+  // The shadow map is a renderer-side number shared with the scene, so it is read from
+  // the one tier table rather than kept twice.
+  config.render.shadowSize = QUALITY_TIERS[quality].shadowMapSize
+  config.lights.standCount = QUALITY_STAND_LIGHTS[quality]
   return quality
 }
