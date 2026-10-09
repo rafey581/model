@@ -78,6 +78,7 @@ import {
   trimTransform,
   CUSHION_DEPTH
 } from './tableGeometry.js'
+import { makeJawGeometry, jawSpecs, makePocketNetGeometry, pocketNetAlphaTexture } from './pocketGeometry.js'
 
 const HALF_L = TABLE_LENGTH / 2
 const HALF_W = TABLE_WIDTH / 2
@@ -2765,19 +2766,20 @@ const outerL = APRON_OUTER_L
     // The jaali as a picture rather than a cone. Unlit on purpose: it sits deep in a hole
     // where lit materials go black, and the reference wants the strings to stay legibly
     // cream from the normal playing camera angle.
-    const pocketNetDiscMat = new THREE.MeshBasicMaterial({
-      map: pocketNetTexture(),
-      side: THREE.DoubleSide,
-      toneMapped: false
-    })
+    const pocketNetConeMat = new THREE.MeshBasicMaterial({
+     map: pocketNetAlphaTexture(),
+     alphaTest: 0.35,
+    side: THREE.DoubleSide
+     })
     // The jaw is cushion, so it wears cushion cloth: same green, same roughness, so the
     // nose reads as one continuous rubber from rail to pocket.
     const pocketJawMat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(CUSHION_FACE_COLOR),
-      roughness: 0.88,
-      metalness: 0,
-      envMapIntensity: 0.12
-    })
+    color: new THREE.Color('#1c9a34'),
+    roughness: 0.88,
+    metalness: 0,
+    side: THREE.DoubleSide,
+    envMapIntensity: 0.12
+   })
     const geoFor = (radius: number) => {
       const cached = pocketGeo.get(radius)
       if (cached) return cached
@@ -2905,15 +2907,15 @@ const outerL = APRON_OUTER_L
         // cap meet at one level rather than the cap perching on the rail below them.
         const rim = new THREE.Mesh(geo.rim, pocketRimMat)
         rim.name = 'pocket-rim'
-        rim.position.set(x, CUSHION_H - POCKET_RIM_HEIGHT_MM, z)
+         rim.position.set(x, CUSHION_H - POCKET_RIM_HEIGHT_MM - 2, z)
         this.scene.add(rim)
 
         // The jaali, hanging from under the cap down into the dark. Its top radius tracks
         // the mouth so there is no gap to see the room through.
-        const jaali = new THREE.Mesh(geo.net, pocketNetMat)
-        jaali.name = 'pocket-net'
-        jaali.position.set(x, CUSHION_H - POCKET_RIM_HEIGHT_MM - POCKET_NET_DROP_MM / 2, z)
-        this.scene.add(jaali)
+        const netCone = new THREE.Mesh(makePocketNetGeometry(p.radius), pocketNetConeMat)
+        netCone.name = 'pocket-net-detail'
+        netCone.position.set(x, 0, z)
+        this.scene.add(netCone)
       }
 
       if (detailed) {
@@ -2928,17 +2930,16 @@ const outerL = APRON_OUTER_L
 
         // The jaali, stretched across the throat of the bowl. Kept shallow enough that it
         // is still lit and still legible looking down from the normal playing camera.
-        const netDisc = new THREE.Mesh(geo.netDisc, pocketNetDiscMat)
-        netDisc.name = 'pocket-net-detail'
-        netDisc.rotation.x = -Math.PI / 2
-        netDisc.position.set(x, -POCKET_NET_DEPTH_MM, z)
-        this.scene.add(netDisc)
+        const netCone = new THREE.Mesh(makePocketNetGeometry(p.radius), pocketNetConeMat)
+        netCone.name = 'pocket-net-detail'
+        netCone.position.set(x, 0, z)
+        this.scene.add(netCone)
 
         // Cream rim + thin brass outer ring: premium arena pocket trim without replacing
         // the ivory cap. Rim sits on cushion height; brass hugs the outer edge.
         const rim = new THREE.Mesh(geo.rim, pocketRimMat)
         rim.name = 'pocket-rim'
-        rim.position.set(x, CUSHION_H - POCKET_RIM_HEIGHT_MM, z)
+        rim.position.set(x, CUSHION_H - POCKET_RIM_HEIGHT_MM - 2, z)
         this.scene.add(rim)
         const brassRing = new THREE.Mesh(geo.brassRing, brassLipMat)
         brassRing.name = 'pocket-brass-ring'
@@ -2950,8 +2951,8 @@ const outerL = APRON_OUTER_L
         // the pocket itself, so they are automatically concentric with the bowl, and which
         // axes they cover depends on the pocket: a corner is entered from +X and +Z, a
         // middle from +X and -X.
-        for (const jawGeo of p.kind === 'corner' ? [geo.jawZ, geo.jawX] : [geo.jawX, geo.jawXFar]) {
-          const jaw = new THREE.Mesh(jawGeo, pocketJawMat)
+          for (const s of jawSpecs(x, z, p.kind)) {
+          const jaw = new THREE.Mesh(makeJawGeometry(p.radius, s.startDeg, s.arcDeg), pocketJawMat)
           jaw.name = 'pocket-jaw-detail'
           jaw.position.set(x, 0, z)
           this.scene.add(jaw)
