@@ -36,6 +36,9 @@ import {
   latchedCameraYaw,
   addOrbit,
   followHeadingLatch,
+  smoothDamp,
+  AIM_FOLLOW_DEADZONE_RAD,
+  AIM_FOLLOW_RATE,
   MAX_ORBIT_RAD,
   noPlacementTransition,
   sidePose,
@@ -138,19 +141,66 @@ describe('the heading latch', () => {
 })
 
 describe('following the aim with the camera', () => {
-  it('keeps the lens behind the cue ball while the aim sweeps', () => {
+  /** Holds one aim for `seconds` of frames and hands back where the heading got to. */
+  const follow = (latch: ReturnType<typeof initialHeadingLatch>, angle: number, seconds: number) => {
+    let current = latch
+    for (let i = 0; i < Math.round(seconds * 60); i++) current = followHeadingLatch(current, angle, 1 / 60)
+    return current
+  }
+
+  it('stands still while the aim stays in the band in front of the lens', () => {
+    // The pointer is cast through the camera, so a lens that turned with every degree of
+    // aim would move the cloth under a pointer that had not moved. Inside the band the
+    // camera does not turn at all, which is what makes a fine cut aimable.
     let latch = initialHeadingLatch(0)
-    for (const angle of [0.2, 0.5, 0.9]) {
-      latch = followHeadingLatch(latch, angle)
-      expect(latchedCameraYaw(latch)).toBeCloseTo(angle, 12)
+    for (const angle of [0.05, -0.1, AIM_FOLLOW_DEADZONE_RAD * 0.99, -AIM_FOLLOW_DEADZONE_RAD * 0.99]) {
+      latch = follow(latch, angle, 1)
+      expect(latchedCameraYaw(latch)).toBe(0)
     }
+  })
+
+  it('pans after an aim that leaves the band, and stops with it at the band edge', () => {
+    for (const angle of [0.8, -0.9, 1.4]) {
+      const latch = follow(initialHeadingLatch(0), angle, 6)
+      const short = shortestAngleDelta(latchedCameraYaw(latch), angle)
+      expect(Math.abs(short)).toBeCloseTo(AIM_FOLLOW_DEADZONE_RAD, 4)
+      expect(Math.sign(short)).toBe(Math.sign(angle))
+    }
+  })
+
+  it('starts the pan from rest and never whips', () => {
+    // The old follow snapped the heading onto the aim in one frame. Now the first frame of
+    // a pan is a small fraction of the swing, and the speed is bounded by how far outside
+    // the band the aim is.
+    const aim = 80 * DEG
+    let latch = initialHeadingLatch(0)
+    let previous = 0
+    for (let i = 0; i < 240; i++) {
+      latch = followHeadingLatch(latch, aim, 1 / 60)
+      const yaw = latchedCameraYaw(latch)
+      const perSecond = (yaw - previous) * 60
+      expect(perSecond).toBeGreaterThanOrEqual(0)
+      expect(perSecond).toBeLessThanOrEqual((aim - AIM_FOLLOW_DEADZONE_RAD) * AIM_FOLLOW_RATE + 1e-9)
+      previous = yaw
+    }
+    // Just outside the band the pan is all but stationary: no step at the edge.
+    const edge = followHeadingLatch(initialHeadingLatch(0), AIM_FOLLOW_DEADZONE_RAD + 0.001, 1 / 60)
+    expect(latchedCameraYaw(edge)).toBeLessThan(0.0001)
+  })
+
+  it('pans the same distance at any frame rate', () => {
+    let fast = initialHeadingLatch(0)
+    for (let i = 0; i < 120; i++) fast = followHeadingLatch(fast, 1, 1 / 120)
+    let slow = initialHeadingLatch(0)
+    for (let i = 0; i < 30; i++) slow = followHeadingLatch(slow, 1, 1 / 30)
+    expect(latchedCameraYaw(fast)).toBeCloseTo(latchedCameraYaw(slow), 6)
   })
 
   it('carries the look-around along rather than cancelling it', () => {
     let latch = addOrbit(initialHeadingLatch(0), 0.4)
-    latch = followHeadingLatch(latch, 0.3)
-    expect(latch.heading).toBeCloseTo(0.3, 12)
+    latch = follow(latch, 1.2, 6)
     expect(latch.orbit).toBeCloseTo(0.4, 12)
+    expect(latchedCameraYaw(latch)).toBeCloseTo(1.2 - AIM_FOLLOW_DEADZONE_RAD, 4)
   })
 
   it('holds when the aim flips into the half of the world behind the lens', () => {
@@ -158,30 +208,93 @@ describe('following the aim with the camera', () => {
     // an aim a half turn from the camera. Chasing it would spin the lens round and
     // round; the camera waits for the aim to come back in front instead.
     let latch = initialHeadingLatch(0)
-    latch = followHeadingLatch(latch, Math.PI * 0.75)
+    latch = follow(latch, Math.PI * 0.75, 1)
     expect(latchedCameraYaw(latch)).toBe(0)
-    latch = followHeadingLatch(latch, Math.PI)
+    latch = follow(latch, Math.PI, 1)
     expect(latchedCameraYaw(latch)).toBe(0)
-    latch = followHeadingLatch(latch, 1.2)
-    expect(latchedCameraYaw(latch)).toBeCloseTo(1.2, 12)
+    latch = follow(latch, 1.2, 6)
+    expect(latchedCameraYaw(latch)).toBeCloseTo(1.2 - AIM_FOLLOW_DEADZONE_RAD, 4)
   })
 
   it('follows across the wrap the short way, with no jump', () => {
-    let latch = initialHeadingLatch(179 * DEG)
-    latch = followHeadingLatch(latch, -179 * DEG)
-    expect(latchedCameraYaw(latch)).toBeCloseTo(-179 * DEG, 9)
+    const start = 170 * DEG
+    let latch = initialHeadingLatch(start)
+    let previous = start
+    for (let i = 0; i < 360; i++) {
+      latch = followHeadingLatch(latch, -130 * DEG, 1 / 60)
+      // Onwards through 180, never back the long way round through zero.
+      expect(latchedCameraYaw(latch)).toBeGreaterThanOrEqual(previous)
+      previous = latchedCameraYaw(latch)
+    }
+    expect(shortestAngleDelta(latchedCameraYaw(latch), -130 * DEG)).toBeCloseTo(AIM_FOLLOW_DEADZONE_RAD, 4)
   })
 
-  it('puts the rig behind the cue ball on the aim line, once eased', () => {
-    let latch = initialHeadingLatch(0)
+  it('is square behind the cue ball on the shot line once a shot re-latches it', () => {
+    // Between shots the lens may sit up to the width of the band off the aim. A played
+    // shot puts it back on the line exactly, which is the view the shot is watched from
+    // and the one the next visit opens in.
+    let latch = follow(initialHeadingLatch(0), 1.0, 6)
     let state = run(initialRigState(ASPECT_2_TO_1), request({ latch }), 3)
     for (const angle of [0.5, 1.0, 1.6]) {
-      latch = followHeadingLatch(latch, angle)
+      latch = stepHeadingLatch(latch, angle, true)
       state = run(state, request({ latch }), 3)
-      // Behind the ball on the line: the settled pose's own heading is the aim's,
-      // to well under a tenth of a degree.
       expect(shortestAngleDelta(angle, poseHeading(state.pose))).toBeCloseTo(0, 5)
     }
+  })
+})
+
+describe('the sprung move', () => {
+  it('leaves from rest, where the old exponential left at full speed', () => {
+    const first = smoothDamp(0, 1000, 0, 0.34, 1 / 60)
+    // An exponential at the old 4.5/s covered 72mm of this on its first frame.
+    expect(first.value).toBeGreaterThan(0)
+    expect(first.value).toBeLessThan(10)
+    expect(first.velocity).toBeGreaterThan(0)
+  })
+
+  it('arrives without overshooting a target that is standing still', () => {
+    for (const dt of [1 / 144, 1 / 60, 1 / 20, 0.1]) {
+      let value = 0
+      let velocity = 0
+      let previous = 0
+      for (let t = 0; t < 4; t += dt) {
+        ;({ value, velocity } = smoothDamp(value, 1000, velocity, 0.34, dt))
+        expect(value).toBeGreaterThanOrEqual(previous)
+        expect(value).toBeLessThanOrEqual(1000)
+        previous = value
+      }
+      expect(value).toBeCloseTo(1000, 3)
+    }
+  })
+
+  it('covers the same ground at any frame rate', () => {
+    const after = (dt: number): number => {
+      let value = 0
+      let velocity = 0
+      for (let i = 0; i < Math.round(0.5 / dt); i++) ({ value, velocity } = smoothDamp(value, 1000, velocity, 0.34, dt))
+      return value
+    }
+    expect(Math.abs(after(1 / 120) - after(1 / 30))).toBeLessThan(15)
+  })
+
+  it('is left where it is by a frame with no time in it', () => {
+    expect(smoothDamp(5, 1000, 3, 0.34, 0)).toEqual({ value: 5, velocity: 3 })
+  })
+
+  it('gives the rig a move whose speed builds and then falls away', () => {
+    let state = run(initialRigState(ASPECT_2_TO_1), request(), 4)
+    const speeds: number[] = []
+    let previous = state.pose.height
+    for (let i = 0; i < 180; i++) {
+      state = stepCameraRig(state, request({ mode: 'TOP_DOWN' }), 1 / 60)
+      speeds.push(state.pose.height - previous)
+      previous = state.pose.height
+    }
+    const peak = speeds.indexOf(Math.max(...speeds))
+    // The fastest frame is some way into the move, not the first one.
+    expect(peak).toBeGreaterThan(3)
+    expect(speeds[0]!).toBeLessThan(speeds[peak]! * 0.2)
+    expect(speeds[speeds.length - 1]!).toBeLessThan(speeds[peak]! * 0.05)
   })
 })
 
@@ -412,8 +525,10 @@ describe("the venue's television cameras", () => {
     }
   }
 
-  it('walks the views in the order the button offers them', () => {
-    expect([...PLAYER_CAMERA_MODES]).toEqual(['AIM', 'BROADCAST', 'SIDE', 'CLOSE', 'TOP_DOWN'])
+  it('offers two views on the button: behind the cue ball, and overhead', () => {
+    // One press goes overhead and the next comes back. The television views are still
+    // poses the rig can hold; they are just not stops on the button any more.
+    expect([...PLAYER_CAMERA_MODES]).toEqual(['AIM', 'TOP_DOWN'])
   })
 
   it('opens up on a narrow canvas without touching the landscape framing', () => {

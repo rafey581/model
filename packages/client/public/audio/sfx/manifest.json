@@ -1,0 +1,57 @@
+{
+  "ball:soft": [
+    "ball_2.wav",
+    "ball_5.wav"
+  ],
+  "ball:medium": [
+    "ball_1.wav",
+    "ball_4.wav",
+    "ball_5.wav"
+  ],
+  "ball:hard": [
+    "ball_3.wav",
+    "ball_4.wav",
+    "ball_1.wav"
+  ],
+  "cue:soft": [
+    "cue_3.wav",
+    "cue_2.wav"
+  ],
+  "cue:medium": [
+    "cue_2.wav",
+    "cue_4.wav"
+  ],
+  "cue:hard": [
+    "cue_1.wav",
+    "cue_4.wav"
+  ],
+  "cushion:soft": [
+    "cushion_2.wav"
+  ],
+  "cushion:medium": [
+    "cushion_1.wav",
+    "cushion_2.wav"
+  ],
+  "cushion:hard": [
+    "cushion_3.wav",
+    "cushion_1.wav"
+  ],
+  "jaw": [
+    "knock_low.wav"
+  ],
+  "drop": [
+    "pocket_drop.wav"
+  ],
+  "net": [
+    "pocket_roll.wav"
+  ],
+  "uiClick": [
+    "ui_click.wav"
+  ],
+  "turnTick": [
+    "turn.wav"
+  ],
+  "placeTick": [
+    "tick.wav"
+  ]
+}

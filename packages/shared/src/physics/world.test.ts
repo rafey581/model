@@ -28,6 +28,11 @@ import {
   pocketPositions,
   reflectCushionX,
   reflectCushionY,
+  CUSHION_JAWS,
+  CUSHION_FACES,
+  CUSHION_KNUCKLE_RADIUS,
+  cushionFaceEnd,
+  resolveJawContact,
   vec
 } from '../index.js'
 import type { BallState } from '../index.js'
@@ -821,6 +826,106 @@ describe('cushions', () => {
       expect(out.x).toBeCloseTo(Math.sin(rad) * speed * CUSHION_TANGENTIAL_DAMP, 6)
       expect(Math.hypot(out.x, out.y)).toBeLessThan(speed)
     }
+  })
+})
+
+describe('cushion faces and jaws', () => {
+  it('ends each straight face at the knuckle tangency, not at the pocket centre', () => {
+    // The face has to stop exactly where a knuckle of radius rk meets the pocket
+    // circle, or there is a step in the cushion a ball can catch on.
+    expect(cushionFaceEnd(POCKET_RADIUS_CORNER)).toBeCloseTo(65.254, 3)
+    expect(cushionFaceEnd(POCKET_RADIUS_MIDDLE)).toBeCloseTo(69.427, 3)
+    for (const face of CUSHION_FACES) {
+      expect(face.to - face.from).toBeGreaterThan(0)
+    }
+    // Twelve jaws: two for every corner and every middle pocket.
+    expect(CUSHION_JAWS).toHaveLength(12)
+    for (const jaw of CUSHION_JAWS) {
+      expect(jaw.radius).toBe(CUSHION_KNUCKLE_RADIUS)
+    }
+  })
+
+  it('pots a ball aimed straight at a middle pocket', () => {
+    const mid = TABLE_LENGTH / 2
+    const result = simulateStroke(loneCueBall(mid, 600), {
+      aimAngle: -Math.PI / 2,
+      power: 0.15,
+      spin: { x: 0, y: 0 }
+    })
+    expect(result.cuePotted).toBe(true)
+    expect(result.pottedIds).toContain(BALL_IDS.CUE)
+  })
+
+  it('pots a ball rolled along the cushion into a corner', () => {
+    // On a real table the cushion has already finished by the time the ball
+    // reaches the corner, and the jaw steers it in rather than turning it back.
+    const balls = loneCueBall(TABLE_LENGTH - 300, TABLE_WIDTH - BALL_RADIUS)
+    const result = simulateStroke(balls, { aimAngle: 0, power: 0.12, spin: { x: 0, y: 0 } })
+    expect(result.pottedIds).toContain(BALL_IDS.CUE)
+  })
+
+  it('rebounds a ball along the jaw arc normal', () => {
+    const jaw = CUSHION_JAWS[0]!
+    const contact = jaw.radius + BALL_RADIUS
+    const angle = (120 * Math.PI) / 180
+    const n = { x: Math.cos(angle), y: Math.sin(angle) }
+    const speed = 1000
+    const out = resolveJawContact(
+      jaw.cx + n.x * (contact - 1),
+      jaw.cy + n.y * (contact - 1),
+      -n.x * speed,
+      -n.y * speed,
+      jaw,
+      CUSHION_RESTITUTION_SHORT,
+      CUSHION_TANGENTIAL_DAMP
+    )
+    expect(out).not.toBeNull()
+    expect(out!.bounced).toBe(true)
+    // A square hit comes straight back along the contact normal, keeping only the
+    // restitution of its pace.
+    expect(out!.vx).toBeCloseTo(n.x * speed * CUSHION_RESTITUTION_SHORT, 6)
+    expect(out!.vy).toBeCloseTo(n.y * speed * CUSHION_RESTITUTION_SHORT, 6)
+    expect(Math.hypot(out!.vx, out!.vy)).toBeCloseTo(speed * CUSHION_RESTITUTION_SHORT, 6)
+    // And the ball is left touching the arc, never inside it.
+    expect(Math.hypot(out!.x - jaw.cx, out!.y - jaw.cy)).toBeCloseTo(contact, 6)
+  })
+
+  it('never leaves a ball inside the knuckle', () => {
+    const jaw = CUSHION_JAWS[0]!
+    const contact = jaw.radius + BALL_RADIUS
+    let resolved = 0
+    for (let deg = 90; deg <= 163; deg += 1) {
+      const a = (deg * Math.PI) / 180
+      const n = { x: Math.cos(a), y: Math.sin(a) }
+      const out = resolveJawContact(
+        jaw.cx + n.x * contact * 0.5,
+        jaw.cy + n.y * contact * 0.5,
+        0,
+        0,
+        jaw,
+        CUSHION_RESTITUTION_SHORT,
+        CUSHION_TANGENTIAL_DAMP
+      )
+      if (!out) continue
+      resolved++
+      const d = Math.hypot(out.x - jaw.cx, out.y - jaw.cy)
+      expect(d).toBeGreaterThanOrEqual(contact - 1e-6)
+      expect(d).toBeCloseTo(contact, 6)
+    }
+    // The whole table-side arc, about 73 degrees, has to be handled.
+    expect(resolved).toBeGreaterThan(60)
+    // Past the tangency the jaw hands the ball to the pocket circle instead.
+    const outsideAngle = Math.PI / 4
+    const outside = resolveJawContact(
+      jaw.cx + Math.cos(outsideAngle) * contact,
+      jaw.cy + Math.sin(outsideAngle) * contact,
+      0,
+      0,
+      jaw,
+      CUSHION_RESTITUTION_SHORT,
+      CUSHION_TANGENTIAL_DAMP
+    )
+    expect(outside).toBeNull()
   })
 })
 

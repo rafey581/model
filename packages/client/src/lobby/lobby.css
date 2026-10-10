@@ -1447,6 +1447,37 @@ body:has(.gl-root) {
   color: var(--mist);
 }
 
+/* A setting with more than one choice: the copy on top, the choices in a row under it. */
+.gl-settings-row--stack {
+  flex-direction: column;
+  align-items: stretch;
+  padding-top: calc(var(--u) * 16);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.gl-settings-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: calc(var(--u) * 8);
+}
+
+.gl-settings-options .gl-chip {
+  width: 100%;
+  padding: 0 calc(var(--u) * 6);
+  align-items: center;
+  text-align: center;
+}
+
+.gl-settings-row p.gl-settings-status {
+  color: var(--amber-400);
+}
+
+@media (max-width: 420px) {
+  .gl-settings-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 /* ── Motion / reduced ──────────────────────────────────────────────────── */
 
 @keyframes gl-bg-drift {

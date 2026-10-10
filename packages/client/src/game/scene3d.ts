@@ -13,9 +13,11 @@ import {
 import { setTableTransform } from './renderer.js'
 import { buildArenaEnvironment, hideLegacyRoom } from './arenaEnvironment.js'
 import type { ArenaSeatPlacement } from './arenaEnvironment.js'
-import { applyArenaQuality } from './arenaConfig.js'
-import { buildVenueEvents, type VenueEvents, type VenueHost } from './venueEvents.js'
+import { ARENA_CONFIG, applyArenaQuality } from './arenaConfig.js'
+import { buildCueStick } from './cueStick.js'
+import { readOpponentShot, buildVenueEvents, type VenueEvents, type VenueHost } from './venueEvents.js'
 import type { OpponentShot } from './opponentCue.js'
+import type { ShotPlayback } from '@snooker/shared'
 import { ballColor } from './palette.js'
 import {
   createColouredBallMaterial,
@@ -28,10 +30,36 @@ import {
   CUE_SHADOW_Y_MM
 } from './ballVisuals.js'
 import { qualityConfig } from './qualityConfig.js'
+import {
+  brassRoughnessTexture,
+  CLOTH_COLOR_MID,
+  cushionFeltTexture,
+  disposeTableTextures,
+  feltNormalTexture,
+  feltTexture,
+  leatherAlbedoTexture,
+  leatherNormalTexture,
+  leatherRoughnessTexture,
+  pocketDepthTexture,
+  setTableAnisotropy,
+  woodNormalTexture,
+  woodRoughnessTexture,
+  woodTexture
+} from './tableTextures.js'
 const SHOW_CROWN_MOULDING = false
 // The crowd went with the old arena: the dark bowl stands empty, and an empty seat plan is
 // how the venue says so (venueEvents builds no people when it gets none).
 const SHOW_OLD_AUDIENCE = false
+/**
+ * How close to the aim view's own height the lens has to be before it counts as having
+ * arrived there, in millimetres. Every other view sits far higher, so height alone tells
+ * a camera that is panning round the cue ball from one that is still flying in.
+ */
+const AIM_SETTLED_HEIGHT_MM = 40
+/** How bright the arena's materials are drawn once they are unlit, against their own colour. */
+const ENVIRONMENT_UNLIT_LEVEL = 0.5
+/** How much the ambient light is raised when the stand washes are switched off. */
+const ENVIRONMENT_LOW_AMBIENT_LIFT = 1.35
 import {
   type CameraRigState,
   type HeadingLatch,
@@ -51,9 +79,18 @@ import {
   aimFovDeg,
   resolveCameraTarget,
   followHeadingLatch,
+  latchedCameraYaw,
   PLACEMENT_TRANSITION_SECONDS,
   type CameraPose
 } from './camera.js'
+import {
+  SPECTATOR_CAM,
+  addressHeading,
+  beginSpectatorTransition,
+  fitSpectatorCamera,
+  nextSpectating,
+  stepSpectatorTransition
+} from './spectatorCamera.js'
 import {
   ballRadiusPx,
   ndcToPixel,
@@ -79,6 +116,9 @@ import {
   CUSHION_DEPTH
 } from './tableGeometry.js'
 import { makeJawGeometry, jawSpecs, makePocketNetGeometry, pocketNetAlphaTexture } from './pocketGeometry.js'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import {
+  TABLE_LEGS_SUFFIX, instantiateTableModel, tableModelIfReady, type TableMaterials } from './tableModel.js'
 
 const HALF_L = TABLE_LENGTH / 2
 const HALF_W = TABLE_WIDTH / 2
@@ -86,6 +126,14 @@ const HALF_W = TABLE_WIDTH / 2
 /** Optional hooks for Scene3D.create — omit for identical legacy behaviour. */
 export interface Scene3DCreateOptions {
   onBuildProgress?: (fraction: number) => void
+  /**
+   * The parsed Blender table to build the scene from, or null to force the
+   * code-built table. Omit it and Scene3D uses whatever `preloadTableModel()`
+   * has finished loading (`tableModelIfReady()`), which is the online path:
+   * there is no async window there, so the download is kicked off at boot
+   * instead.
+   */
+  tableModel?: THREE.Group | null
 }
 
 /** Progress phases reported by Scene3D.warmUp. */
@@ -198,14 +246,10 @@ const ROOM_WALL_TOP_COLOR = '#0b1a45'
 /** The floor: dark, so the lit table is the subject of the picture. */
 const ROOM_FLOOR_COLOR = '#9a3340'
 /** The bed's colour: deep tournament snooker green. */
-const CLOTH_COLOR = '#116834'
+const CLOTH_COLOR = '#1a8f25'
 
 /** How much of the cushions' shared normal map is left standing. */
 const CUSHION_NORMAL_STRENGTH = 0.12
-/** The rail wood's light figure colour (earlywood), a dark polished brown. */
-const RAIL_EARLY = { r: 92, g: 45, b: 24 }
-/** The rail wood's dark stripe colour (latewood). */
-const RAIL_LATE = { r: 74, g: 34, b: 20 }
 /** Cushion cloth: a brighter green than the bed so the raised edge reads. */
 const CUSHION_COLOR = 0x189a42
 /** The cushion nose strip: brighter still, catching the lamp. */
@@ -217,7 +261,13 @@ const NOSE_COLOR = 0x24b852
 /** Ball resin: tight diffuse under the lacquer film. */
 // Renderer/tone mapping — ACES for rich filmic contrast; Neutral remains an A/B flag.
 const TONE_MAPPING_MODE: 'neutral' | 'aces' = 'aces'
-const TONE_EXPOSURE = 1.07
+const TONE_EXPOSURE = 1.06
+
+/** The table lamp: warm white, a cone wide enough to hold the corners, no distance falloff. */
+const LAMP_COLOR = 0xfff0dc
+const LAMP_INTENSITY = 1.5
+const LAMP_ANGLE = Math.PI / 3.2
+const LAMP_PENUMBRA = 0.4
 
 // Wood / rails
 const RAIL_WOOD_TINT = '#5a2520'
@@ -229,17 +279,12 @@ const CUSHION_TOP_COLOR = '#1fae4a'
 const CUSHION_NOSE_COLOR = '#2bc75a'
 
 // Cloth / baize — Tournament Snooker Green with darker corner falloff.
-const CLOTH_COLOR_CENTER = '#147a3c'
-const CLOTH_COLOR_MID = '#116834'
-const CLOTH_COLOR_EDGE = '#083d1e'
 const CLOTH_ROUGHNESS = 0.9
 const CLOTH_METALNESS = 0
-const CLOTH_SHEEN = 0.42
-const CLOTH_SHEEN_COLOR = '#2a9a55'
+const CLOTH_SHEEN = 0.14
+const CLOTH_SHEEN_COLOR = '#35b045'
 const CLOTH_SHEEN_ROUGHNESS = 0.62
-const CLOTH_NORMAL_STRENGTH = 0.07
-const CLOTH_NOISE_STRENGTH = 0.028
-const CLOTH_MIPMAPS = true
+const CLOTH_NORMAL_STRENGTH = 0.13
 
 /** The contact disc's size, as a multiple of the ball's radius. */
 const BALL_SHADOW_PLANE = 2.4
@@ -249,13 +294,6 @@ const BALL_SHADOW_Y = 0.5
 const BALL_SHADOW_LEAN_MM = 2.5
 /** The contact disc's stretch along that lean. */
 const BALL_SHADOW_STRETCH = 1.15
-/** The cue's silhouette: a thin tip running out to a thicker butt. */
-const STICK_TIP_R = 5.5
-const STICK_SHAFT_BUTT_R = 13
-const STICK_BUTT_END_R = 15.5
-const CUE_LENGTH_MM = 1450
-/** Chalk blue, bright enough to read as the tip at gameplay distance. */
-const STICK_TIP_COLOR = 0x5f92cf
 /** The stick's shadow strip on the cloth, in millimetres across. Thinner than cue butt (13mm vs 26mm). */
 const STICK_SHADOW_WIDTH = 13
 /** The stick's shadow color on the cloth (pure black). */
@@ -365,215 +403,25 @@ const RAIL_WOOD_UV_TILE_MM = 500
 const AIM_RIBBON_Y = 0.5
 /** LINE 1 — cue path: solid white rectangular strip to ghost ball or cushion. */
 const AIM_LINE1_COLOR = 0xffffff
-const AIM_LINE1_OPACITY = 1.0
+const AIM_LINE1_OPACITY = 0.62
 /** The contact ring — hollow, the size of the ball it wraps, nothing inside. */
 const AIM_RING_COLOR = 0xffffff
-const AIM_RING_OPACITY = 0.95
-const AIM_RING_STROKE_MM = 2.5
+const AIM_RING_OPACITY = 0.6
+const AIM_RING_STROKE_MM = 1.8
 const AIM_RING_Y = 1.1
 /** LINE 2 — object ball path along the line of centres: neon green. */
-const AIM_LINE2_COLOR = 0x00ff33
-const AIM_LINE2_LENGTH = BALL_RADIUS * 16
-const AIM_LINE2_OPACITY = 1.0
+const AIM_LINE2_COLOR = 0x46e868
+const AIM_LINE2_LENGTH = BALL_RADIUS * 22
+const AIM_LINE2_OPACITY = 0.85
 /** LINE 3 — cue ball deflection after contact: solid white. */
 const AIM_LINE3_COLOR = 0xffffff
-const AIM_LINE3_LENGTH = BALL_RADIUS * 9
-const AIM_LINE3_OPACITY = 1.0
+const AIM_LINE3_LENGTH = BALL_RADIUS * 14
+const AIM_LINE3_OPACITY = 0.5
+/** The shortest either departure line is drawn, as a share of its full length. */
+const AIM_LINE_MIN_SHARE = 0.14
+/** How much of the way to its new length a line moves each frame. */
+const AIM_LINE_EASE = 0.16
 
-function feltTexture(): THREE.CanvasTexture {
-  return cachedTexture('felt', () => {
-    // 512×512, one tile across the whole bed. The old 2048×1024 canvas cost VRAM and
-    // per-frame texture bandwidth for detail the lens cannot hold at any playable
-    // distance; mipmapping does the smoothing work, and the markings are baked into
-    // this one texture rather than drawn as separate meshes.
-    const size = 512
-    const canvas = document.createElement('canvas')
-    canvas.width = size
-    canvas.height = size
-    const ctx = canvas.getContext('2d')!
-    // Tournament baize: deep snooker green with a centred spotlight and darker
-    // corners / pocket mouths so the bed reads as lit cloth rather than flat paint.
-    const g = ctx.createRadialGradient(size * 0.5, size * 0.48, size * 0.12, size * 0.5, size * 0.5, size * 0.82)
-    g.addColorStop(0, CLOTH_COLOR_CENTER)
-    g.addColorStop(0.5, CLOTH_COLOR_MID)
-    g.addColorStop(0.72, '#0e5e2e')
-    g.addColorStop(1, CLOTH_COLOR_EDGE)
-    ctx.fillStyle = g
-    ctx.fillRect(0, 0, size, size)
-
-    let seed = 20260930
-    const rand = (): number => {
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff
-      return seed / 0x7fffffff
-    }
-    ctx.fillStyle = `rgba(255,255,255,${CLOTH_NOISE_STRENGTH * 0.5})`
-    const noiseCount = 1300
-    for (let i = 0; i < noiseCount; i++) {
-      const x = rand() * size
-      const y = rand() * size
-      for (const dx of [-size, 0, size]) {
-        for (const dy of [-size, 0, size]) {
-          ctx.fillRect(x + dx, y + dy, 1.0, 1.0)
-        }
-      }
-    }
-    ctx.fillStyle = `rgba(0,0,0,${CLOTH_NOISE_STRENGTH * 0.5})`
-    for (let i = 0; i < noiseCount; i++) {
-      const x = rand() * size
-      const y = rand() * size
-      for (const dx of [-size, 0, size]) {
-        for (const dy of [-size, 0, size]) {
-          ctx.fillRect(x + dx, y + dy, 1.0, 1.0)
-        }
-      }
-    }
-
-    // Crossed nap. Kept faint and spaced so overhead view does not read as scanlines.
-    ctx.save()
-    ctx.translate(size / 2, size / 2)
-    ctx.rotate(-Math.PI / 5)
-    ctx.translate(-size / 2, -size / 2)
-    ctx.strokeStyle = 'rgba(255,255,255,0.02)'
-    ctx.lineWidth = 1
-    for (let y = -size; y < size * 2; y += 6) {
-      ctx.beginPath()
-      ctx.moveTo(-size, y)
-      ctx.lineTo(size * 2, y + 8)
-      ctx.stroke()
-    }
-    ctx.strokeStyle = 'rgba(0,0,0,0.016)'
-    for (let y = -size; y < size * 2; y += 9) {
-      ctx.beginPath()
-      ctx.moveTo(-size, y + 1.5)
-      ctx.lineTo(size * 2, y + 9.5)
-      ctx.stroke()
-    }
-    ctx.restore()
-
-    // Baulk line, the D and the spot marks, baked into the cloth: no line meshes,
-    // no extra draw calls, and the markings mip down with the baize instead of
-    // crawling over it.
-    const mark = (tableXmm: number, tableYmm: number): void => {
-      const u = (tableXmm / TABLE_LENGTH) * size
-      const v = (tableYmm / TABLE_WIDTH) * size
-      ctx.fillStyle = '#e6d9ae'
-      ctx.beginPath()
-      ctx.arc(u, v, 2.25, 0, Math.PI * 2)
-      ctx.fill()
-    }
-
-    const bx = (BAULK_LINE_X / TABLE_LENGTH) * size
-    const mid = size / 2
-    ctx.strokeStyle = '#e8d090'
-    ctx.lineWidth = 1.85
-    ctx.beginPath()
-    ctx.moveTo(bx, 0)
-    ctx.lineTo(bx, size)
-    ctx.stroke()
-    // The D is drawn as an ellipse, not an arc, and that distinction is the whole reason
-    // it looks right on the cloth. This canvas is square but the table it is mapped over
-    // is not - 3569mm by 1778mm - so texture space is stretched by about two to one
-    // along the table's length. A circle drawn here therefore lands on the bed as an
-    // ellipse twice as wide as it is tall, which put the D's arc out past the baulk line
-    // by roughly its own radius and made the visible area considerably larger than the
-    // area the rules actually allow in. `isInsideD` compares against D_RADIUS in real
-    // millimetres on both axes, so each radius here is scaled by its own axis: the result
-    // is a true circle of D_RADIUS once the stretch is undone, matching the gameplay
-    // boundary exactly. Getting this wrong is purely visual - the rules are unaffected -
-    // but a player aiming at what they can see is aiming at a place the rules forbid.
-    ctx.beginPath()
-    ctx.ellipse(bx, mid, (D_RADIUS / TABLE_LENGTH) * size, (D_RADIUS / TABLE_WIDTH) * size, 0, Math.PI * 0.5, Math.PI * 1.5)
-    ctx.stroke()
-
-    mark(BAULK_LINE_X, TABLE_WIDTH / 2 + D_RADIUS * 0.9)
-    mark(BAULK_LINE_X, TABLE_WIDTH / 2 - D_RADIUS * 0.9)
-    mark(BAULK_LINE_X, TABLE_WIDTH / 2)
-    mark(TABLE_LENGTH / 2, TABLE_WIDTH / 2)
-    mark(TABLE_LENGTH * 0.75, TABLE_WIDTH / 2)
-    mark(TABLE_LENGTH - 324, TABLE_WIDTH / 2)
-
-    const texture = new THREE.CanvasTexture(canvas)
-    texture.colorSpace = THREE.SRGBColorSpace
-    texture.generateMipmaps = CLOTH_MIPMAPS
-    texture.minFilter = THREE.LinearMipmapLinearFilter
-    texture.magFilter = THREE.LinearFilter
-    texture.wrapS = THREE.RepeatWrapping
-    texture.wrapT = THREE.RepeatWrapping
-    texture.anisotropy = MAX_ANISO
-    return texture
-  })
-}
-
-/**
- * A woven-cloth normal map, so the bed is lit as fabric rather than matte paint.
- *
- * The colour map above carries the tone and the markings; this carries the surface. It
- * is what lets the near-white lamp highlight break up across the nap instead of sitting
- * on the bed as one dead flat sheet, and it is the difference between "green plane" and
- * "baize" at the cue camera's low angle.
- *
- * Encoded from a height field by central difference rather than authored as RGB, so the
- * weave stays coherent under mipmapping — a hand-picked set of RGB vectors moires as
- * soon as it is minified. Tiled hard (60—) and kept low-contrast for the same reason:
- * visible threads at the overhead distance would alias into a shimmer across the bed.
- */
-function feltNormalTexture(): THREE.CanvasTexture {
-  return cachedTexture('felt-normal', () => {
-    const size = 256
-    const canvas = document.createElement('canvas')
-    canvas.width = size
-    canvas.height = size
-    const ctx = canvas.getContext('2d')!
-    const img = ctx.createImageData(size, size)
-    const d = img.data
-    // Plain weave: warp and weft threads alternate over and under on a checkerboard,
-    // so each cell's height is the ridge of whichever thread is on top.
-    const height = (x: number, y: number): number => {
-      const cx = Math.floor(x / 8)
-      const cy = Math.floor(y / 8)
-      const over = (cx + cy) % 2 === 0
-      const u = ((x % 8) + 8) % 8
-      const v = ((y % 8) + 8) % 8
-      // Ridge profile across the thread: sin gives the rounded crown of a yarn.
-      const warpRidge = Math.sin((u / 8) * Math.PI) * (over ? 1 : 0.55)
-      const weftRidge = Math.sin((v / 8) * Math.PI) * (over ? 0.55 : 1)
-      return Math.max(warpRidge, weftRidge)
-    }
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        // Central difference on the height field. Wrap the taps so the normal map tiles
-        // with the colour map instead of showing a seam line around the bed.
-        const hl = height((x - 1 + size) % size, y)
-        const hr = height((x + 1) % size, y)
-        const hd = height(x, (y - 1 + size) % size)
-        const hu = height(x, (y + 1) % size)
-        // 8 is the sample spacing, so it cancels the divisor; the rest is a gain that
-        // keeps the perturbation gentle — baize is nearly flat, and a strong normal here
-        // would look like hammered metal.
-        const nx = (hl - hr) * 0.9
-        const ny = (hd - hu) * 0.9
-        const nz = 1
-        const len = Math.sqrt(nx * nx + ny * ny + nz * nz)
-        const i = (y * size + x) * 4
-        // Normal maps are data, not colour: no sRGB tag here, for the same reason the
-        // wood roughness map is left linear.
-        d[i] = ((nx / len) * 0.5 + 0.5) * 255
-        d[i + 1] = ((ny / len) * 0.5 + 0.5) * 255
-        d[i + 2] = ((nz / len) * 0.5 + 0.5) * 255
-        d[i + 3] = 255
-      }
-    }
-    ctx.putImageData(img, 0, 0)
-    const texture = new THREE.CanvasTexture(canvas)
-    texture.generateMipmaps = true
-    texture.minFilter = THREE.LinearMipmapLinearFilter
-    texture.magFilter = THREE.LinearFilter
-    texture.wrapS = THREE.RepeatWrapping
-    texture.wrapT = THREE.RepeatWrapping
-    texture.anisotropy = MAX_ANISO
-    return texture
-  })
-}
 
 function contactShadowTexture(): THREE.CanvasTexture {
   return cachedTexture('shadow', () => {
@@ -662,285 +510,139 @@ function stickShadowTexture(): THREE.CanvasTexture {
  */
 function aimRibbonSolidTexture(): THREE.CanvasTexture {
   return cachedTexture('aim-ribbon-solid', () => {
-    const w = 8
-    const h = 8
+    // White with a feathered edge across the strip's width: solid through the middle,
+    // fading out over the outer quarter on each side. A hard-edged strip stair-steps along
+    // its length at a shallow angle and reads as a painted bar; the soft edge is what
+    // makes it a line of light lying on the cloth.
+    const w = 4
+    const h = 32
     const canvas = document.createElement('canvas')
     canvas.width = w
     canvas.height = h
     const ctx = canvas.getContext('2d')!
-    ctx.fillStyle = '#ffffff'
+    const across = ctx.createLinearGradient(0, 0, 0, h)
+    across.addColorStop(0, 'rgba(255,255,255,0)')
+    across.addColorStop(0.3, 'rgba(255,255,255,1)')
+    across.addColorStop(0.7, 'rgba(255,255,255,1)')
+    across.addColorStop(1, 'rgba(255,255,255,0)')
+    ctx.fillStyle = across
     ctx.fillRect(0, 0, w, h)
     const texture = new THREE.CanvasTexture(canvas)
-    texture.magFilter = THREE.NearestFilter
-    texture.minFilter = THREE.NearestFilter
+    texture.magFilter = THREE.LinearFilter
+    texture.minFilter = THREE.LinearFilter
+    texture.generateMipmaps = false
     return texture
   })
 }
 
+
 /**
- * Deterministic value noise on a wrapping lattice, so the field tiles.
+ * The nine materials the Blender table asks for, finished as one premium table.
  *
- * Hand-rolled rather than pulled from a library: the table needs exactly two kinds of
- * grain — warped growth rings and stretched pores — and both want this same field at
- * different frequencies and aspect ratios. Hash-based, so the figure is identical on
- * every load and the palette can be retuned without the wood moving underneath it.
+ * The model tags each merged mesh with a material name rather than a role, so this is
+ * the one place that decides what "Wood" or "JawCloth" means. The bed (`clothMat`) is
+ * passed in so the model wears the same felt instance the code bed would have used —
+ * its canvas carries the baulk line, the D and the spots.
+ *
+ * Three fixes live here rather than in the model, because the model must not be edited
+ * (and because they are finish, not geometry):
+ *  - the wood's envMapIntensity is pulled well down from the old mirror-like 0.5, which
+ *    is what made the rail top read as a chrome streak (P3);
+ *  - the cushions get the *bed's* felt and the bed's green, so the two cloths match (P4);
+ *  - the pockets' leather is cream and the interior is a true black well (P1's base).
+ *
+ * Quality knobs read from `qualityConfig()`: the lower tiers drop the roughness and
+ * normal maps that cost the most sampling.
  */
-function woodHash(x: number, y: number): number {
-  let h = Math.imul(x, 0x27d4eb2d) ^ Math.imul(y, 0x165667b1)
-  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d)
-  h ^= h >>> 12
-  h = Math.imul(h, 0x297a2d39)
-  h ^= h >>> 15
-  return (h >>> 0) / 4294967296
-}
+function tableMaterials(clothMat: THREE.MeshPhysicalMaterial): TableMaterials {
+  const tier = qualityConfig()
+  const isLow = tier.name === 'low'
 
-function tileNoise(u: number, v: number, period: number): number {
-  const x = u * period
-  const y = v * period
-  const xi = Math.floor(x)
-  const yi = Math.floor(y)
-  const xf = x - xi
-  const yf = y - yi
-  // Smoothstep the interpolants: bilinear noise has a visible grid, and this is the
-  // cheapest way to remove it without a second smoothing pass.
-  const sx = xf * xf * (3 - 2 * xf)
-  const sy = yf * yf * (3 - 2 * yf)
-  const x0 = ((xi % period) + period) % period
-  const y0 = ((yi % period) + period) % period
-  const x1 = (x0 + 1) % period
-  const y1 = (y0 + 1) % period
-  const n00 = woodHash(x0, y0)
-  const n10 = woodHash(x1, y0)
-  const n01 = woodHash(x0, y1)
-  const n11 = woodHash(x1, y1)
-  const a = n00 + (n10 - n00) * sx
-  const b = n01 + (n11 - n01) * sx
-  return a + (b - a) * sy
-}
-
-function tileFbm(u: number, v: number, period: number, octaves: number): number {
-  let sum = 0
-  let amp = 1
-  let norm = 0
-  let p = period
-  for (let o = 0; o < octaves; o++) {
-    sum += tileNoise(u, v, p) * amp
-    norm += amp
-    amp *= 0.5
-    p *= 2
+  const wood = new THREE.MeshPhysicalMaterial({
+    map: woodTexture(),
+    color: 0xffffff,
+    roughness: 0.42,
+    metalness: 0,
+    clearcoat: isLow ? 0 : 0.7,
+    clearcoatRoughness: 0.14,
+    specularIntensity: 0.5,
+    // The single biggest P3 lever: high envMap on dark wood turns the rail top silver.
+    envMapIntensity: 0.45
+  })
+  if (!isLow) wood.roughnessMap = woodRoughnessTexture()
+  // The grain's relief is what stops a lacquered rail reading as brown plastic, and the
+  // rails are what the player looks straight at, so every tier but the lowest has it.
+  if (!isLow) {
+    wood.normalMap = woodNormalTexture()
+    wood.normalScale = new THREE.Vector2(0.4, 0.4)
   }
-  return sum / norm
-}
 
-let woodGrainPair: { color: HTMLCanvasElement; rough: HTMLCanvasElement } | null = null
+  const brass = new THREE.MeshStandardMaterial({
+    color: 0xd4a64a,
+    metalness: 1,
+    roughness: 0.28,
+    envMapIntensity: 1.3
+  })
+  if (!isLow) brass.roughnessMap = brassRoughnessTexture()
 
-/**
- * Flat-sawn mahogany, generated as a colour map and a matching roughness map.
- *
- * The previous texture was horizontal scanlines with a few white dashes on top, which
- * read as painted stripes rather than timber. Real flat-sawn figure is growth rings
- * whose radius wanders: the board is cut off-centre from the log, so the rings appear
- * as wide nested arches, and the narrow dark latewood band between the open earlywood
- * is what gives mahogany its contrast.
- *
- * Two decisions worth stating. The ring centre sits well below the board and the radius
- * is squashed vertically, which is what turns circles into arches — concentric circles
- * centred on the face would read as a sliced tree trunk, not a rail. And the map is
- * mapped 1:1 per face with clamped edges rather than tiled, because an arch pattern has
- * no seamless repeat; the wrap modes below would only hide the seam.
- *
- * The roughness map is the half that sells "polished". Lacquer lies over the earlywood
- * and stays glossy, while the latewood band and the open pores are too fine for a film
- * to level and stay dull. Colour alone cannot express that contrast, so a flat-colour
- * wood under a clearcoat still reads as plastic.
- */
-function woodGrain(): { color: HTMLCanvasElement; rough: HTMLCanvasElement } {
-  if (woodGrainPair) return woodGrainPair
-  const size = 512
-  const color = document.createElement('canvas')
-  color.width = size
-  color.height = size
-  const rough = document.createElement('canvas')
-  rough.width = size
-  rough.height = size
-  const cctx = color.getContext('2d')!
-  const rctx = rough.getContext('2d')!
-  const cimg = cctx.createImageData(size, size)
-  const rimg = rctx.createImageData(size, size)
-  const cd = cimg.data
-  const rd = rimg.data
-
-  const cx = size * 0.5
-  const cy = size * 2.6
-  const squash = 0.55
-  const ringFreq = 13
-  const EARLY_R = RAIL_EARLY.r
-  const EARLY_G = RAIL_EARLY.g
-  const EARLY_B = RAIL_EARLY.b
-  const LATE_R = RAIL_LATE.r
-  const LATE_G = RAIL_LATE.g
-  const LATE_B = RAIL_LATE.b
-
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const u = x / size
-      const v = y / size
-      // Warping the ring radius is what separates sawn timber from printed stripes.
-      const warp = tileFbm(u, v, 8, 3) - 0.5
-      const drift = tileFbm(u, v, 4, 2)
-      const dx = x - cx
-      const dy = (y - cy) * squash
-      const dist = Math.sqrt(dx * dx + dy * dy) / size
-      const t = dist * ringFreq + warp * 1.7 + drift * 0.3
-      const frac = t - Math.floor(t)
-      // A triangle raised to a high power is a narrow band — the latewood line.
-      const tri = 1 - Math.abs(frac * 2 - 1)
-      const late = Math.pow(tri, 10)
-      // Pores: open-grain flecks, compressed in v so they stretch along the grain.
-      // Sampled with a stretched u so the field is not square-checkered.
-      const pore = Math.pow(tileFbm(u * 0.3, v * 2.4, 32, 1), 3)
-
-      const mix = Math.min(1, late * 0.9 + drift * 0.28)
-      const pk = pore * 0.55
-      const i = (y * size + x) * 4
-      cd[i] = (EARLY_R + (LATE_R - EARLY_R) * mix) * (1 - pk)
-      cd[i + 1] = (EARLY_G + (LATE_G - EARLY_G) * mix) * (1 - pk * 0.92)
-      cd[i + 2] = (EARLY_B + (LATE_B - EARLY_B) * mix) * (1 - pk * 0.85)
-      cd[i + 3] = 255
-
-      const rv = (0.13 + late * 0.1 + pore * 0.42 + drift * 0.05) * 255
-      rd[i] = rv
-      rd[i + 1] = rv
-      rd[i + 2] = rv
-      rd[i + 3] = 255
-    }
+  const jawCloth = new THREE.MeshPhysicalMaterial({
+    map: cushionFeltTexture(),
+    color: new THREE.Color(CLOTH_COLOR_MID),
+    vertexColors: true,
+    roughness: 0.9,
+    metalness: 0,
+    sheen: CLOTH_SHEEN,
+    sheenColor: new THREE.Color(CLOTH_SHEEN_COLOR),
+    sheenRoughness: CLOTH_SHEEN_ROUGHNESS,
+    side: THREE.DoubleSide,
+    envMapIntensity: 0.12
+  })
+  if (tier.clothNormal) {
+    jawCloth.normalMap = feltNormalTexture()
+    jawCloth.normalScale = new THREE.Vector2(CUSHION_NORMAL_STRENGTH, CUSHION_NORMAL_STRENGTH)
   }
-  cctx.putImageData(cimg, 0, 0)
-  rctx.putImageData(rimg, 0, 0)
-  woodGrainPair = { color, rough }
-  return woodGrainPair
-}
 
-function woodTexture(): THREE.CanvasTexture {
-  return cachedTexture('wood', () => {
-    const texture = new THREE.CanvasTexture(woodGrain().color)
-    texture.colorSpace = THREE.SRGBColorSpace
-    texture.anisotropy = MAX_ANISO
-    return texture
+  const leather = new THREE.MeshPhysicalMaterial({
+    map: leatherAlbedoTexture(),
+    color: 0xffffff,
+    roughness: 0.55,
+    metalness: 0,
+    sheen: 0.35,
+    sheenColor: new THREE.Color('#fff3d9'),
+    sheenRoughness: 0.55,
+    clearcoat: 0.12,
+    clearcoatRoughness: 0.4,
+    envMapIntensity: 0.5
   })
-}
+  if (!isLow) {
+    leather.roughnessMap = leatherRoughnessTexture()
+    leather.normalMap = leatherNormalTexture()
+    leather.normalScale = new THREE.Vector2(0.25, 0.25)
+  }
 
-/**
- * The same figure as a roughness map, sharing the colour map's UVs exactly.
- *
- * Deliberately not sRGB: roughness is a linear channel, and tagging it as colour data
- * gamma-encodes it into a visibly wrong, too-glossy curve.
- */
-function woodRoughnessTexture(): THREE.CanvasTexture {
-  return cachedTexture('wood-rough', () => {
-    const texture = new THREE.CanvasTexture(woodGrain().rough)
-    texture.anisotropy = MAX_ANISO
-    return texture
-  })
-}
-
-/**
- * Brass, with the roughness broken up so it is not one uniform mirror.
- *
- * Hand-polished brass is never evenly rough: the polish leaves swirl marks, and the
- * recesses hold a duller tarnish. A constant roughness on a metal turns the whole part
- * into a featureless highlight, which is what made the original trim read as flat gold
- * plastic. The variation here is fine and low-contrast on purpose — enough to break the
- * specular into something with structure, not enough to look noisy or dirty.
- */
-function brassRoughnessTexture(): THREE.CanvasTexture {
-  return cachedTexture('brass-rough', () => {
-    const size = 256
-    const canvas = document.createElement('canvas')
-    canvas.width = size
-    canvas.height = size
-    const ctx = canvas.getContext('2d')!
-    const img = ctx.createImageData(size, size)
-    const d = img.data
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const u = x / size
-        const v = y / size
-        // Swirl: noise domain-warped around a centre, the way a rotary buff leaves it.
-        const a = tileFbm(u, v, 4, 2) * Math.PI * 2
-        const swirl = tileFbm(u + Math.cos(a) * 0.12, v + Math.sin(a) * 0.12, 6, 3)
-        const fine = tileFbm(u * 0.2, v * 3, 48, 1)
-        const rv = Math.min(1, Math.max(0, 0.17 + (swirl - 0.5) * 0.3 + (fine - 0.5) * 0.12)) * 255
-        const i = (y * size + x) * 4
-        d[i] = rv
-        d[i + 1] = rv
-        d[i + 2] = rv
-        d[i + 3] = 255
-      }
-    }
-    ctx.putImageData(img, 0, 0)
-    const texture = new THREE.CanvasTexture(canvas)
-    texture.anisotropy = MAX_ANISO
-    return texture
-  })
-}
-
-/**
- * A straight-grained cue timber: ash for the shaft, dark maple for the butt.
- *
- * Cue grain runs lengthwise along the taper, so the canvas is ruled with long
- * vertical figure lines and only slight tone drift between them — a cue's beauty
- * is in its even, narrow stripes rather than the wide irregular plank figure the
- * table wood uses.
- */
-function cueWoodTexture(key: string, base: { r: number; g: number; b: number }, figure: number): THREE.CanvasTexture {
-  return cachedTexture(key, () => {
-    const size = 256
-    const canvas = document.createElement('canvas')
-    canvas.width = size
-    canvas.height = size
-    const ctx = canvas.getContext('2d')!
-    ctx.fillStyle = `rgb(${base.r}, ${base.g}, ${base.b})`
-    ctx.fillRect(0, 0, size, size)
-    for (let x = 0; x < size; x++) {
-      const wobble = Math.sin(x * 0.35) * 6 + Math.sin(x * 0.11) * 10
-      const tone = base.r + Math.sin(x * 0.8 + wobble) * figure
-      ctx.fillStyle = `rgba(${Math.round(Math.max(0, tone))}, ${Math.round(base.g * (tone / base.r))}, ${Math.round(base.b * (tone / base.r))}, 0.5)`
-      ctx.fillRect(x, 0, 1, size)
-    }
-    ctx.fillStyle = 'rgba(255,255,255,0.05)'
-    for (let i = 0; i < 12; i++) {
-      const y = Math.random() * size
-      ctx.fillRect(0, y, size, 1)
-    }
-    const texture = new THREE.CanvasTexture(canvas)
-    texture.colorSpace = THREE.SRGBColorSpace
-    return texture
-  })
-}
-
-/**
- * The inner shading of a pocket: darkness at the bottom fading up the walls.
- *
- * Painted onto a cylinder lining the pocket's drop, it is what turns a hole into
- * a depth: a flat black disc reads as a decal, a shaded throat reads as somewhere
- * for the ball to go.
- */
-function pocketDepthTexture(): THREE.CanvasTexture {
-  return cachedTexture('pocket-depth', () => {
-    const size = 128
-    const canvas = document.createElement('canvas')
-    canvas.width = size
-    canvas.height = size
-    const ctx = canvas.getContext('2d')!
-    const grad = ctx.createRadialGradient(size / 2, size / 2, 4, size / 2, size / 2, size / 2)
-    grad.addColorStop(0, 'rgba(0,0,0,1)')
-    grad.addColorStop(0.55, 'rgba(0,0,0,0.85)')
-    grad.addColorStop(1, 'rgba(30,18,10,0.25)')
-    ctx.fillStyle = grad
-    ctx.fillRect(0, 0, size, size)
-    return new THREE.CanvasTexture(canvas)
-  })
+  return {
+    Wood: wood,
+    Brass: brass,
+    JawCloth: jawCloth,
+    Leather: leather,
+    NetCord: new THREE.MeshStandardMaterial({
+      color: 0xf4f4f0,
+      roughness: 0.85,
+      metalness: 0,
+      side: THREE.DoubleSide
+    }),
+    DarkInterior: new THREE.MeshStandardMaterial({ color: 0x060606, roughness: 1, metalness: 0, envMapIntensity: 0 }),
+    Nameplate: new THREE.MeshPhysicalMaterial({
+      color: 0xf3f2ee,
+      roughness: 0.25,
+      metalness: 0,
+      clearcoat: 0.6,
+      clearcoatRoughness: 0.1,
+      envMapIntensity: 0.6
+    }),
+    Iron: new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.45, metalness: 0.8, envMapIntensity: 0.8 }),
+    Cloth: clothMat
+  }
 }
 
 /**
@@ -1314,6 +1016,9 @@ export class Scene3D implements VenueHost {
   private readonly aimLayout: ShotLineLayout = shotLineLayoutTarget()
   /** Scratch point for measuring a ribbon's distance to the lens, also reused per frame. */
   private readonly aimMeasure = new THREE.Vector3()
+  /** The object-ball and cue-ball lines' drawn lengths, eased towards what the cut asks for. */
+  private aimLength2 = AIM_LINE2_LENGTH
+  private aimLength3 = AIM_LINE3_LENGTH * 0.2
   private readonly aimDir = new THREE.Vector3()
   private stick!: THREE.Group
   /** The stick's soft shadow strip on the cloth, following its angle and pull-back. */
@@ -1356,6 +1061,43 @@ export class Scene3D implements VenueHost {
    */
   private latch: HeadingLatch = initialHeadingLatch()
   /**
+   * Whether the lens is down in the aim view, as opposed to on its way there.
+   *
+   * A pointer is cast through the live camera, so while the camera is still flying in from
+   * overhead or from a shot the same pixel sweeps across the whole table. Nothing should
+   * re-read the pointer as an aim until this is true.
+   */
+  private aimViewSettled = false
+  /** True once the surroundings have been put on their cheaper finish for this scene. */
+  private environmentLow = false
+  /** What each swapped mesh was wearing, so teardown can free the originals too. */
+  private readonly environmentOriginals: Array<[THREE.Mesh, THREE.Material]> = []
+  /**
+   * Whether the spectator view is up: the whole-table camera for somebody else's visit.
+   * Decided once a frame by `nextSpectating` from turn state this class is only shown.
+   */
+  private spectating = false
+  /** Seconds the table has been at rest, for the settle before the spectator view goes up. */
+  private restSeconds = 0
+  /** The timed move into or out of the spectator view. Never blocks input. */
+  private spectatorTransition: PlacementTransition = noPlacementTransition()
+  /** The fitted spectator pose and the canvas shape it was fitted for, so a resize refits. */
+  private spectatorFit: { aspect: number; pose: CameraPose } | null = null
+  /** Whose turn and whether a shot is replaying, as the game has it right now. */
+  private liveSeatKnown = false
+  private liveOpponentTurn = false
+  private liveReplay = false
+  /** Whether the shot being replayed was the opponent's. Latched when the replay starts. */
+  private replayByOpponent = false
+  /** The same two, as the table is currently showing them after any presentation delay. */
+  private shownMyTurn = false
+  /** The opponent's shot being wound up, as read off its recording, and its line on the cloth. */
+  private opponentShot: OpponentShot | null = null
+  private opponentLineReady = false
+  private readonly opponentLayout: ShotLineLayout = shotLineLayoutTarget()
+  private opponentRibbon!: THREE.Mesh
+  private opponentRing!: THREE.Mesh
+  /**
    * The venue's moving parts: the crowd, the applause, the banner and the opponent's cue.
    *
    * The only object in this file that owns anything outside the 3D scene, and the only one
@@ -1389,6 +1131,14 @@ export class Scene3D implements VenueHost {
    * a one-line check at build time is cheaper than ever rediscovering it by eye.
    */
   private feltTex: THREE.CanvasTexture | null = null
+  /**
+   * The Blender table the scene is built from, if the model was available when
+   * this scene was created. Null means the code-built table was used, which is
+   * also the signal for `selfCheck` to run its code-geometry guards.
+   */
+  private tableSource: THREE.Group | null = null
+  /** True when the model replaced the code-built cloth, cushions, frame and pockets. */
+  private usingTableModel = false
   /** Translucent disc shading the legal D area during break-off placement. */
   private dZoneFill!: THREE.Mesh
   /** Ghost cue ball the player moves while placing; hidden when not placing. */
@@ -1656,6 +1406,19 @@ export class Scene3D implements VenueHost {
     this.cvw = width
     this.cvh = height
     const onBuild = opts?.onBuildProgress
+    // The Blender table, if one is ready. An explicit `tableModel` (even null) wins
+    // over the boot preload, so a caller can force the code-built table; otherwise
+    // this is a synchronous read of the preload's result.
+    const explicitModel = opts?.tableModel
+    const readyModel = tableModelIfReady()
+    this.tableSource = explicitModel !== undefined ? explicitModel : readyModel
+    this.usingTableModel = this.tableSource !== null
+    console.info('[scene3d] table source decision', {
+      usingTableModel: this.usingTableModel,
+      explicitProvided: explicitModel !== undefined,
+      explicitWasNull: explicitModel === null,
+      preloadReady: readyModel !== null
+    })
     // The canvas backing store is already sized with the device pixel ratio by the
     // caller (capped at 1.5 in main.ts), so the renderer draws at one pixel per backing
     // pixel. AA is decided once from the device rather than asked for unconditionally:
@@ -1671,6 +1434,10 @@ export class Scene3D implements VenueHost {
     this.renderer.setSize(width, height, false)
     // One query, one clamp, shared by every texture built after this line.
     MAX_ANISO = Math.min(this.renderer.capabilities.getMaxAnisotropy(), tier.anisotropy)
+    // The table's procedural textures live in tableTextures.ts and are built on first
+    // use, so they read the cap from there; the local MAX_ANISO still drives the
+    // scene's own textures.
+    setTableAnisotropy(MAX_ANISO)
     this.renderer.shadowMap.enabled = true
     // PCFSoftShadowMap was deprecated in r186; PCFShadowMap with a radius is the
     // supported soft look, and the map is baked once so the filter costs per frame
@@ -1776,6 +1543,11 @@ export class Scene3D implements VenueHost {
     })
     if (clothReceives) problems.push('cloth is receiving depth-map shadows (shadow acne will return)')
 
+    // The guards below are all assertions about the *code-built* geometry — the 1mm
+    // cloth/apron gap, the rail cap's underside at y=-1 and each cushion's inner face
+    // on its physics plane. The model has its own geometry, so none of them apply;
+    // running them would only report the model as broken.
+    if (!this.usingTableModel) {
     // Depth-precision guard. The bed's tightest coplanar pair is the cloth plane at
     // y=0 and the apron box's top face at y=-1, a 1mm gap that spans the whole playing
     // surface. Assert the depth buffer can actually resolve it at the farthest the
@@ -1844,6 +1616,7 @@ export class Scene3D implements VenueHost {
       }
       if (side !== '1' && side !== '-1') problems.push(`${tag} has no valid side`)
     }
+    }
 
     const tex = this.feltTex
     if (tex) {
@@ -1863,7 +1636,17 @@ export class Scene3D implements VenueHost {
     // spotlights with 1024² maps — three shadow renders every frame for pools of light
     // that baked textures and contact blobs already supply — which is exactly the
     // overhead a low-end GPU does not have to spend.
-    const lamp = (this.lamp = new THREE.SpotLight(0xffd9a0, 6350000, 0, Math.PI / 4.8, 0.72, 2))
+    //
+    // The cone and the falloff are those of a snooker canopy rather than of a bulb. A
+    // real table light is a long diffuser the size of the bed, and the standard it is
+    // built to asks for even light across the whole cloth. The old lamp was a 37.5 degree
+    // cone with inverse-square falloff: the ends of the table sit 45 degrees off its
+    // axis, so they were outside the cone altogether, and what did reach the corners
+    // was under a third of the centre. The cone now takes in the corners with room to
+    // spare, and the light does not thin with distance, so the only falloff left is the
+    // cloth turning away from the lamp. The colour is a warm white where it was amber,
+    // which is what lets the green read as green.
+    const lamp = (this.lamp = new THREE.SpotLight(LAMP_COLOR, LAMP_INTENSITY, 0, LAMP_ANGLE, LAMP_PENUMBRA, 0))
     lamp.position.set(0, 1750, 0)
     lamp.target.position.set(0, 0, 0)
     lamp.castShadow = true
@@ -1942,7 +1725,118 @@ export class Scene3D implements VenueHost {
     this.scene.add(railSpec)
   }
 
+  /**
+   * The felt material, shared by the code-built bed and the model's Cloth mesh.
+   *
+   * Building it here rather than at the point of use is what lets both tables use
+   * the same texture instance: `selfCheck` finds the cloth by its map, and the
+   * model path in `buildTable` needs the material even though it builds no bed.
+   */
+  private makeClothMaterial(): THREE.MeshPhysicalMaterial {
+    const clothMat = new THREE.MeshPhysicalMaterial({
+      map: (this.feltTex = feltTexture()),
+      color: 0xffffff,
+      roughness: CLOTH_ROUGHNESS,
+      metalness: CLOTH_METALNESS,
+      sheen: CLOTH_SHEEN,
+      sheenColor: new THREE.Color(CLOTH_SHEEN_COLOR),
+      sheenRoughness: CLOTH_SHEEN_ROUGHNESS,
+      envMapIntensity: 0.12
+    })
+    // Cloth normal is the biggest sampling cost on the bed; low tier drops it.
+    if (qualityConfig().clothNormal) {
+      clothMat.normalMap = feltNormalTexture()
+      clothMat.normalScale = new THREE.Vector2(CLOTH_NORMAL_STRENGTH, CLOTH_NORMAL_STRENGTH)
+    }
+    return clothMat
+  }
+
+  /**
+   * A dark liner inside each modelled pocket, traced from the net's own outline.
+   *
+   * The Blender pockets are a visible jaali with nothing behind it, so from the playing
+   * camera the cloth floor shows through the weave and the "hole" reads as a hole in the
+   * table rather than a hole in the cloth. The model cannot be edited, so the fix is a
+   * second surface: for each pocket we read the NetCord vertices within 120mm of the
+   * pocket centre, bin them by height, and take the innermost radius per bin — that is the
+   * net's mouth profile. A lathe of that profile, 3mm inside the net, closes the pocket
+   * behind the weave while leaving the net itself visible over it. The six liners merge
+   * into a single draw call, and being MeshBasicMaterial with no lighting they cost
+   * nothing to shade and are guaranteed black whatever the lamps do.
+   */
+  private buildPocketLiners(group: THREE.Group): void {
+    const net = group.getObjectByName('table:NetCord') as THREE.Mesh | undefined
+    const pos = net?.geometry.getAttribute('position') as THREE.BufferAttribute | undefined
+    if (!pos) return
+    const BIN_MM = 6
+    const REACH_MM = 120
+    const INSET_MM = 3
+    const segments = qualityConfig().name === 'low' ? 20 : 32
+    const geoms: THREE.BufferGeometry[] = []
+    for (const p of POCKETS) {
+      const cx = p.x - HALF_L
+      const cz = -(p.y - HALF_W)
+      const bins = new Map<number, number>()
+      for (let i = 0; i < pos.count; i++) {
+        const dx = pos.getX(i) - cx
+        const dz = pos.getZ(i) - cz
+        const r = Math.hypot(dx, dz)
+        if (r > REACH_MM) continue
+        const bin = Math.round(pos.getY(i) / BIN_MM)
+        const prev = bins.get(bin)
+        if (prev === undefined || r < prev) bins.set(bin, r)
+      }
+      if (bins.size < 2) continue
+      const ys = [...bins.keys()].sort((a, b) => b - a) // top first (larger y)
+      const top = ys[0]!
+      const bottom = ys[ys.length - 1]!
+      const points: THREE.Vector2[] = []
+      // Start at the cloth plane (y=0) if the net hangs below it, so the liner meets the
+      // bed's cut edge with no gap.
+      const topY = Math.max(0, top * BIN_MM)
+      points.push(new THREE.Vector2(Math.max(0.5, bins.get(top)! - INSET_MM), topY))
+      for (const bin of ys) {
+        points.push(new THREE.Vector2(Math.max(0.5, bins.get(bin)! - INSET_MM), bin * BIN_MM))
+      }
+      // Cap the bottom so the liner is a closed cup.
+      points.push(new THREE.Vector2(0.01, bottom * BIN_MM - 2))
+      const lathe = new THREE.LatheGeometry(points, segments)
+      lathe.translate(cx, 0, cz)
+      geoms.push(lathe)
+    }
+    if (!geoms.length) return
+    const merged = mergeGeometries(geoms, false)
+    geoms.forEach((g) => g.dispose())
+    if (!merged) return
+    const liner = new THREE.Mesh(
+      merged,
+      new THREE.MeshBasicMaterial({ color: 0x050505, side: THREE.DoubleSide })
+    )
+    liner.name = 'pocket-liner'
+    liner.castShadow = false
+    liner.receiveShadow = false
+    liner.userData.physicsSurface = 'pocketLiner'
+    group.add(liner)
+  }
+
   private buildTable(): void {
+    const clothMat = this.makeClothMaterial()
+    if (this.tableSource) {
+      console.info('[scene3d] buildTable: Blender model branch (9 draw calls)')
+      // The Blender table brings its own bed, apron, rails, legs, cushions and
+      // pockets as nine merged meshes. Only the felt material is the game's, so
+      // the markings and cloth shading stay pixel-identical to the code bed.
+      const model = instantiateTableModel(this.tableSource, tableMaterials(clothMat), {
+        cloth: 'model',
+        cushionShading: true,
+        rotateShortRailWoodUV: true
+      })
+      this.scene.add(model)
+      // Pockets: the model's nets are see-through, so the floor shows behind them. A
+      // dark liner built from the net's own outline closes that off (see buildPocketLiners).
+      this.buildPocketLiners(model)
+    } else {
+    console.info('[scene3d] buildTable: code-built branch (no model ready)')
     const pad = APRON_PAD
     // The bed is a rectangle with a rounded notch bitten out of it at each pocket rather than
     // a plain plane. This is what lets the modelled bowl actually be seen: a solid plane has
@@ -2010,21 +1904,6 @@ export class Scene3D implements VenueHost {
         uv[i * 2 + 1] = (pos.getY(i) + TABLE_WIDTH / 2) / TABLE_WIDTH
       }
       bedGeo.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
-    }
-    const clothMat = new THREE.MeshPhysicalMaterial({
-      map: (this.feltTex = feltTexture()),
-      color: 0xffffff,
-      roughness: CLOTH_ROUGHNESS,
-      metalness: CLOTH_METALNESS,
-      sheen: CLOTH_SHEEN,
-      sheenColor: new THREE.Color(CLOTH_SHEEN_COLOR),
-      sheenRoughness: CLOTH_SHEEN_ROUGHNESS,
-      envMapIntensity: 0.12
-    })
-    // Cloth normal is the biggest sampling cost on the bed; low tier drops it.
-    if (qualityConfig().clothNormal) {
-      clothMat.normalMap = feltNormalTexture()
-      clothMat.normalScale = new THREE.Vector2(CLOTH_NORMAL_STRENGTH, CLOTH_NORMAL_STRENGTH)
     }
     const cloth = new THREE.Mesh(bedGeo, clothMat)
     cloth.rotation.x = -Math.PI / 2
@@ -3034,6 +2913,7 @@ const outerL = APRON_OUTER_L
         this.scene.add(stitches)
       }
     }
+    } // end code-built table
 
     // Dark floor, so the lit table is the subject of the picture.
     const floor = new THREE.Mesh(
@@ -3041,7 +2921,7 @@ const outerL = APRON_OUTER_L
       new THREE.MeshLambertMaterial({ color: new THREE.Color(ROOM_FLOOR_COLOR) })
     )
     floor.rotation.x = -Math.PI / 2
-    floor.position.y = -790
+    floor.position.y = -797
     floor.receiveShadow = true
     this.scene.add(floor)
 
@@ -3257,46 +3137,28 @@ const outerL = APRON_OUTER_L
     this.contactRing.renderOrder = 3
     this.scene.add(this.contactRing)
 
-    // A proper cue: ash shaft with lengthwise grain, maple butt section, a brass
-    // ferrule and a chalked blue tip. Geometry shares the stick's own axis (+y is
-    // toward the tip), so every part is positioned along it.
-    this.stick = new THREE.Group()
-    const shaftMat = new THREE.MeshPhysicalMaterial({
-      map: cueWoodTexture('cue-ash', { r: 214, g: 178, b: 122 }, 26),
-      roughness: 0.38,
-      metalness: 0.0,
-      clearcoat: 0.5,
-      clearcoatRoughness: 0.3
-    })
-    const buttMat = new THREE.MeshPhysicalMaterial({
-      map: cueWoodTexture('cue-maple', { r: 74, g: 44, b: 26 }, 16),
-      roughness: 0.34,
-      metalness: 0.0,
-      clearcoat: 0.5,
-      clearcoatRoughness: 0.3
-    })
-    const ferruleMat = new THREE.MeshStandardMaterial({ color: 0xd8b15c, roughness: 0.25, metalness: 0.9 })
-    const chalkMat = new THREE.MeshStandardMaterial({ color: STICK_TIP_COLOR, roughness: 0.95, metalness: 0.0 })
-    // Shaft: a proper taper, thin at the tip running out to the joint.
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(STICK_TIP_R, STICK_SHAFT_BUTT_R, 1200, 20), shaftMat)
-    shaft.position.y = 0
-    // Same rule as the balls: the stick moves, the shadow map does not.
-    shaft.castShadow = false
-    // Butt extension past the joint to reach ~CUE_LENGTH_MM total from tip end
-    const buttLen = Math.max(200, CUE_LENGTH_MM - 1200 - 30 - 14 - 10) // rough approx
-    const butt = new THREE.Mesh(new THREE.CylinderGeometry(STICK_SHAFT_BUTT_R, STICK_BUTT_END_R, 250, 20), buttMat)
-    butt.position.y = -598 - 125 // joint at -598, shaft ends at -600, butt extends below joint
-    butt.castShadow = false
-    // Brass ferrule at the tip end of the shaft.
-    const ferrule = new THREE.Mesh(new THREE.CylinderGeometry(5.4, 5.6, 30, 16), ferruleMat)
-    ferrule.position.y = 612
-    // Chalk-blue tip crowning the ferrule.
-    const tip = new THREE.Mesh(new THREE.CylinderGeometry(5.2, 5.4, 14, 16), chalkMat)
-    tip.position.y = 634
-    // A thin decorative ring where the two timbers meet.
-    const joint = new THREE.Mesh(new THREE.CylinderGeometry(STICK_SHAFT_BUTT_R + 0.2, STICK_SHAFT_BUTT_R + 0.2, 10, 20), ferruleMat)
-    joint.position.y = -598
-    this.stick.add(shaft, butt, ferrule, tip, joint)
+    // The opponent's line, for the spectator view: the same strip and the same ring as the
+    // player's own, on the same texture and the same ring geometry, dimmer and warm so it
+    // is never taken for a line the player is aiming.
+    this.opponentRibbon = this.buildRibbon(
+      ribbonTex,
+      SPECTATOR_CAM.aimLineColor,
+      SPECTATOR_CAM.aimLineOpacity,
+      AIM_RIBBON_Y + 0.3
+    )
+    const ringMat = (this.contactRing.material as THREE.MeshBasicMaterial).clone()
+    ringMat.color.setHex(SPECTATOR_CAM.aimLineColor)
+    ringMat.opacity = SPECTATOR_CAM.aimLineOpacity
+    this.opponentRing = new THREE.Mesh(this.contactRing.geometry, ringMat)
+    this.opponentRing.rotation.x = -Math.PI / 2
+    this.opponentRing.visible = false
+    this.opponentRing.renderOrder = 3
+    this.scene.add(this.opponentRing)
+
+    // The cue: the one build the opponent's stick uses too (see cueStick.ts). It is made
+    // along its own +y with the tip at the height this stick has always had it, so the
+    // placement in `showAim` is unchanged.
+    this.stick = buildCueStick().group
     this.stick.visible = false
     this.scene.add(this.stick)
 
@@ -3380,9 +3242,11 @@ const outerL = APRON_OUTER_L
       new THREE.MeshBasicMaterial({ color: 0xd9f5df, transparent: true, opacity: 0.8, depthWrite: false })
     )
     this.dZoneRing.rotation.x = -Math.PI / 2
-    this.dZoneRing.rotation.z = 0
-    // Torus arc runs 0..π counterclockwise from +x; rotated flat, that spans the
-    // half-circle on the baulk side once centred on the D's middle point.
+    // The torus arc runs 0..π counterclockwise from +x. Laid flat as it stands, that is a
+    // half-circle across the baulk line — half of it inside the D and half sticking out
+    // into the table. A quarter turn first puts both ends on the baulk line and the bow on
+    // the baulk side, which is the D.
+    this.dZoneRing.rotation.z = Math.PI / 2
     this.dZoneRing.position.set(tableX(BAULK_LINE_X), 1.2, tableZ(TABLE_WIDTH / 2))
     this.dZoneRing.renderOrder = 7
     this.dZoneRing.visible = false
@@ -3585,21 +3449,32 @@ const outerL = APRON_OUTER_L
    *
    * Separate from {@link applySnapshot} because it is the one part of an update that is
    * never held: while a presentation delay is running, the snapshot is late and the aim is
-   * not. While the player is free to aim, the heading follows the aim itself so the lens
-   * stays directly behind the cue ball on the shot line — gated to the half-plane the
-   * camera can see, so the drag-back that sets power cannot spin it. While a shot is on
-   * screen the heading is latched to the line that shot was played along, which is the
-   * view the tracking camera holds.
+   * not. While a shot is on screen the heading is latched to the line that shot was played
+   * along, which is the view the tracking camera holds. Between shots the heading follows
+   * the aim instead, but that is eased over time and so belongs to {@link stepCamera},
+   * which has the frame's `dt`.
    */
   private captureAim(options: RenderOptions): void {
     if (!options.aim) return
     this.lastAimAngle = options.aim.angle
-    this.latch = this.tracking
-      ? stepHeadingLatch(this.latch, this.lastAimAngle, true)
-      : followHeadingLatch(this.latch, this.lastAimAngle)
+    if (this.tracking) this.latch = stepHeadingLatch(this.latch, this.lastAimAngle, true)
   }
 
   update(snapshot: FrameSnapshotData | null, options: RenderOptions = {}): void {
+    // Read, never written: whose visit it is and whether a shot is on screen, as the game
+    // has them this frame. The spectator view goes up on these.
+    const replaying = options.immediate === true
+    // A replay is starting on this frame. Whose visit it was on the frame before is who
+    // played it; the snapshot arriving with it may already name the other player.
+    if (replaying && !this.liveReplay) this.replayByOpponent = this.liveOpponentTurn
+    this.liveSeatKnown = snapshot !== null && options.youSeat !== undefined
+    this.liveOpponentTurn = this.liveSeatKnown && snapshot!.turnIndex !== options.youSeat
+    this.liveReplay = replaying
+    if (SPECTATOR_CAM.enabled && snapshot && options.youSeat !== undefined) {
+      // The venue cannot show an opponent's cue without knowing which seat is the
+      // opponent's, and it does not always hear that for itself. Does nothing once it knows.
+      this.venue?.setSeat(options.youSeat, snapshot.turnIndex)
+    }
     // While the room is taking its presentation beat, a snapshot is not dropped and not
     // applied: it joins the back of the queue and is shown when its turn comes. The
     // snapshot the game actually has is never altered, so what the player is looking at is
@@ -3608,6 +3483,21 @@ const outerL = APRON_OUTER_L
     // The gate stays shut while the queue still has work, not just while the hold runs:
     // otherwise a snapshot arriving the instant the hold expires would leapfrog the one
     // still waiting, and the table would draw its own history out of order.
+    if (
+      SPECTATOR_CAM.enabled &&
+      this.presentationLeft <= 0 &&
+      this.presentationQueue.length > 0 &&
+      options.immediate !== true &&
+      !this.presentationQueue.some((item) => item.options.immediate === true)
+    ) {
+      // The hold is over and everything still waiting is a table at rest, so there is
+      // nothing left to show late: the queue is dropped and the table is live again.
+      // Without this the gate below never reopens — each frame queues one snapshot and
+      // releases one — and the whole match is drawn a turn-delay behind from the first
+      // banner onwards, the player's own aim line included. A replay still in the queue
+      // is left to play out, so no moving ball is ever skipped.
+      this.presentationQueue.length = 0
+    }
     if (this.presentationLeft > 0 || this.presentationQueue.length > 0) {
       // The aim heading is taken straight through rather than queued. The table is late on
       // purpose; the player's own drag across the cue ball is not, and on the frame a turn
@@ -3631,6 +3521,9 @@ const outerL = APRON_OUTER_L
     // Kept for the camera, which moves on its own clock in `render` rather than in here:
     // the balls it follows and the heading it turns to are both read from here.
     this.lastSnapshot = snapshot
+    // The same question as above, asked of the table that is actually being shown, which
+    // is the late one while a turn presentation runs. The spectator view comes down on it.
+    this.shownMyTurn = snapshot !== null && options.youSeat !== undefined && snapshot.turnIndex === options.youSeat
     this.captureAim(options)
     if (!snapshot) {
       for (const rig of this.balls.values()) rig.setVisible(false)
@@ -3854,13 +3747,22 @@ const outerL = APRON_OUTER_L
    * wherever the shot line put it.
    */
   private showContactMarker(guide: AimGuide): void {
+    // How full the contact is. Dead straight, the object ball takes all the pace and the
+    // cue ball stops; the thinner the cut, the less the object ball gets and the further
+    // the cue ball runs on. The two lines are drawn to those shares, eased so they grow
+    // and shrink as the aim sweeps across the ball instead of snapping.
+    const fullness = Math.max(0, Math.min(1, Math.cos(this.lastAimAngle) * guide.lineOfCentres.x + Math.sin(this.lastAimAngle) * guide.lineOfCentres.y))
+    const want2 = AIM_LINE2_LENGTH * (AIM_LINE_MIN_SHARE + (1 - AIM_LINE_MIN_SHARE) * fullness)
+    const want3 = AIM_LINE3_LENGTH * (AIM_LINE_MIN_SHARE + (1 - AIM_LINE_MIN_SHARE) * Math.sqrt(1 - fullness * fullness))
+    this.aimLength2 += (want2 - this.aimLength2) * AIM_LINE_EASE
+    this.aimLength3 += (want3 - this.aimLength3) * AIM_LINE_EASE
     // LINE 2: the object ball's line, starting at the object ball surface along the line of centres.
     this.setRibbon(
       this.aimRibbon2,
       tableX(guide.contact.x + guide.lineOfCentres.x * (2 * BALL_RADIUS)),
       tableZ(guide.contact.y + guide.lineOfCentres.y * (2 * BALL_RADIUS)),
        Math.atan2(guide.lineOfCentres.y, guide.lineOfCentres.x),
-      AIM_LINE2_LENGTH,
+      this.aimLength2,
       1
     )
 
@@ -3879,7 +3781,7 @@ const outerL = APRON_OUTER_L
           tableX(first.from.x + tx * BALL_RADIUS),
           tableZ(first.from.y + ty * BALL_RADIUS),
           Math.atan2(ty, tx),
-          AIM_LINE3_LENGTH,
+          this.aimLength3,
           1
         )
         return
@@ -3926,7 +3828,20 @@ const outerL = APRON_OUTER_L
    * right- or middle-button drag, never a hovering pointer.
    */
   orbitBy(delta: number): void {
+    // The spectator view is a fixed television shot: a drag while it is up turns nothing,
+    // and is not saved up to swing the aim view when it comes back.
+    if (this.spectating) return
     this.latch = addOrbit(this.latch, delta)
+  }
+
+  /**
+   * Whether the camera has arrived in the aim view and is only panning, not flying.
+   *
+   * The cue controller asks this before it re-reads a resting pointer as an aim: the
+   * answer to "what is under this pixel" is only steady once the lens is down.
+   */
+  isAimViewSettled(): boolean {
+    return this.aimViewSettled
   }
 
   /** The view the camera is being asked for, for the toggle to reflect. */
@@ -4032,6 +3947,7 @@ const outerL = APRON_OUTER_L
         spread = Math.max(spread, Math.hypot(ball.x - midX, ball.y - midY))
       }
     }
+    this.stepSpectator(cue, dt)
     // A placement camera move, if one is in flight, owns the pose outright: it is a
     // timed interpolation between two known endpoints, so the rig is stepped with the
     // interpolated pose rather than being asked for a mode. Running both would have two
@@ -4053,11 +3969,28 @@ const outerL = APRON_OUTER_L
         this.placementArrival = null
         if (arrived) arrived()
       }
+      this.aimViewSettled = false
+    } else if (this.spectatorTransition.active) {
+      // Flying into the spectator view or back out of it: the same timed move a placement
+      // uses, in its own slot so it never raises the flag that refuses input.
+      const stepped = stepSpectatorTransition(this.spectatorTransition, dt)
+      this.spectatorTransition = stepped.transition
+      this.rig = { pose: stepped.pose, yaw: this.rig.yaw }
+      this.aimViewSettled = false
+    } else if (this.spectating) {
+      // Held. Read through the fit each frame so a resize or a turned phone refits it.
+      this.rig = { pose: this.spectatorPose(), yaw: this.rig.yaw }
+      this.aimViewSettled = false
     } else {
+      const mode = this.tracking ? 'TRACK' : this.placementViewHeld ? 'PLACEMENT_TOP_DOWN' : this.cameraMode
+      // While the player is free to aim, the heading pans after an aim that has swung
+      // out of the band in front of the lens — gated to the half-plane the camera can
+      // see, so the drag-back that sets power cannot spin it.
+      if (!this.tracking) this.latch = followHeadingLatch(this.latch, this.lastAimAngle, dt)
       this.rig = stepCameraRig(
         this.rig,
         {
-          mode: this.tracking ? 'TRACK' : this.placementViewHeld ? 'PLACEMENT_TOP_DOWN' : this.cameraMode,
+          mode,
           aspect: this.cvw / Math.max(1, this.cvh),
           cue,
           aimAngle: this.lastAimAngle,
@@ -4066,6 +3999,10 @@ const outerL = APRON_OUTER_L
         },
         dt
       )
+      this.aimViewSettled =
+        mode === 'AIM' &&
+        cue !== null &&
+        Math.abs(this.rig.pose.height - aimPose(cue, this.rig.yaw).height) < AIM_SETTLED_HEIGHT_MM
     }
     const pose = this.rig.pose
     this.camera.position.set(tableX(pose.x), pose.height, tableZ(pose.y))
@@ -4074,6 +4011,212 @@ const outerL = APRON_OUTER_L
       this.camera.fov = pose.fov
       this.camera.updateProjectionMatrix()
     }
+  }
+
+  /**
+   * Gives the surroundings a cheaper finish, and says whether it just did.
+   *
+   * What a frame costs here is very nearly the number of pixels shaded times what each
+   * one costs, and the arena behind the table covers a great many pixels with a full
+   * physically-based material under nine lights. Swapping those materials for unlit ones
+   * takes a third or more off the frame while the picture barely changes, because the
+   * room is a dim backdrop to begin with. The table's legs get a simple lit finish for
+   * the same reason. The balls, the cloth, the cushions, the rails and the pockets — the
+   * things a player is looking at — are not touched: this is the first thing to give when
+   * frames are short, so that their resolution does not have to.
+   *
+   * Returns true when it lowered the detail, false when it was already low, so a caller
+   * knows whether there was anything here to give.
+   */
+  lowerEnvironmentDetail(): boolean {
+    if (this.environmentLow) return false
+    this.environmentLow = true
+    const cheap = new Map<THREE.Material, THREE.Material>()
+    const swap = (
+      root: THREE.Object3D,
+      make: (from: THREE.MeshStandardMaterial, mesh: THREE.Mesh) => THREE.Material
+    ): void => {
+      // The opponent's cue hangs off the arena group too. It is part of the play, not of
+      // the room, so the walk steps over it.
+      if (root.name === 'opponent-cue') return
+      for (const child of root.children) swap(child, make)
+      const mesh = root as THREE.Mesh
+      if (!mesh.isMesh || Array.isArray(mesh.material)) return
+      const from = mesh.material as THREE.MeshStandardMaterial
+      if (!from.isMeshStandardMaterial) return
+      let to = cheap.get(from)
+      if (!to) {
+        to = make(from, mesh)
+        cheap.set(from, to)
+      }
+      this.environmentOriginals.push([mesh, from])
+      mesh.material = to
+    }
+    if (this.venueGroup) {
+      swap(this.venueGroup, (from, mesh) => {
+        // The carpet is the one part of the room that has to stay lit: it is where the
+        // lamp's pool falls and where the table's shadow lands, and a table over a flat
+        // floor floats. A plain diffuse finish keeps both for a fraction of the cost.
+        const carpet =
+          mesh.geometry.type === 'CircleGeometry' && Math.abs(mesh.position.y - ARENA_CONFIG.carpetY) < 1
+        if (carpet) return new THREE.MeshLambertMaterial({ color: from.color.clone(), map: from.map, side: from.side })
+        // Everything else is unlit, at about the brightness the room's dim lighting left it.
+        return new THREE.MeshBasicMaterial({
+          color: from.color.clone().multiplyScalar(ENVIRONMENT_UNLIT_LEVEL),
+          map: from.map,
+          side: from.side,
+          transparent: from.transparent,
+          opacity: from.opacity
+        })
+      })
+    }
+    // The washes that light the stands have nothing left to light once the stands are
+    // unlit, but every lit pixel on the table and the balls still pays for each of them.
+    // Switching them off is the other half of what this mode saves.
+    if (this.venueGroup) {
+      this.venueGroup.traverse((obj) => {
+        if ((obj as THREE.DirectionalLight).isDirectionalLight) obj.visible = false
+      })
+    }
+    // Those washes also spilled a little onto the table. The ambient light is lifted by
+    // about what they gave it, so the table is as bright in this mode as it was.
+    this.scene.traverse((obj) => {
+      const ambient = obj as THREE.AmbientLight
+      if (ambient.isAmbientLight) ambient.intensity *= ENVIRONMENT_LOW_AMBIENT_LIFT
+    })
+
+    this.scene.traverse((obj) => {
+      if (!obj.name.endsWith(TABLE_LEGS_SUFFIX)) return
+      swap(obj, (from) => new THREE.MeshLambertMaterial({ color: from.color.clone(), map: from.map, side: from.side }))
+    })
+    return true
+  }
+
+  /** Whether the surroundings are on their cheaper finish. */
+  isEnvironmentDetailLow(): boolean {
+    return this.environmentLow
+  }
+
+  /** The spectator pose for the canvas as it is now, refitted only when its shape changes. */
+  private spectatorPose(): CameraPose {
+    const aspect = this.cvw / Math.max(1, this.cvh)
+    if (!this.spectatorFit || this.spectatorFit.aspect !== aspect) {
+      this.spectatorFit = { aspect, pose: fitSpectatorCamera(aspect).pose }
+    }
+    return this.spectatorFit.pose
+  }
+
+  /**
+   * Decides whether the spectator view is up this frame, and starts the move when that
+   * changes.
+   *
+   * Runs after the venue has been stepped, so a turn presentation that opened this frame
+   * is already holding the table by the time the question is asked. A move always starts
+   * from wherever the lens is at that moment, including partway through the opposite move,
+   * which is what makes a turn that changes mid-flight a change of direction and not a cut.
+   */
+  private stepSpectator(cue: { x: number; y: number } | null, dt: number): void {
+    // How long the table has been standing still, on both clocks: the live game and the
+    // picture being shown. The view only goes up once that has lasted long enough for the
+    // player to have seen where their shot finished.
+    this.restSeconds = this.liveReplay || this.immediate ? 0 : this.restSeconds + dt
+    const placementActive = this.placementViewHeld || this.placementTransition.active
+    const next = nextSpectating(this.spectating, {
+      enabled: SPECTATOR_CAM.enabled,
+      seatKnown: this.liveSeatKnown,
+      liveOpponentTurn: this.liveOpponentTurn,
+      liveReplay: this.liveReplay,
+      replayByOpponent: this.replayByOpponent,
+      settled: this.restSeconds >= SPECTATOR_CAM.settleSeconds,
+      shownMyTurn: this.shownMyTurn,
+      presentationHeld: this.presentationLeft > 0 || this.presentationQueue.length > 0,
+      placementActive
+    })
+    if (next === this.spectating) return
+    this.spectating = next
+    this.venue?.setSpectator(next, SPECTATOR_CAM.cueThicknessScale, SPECTATOR_CAM.cueAimSeconds)
+    if (next) {
+      this.spectatorTransition = beginSpectatorTransition(this.rig.pose, this.spectatorPose(), SPECTATOR_CAM.enterSeconds)
+      return
+    }
+    if (placementActive) {
+      // The player's own ball-in-hand view is taking the camera. It flies from wherever
+      // the lens is, so this one simply lets go.
+      this.spectatorTransition = noPlacementTransition()
+      return
+    }
+    // Back to the view the player had picked, square on its own heading. The rig's eased
+    // heading is put there too, so it does not swing round after the move has landed.
+    const yaw = latchedCameraYaw(this.latch)
+    this.rig = { pose: this.rig.pose, yaw }
+    this.spectatorTransition = beginSpectatorTransition(
+      this.rig.pose,
+      resolveCameraTarget({
+        mode: this.cameraMode,
+        aspect: this.cvw / Math.max(1, this.cvh),
+        cue,
+        aimAngle: yaw,
+        latch: this.latch,
+        focus: null
+      }),
+      SPECTATOR_CAM.exitSeconds
+    )
+  }
+
+  /**
+   * Keeps the opponent's cue at the table for the whole of their visit, in the spectator
+   * view: from the moment the turn is theirs and the balls are at rest, the cue stands
+   * behind the cue ball, so the visit has somebody playing it before the shot arrives.
+   * Taken away the moment the table is no longer theirs to address.
+   */
+  private stepOpponentAddress(): void {
+    if (!SPECTATOR_CAM.enabled || !this.venue) return
+    const snapshot = this.lastSnapshot
+    let cue: { x: number; y: number } | null = null
+    if (snapshot && this.spectating && this.liveOpponentTurn && !this.liveReplay && !this.immediate) {
+      if (snapshot.cueInHand !== true) {
+        for (const ball of snapshot.balls) {
+          if (ball.id === BALL_IDS.CUE && !ball.potted) cue = ball
+        }
+      }
+    }
+    if (!snapshot || !cue) {
+      this.venue.stopAddressingCue()
+      return
+    }
+    this.venue.addressCue(cue.x, cue.y, addressHeading(cue, snapshot.balls, snapshot.ballOn))
+  }
+
+  /**
+   * Draws the opponent's line while their cue is coming up and drawing back, in the
+   * spectator view only.
+   *
+   * From the cue ball along the heading read off the recording of their shot, to the ghost
+   * ball or the cushion — the same layout the player's own line uses, worked out once per
+   * shot against the table as it is being shown and then only re-laid for the lens.
+   */
+  private stepOpponentLine(): void {
+    const shot = this.opponentShot
+    const balls = this.lastSnapshot?.balls
+    if (!shot || !balls || !this.spectating || !(this.venue?.cueWinding() ?? false)) {
+      this.opponentRibbon.visible = false
+      this.opponentRing.visible = false
+      return
+    }
+    const layout = this.opponentLayout
+    if (!this.opponentLineReady) {
+      const guide = computeAimGuide({ x: shot.x, y: shot.y, id: 0 }, shot.angle, balls)
+      shotLineLayout(shot, shot.angle, guide, layout)
+      this.opponentLineReady = true
+    }
+    if (layout.length <= 1) {
+      this.opponentRibbon.visible = false
+      this.opponentRing.visible = false
+      return
+    }
+    this.setRibbon(this.opponentRibbon, tableX(layout.from.x), tableZ(layout.from.y), layout.angle, layout.length)
+    this.opponentRing.position.set(tableX(layout.to.x), AIM_RING_Y, tableZ(layout.to.y))
+    this.opponentRing.visible = true
   }
 
   /**
@@ -4120,6 +4263,25 @@ const outerL = APRON_OUTER_L
    */
   showOpponentCue(shot: OpponentShot): void {
     const preRoll = this.venue?.cuePreRoll() ?? 0
+    if (SPECTATOR_CAM.enabled) {
+      // The replay this cue belongs to is started late by the game itself, by exactly
+      // `opponentShotPreRoll`, so the picture, the sounds and the score all wait for the
+      // strike together. Nothing is held back here.
+      //
+      // The recording's first sample is the cue ball a tick after it was struck, already
+      // a few centimetres down the line, so a cue placed against it would stand with its
+      // tip inside the ball that is actually on the table. The ball as it is being drawn
+      // is where the cue goes.
+      let at: { x: number; y: number } = shot
+      for (const ball of this.lastSnapshot?.balls ?? NO_BALLS) {
+        if (ball.id === BALL_IDS.CUE && !ball.potted) at = ball
+      }
+      const placed = { x: at.x, y: at.y, angle: shot.angle, power: shot.power }
+      this.opponentShot = placed
+      this.opponentLineReady = false
+      this.venue?.showCue(placed)
+      return
+    }
     const elapsed = this.presentationClock - this.holdStartedAt
     const extra = preRoll - elapsed
     if (extra > 0 && this.presentationQueue.length > 0) {
@@ -4127,7 +4289,30 @@ const outerL = APRON_OUTER_L
       this.presentationDelay += extra
       this.presentationLeft = Math.max(this.presentationLeft, extra)
     }
+    this.opponentShot = { x: shot.x, y: shot.y, angle: shot.angle, power: shot.power }
+    this.opponentLineReady = false
     this.venue?.showCue(shot)
+  }
+
+  /**
+   * How long the game should wait before it starts replaying an opponent's shot, in
+   * seconds: the length of the cue's wind-up, so the cue comes up, lines up, draws back
+   * and strikes, and the balls move as it does.
+   *
+   * Zero when there is no wind-up to wait for — the feature is off, or the recording does
+   * not say where the shot was played from — so a shot is never held up for a cue that is
+   * not going to appear.
+   */
+  opponentShotPreRoll(playback: ShotPlayback | undefined): number {
+    if (!SPECTATOR_CAM.enabled || !this.venue) return 0
+    if (!readOpponentShot(playback)) return 0
+    // A quick opponent can play before the view has gone up. It goes up on the next frame
+    // for their shot, so the cue is dressed for it now: the wind-up being timed here has
+    // to be the one that is about to be shown.
+    if (!this.spectating) {
+      this.venue.setSpectator(true, SPECTATOR_CAM.cueThicknessScale, SPECTATOR_CAM.cueAimSeconds)
+    }
+    return this.venue.cuePreRoll()
   }
 
   /**
@@ -4141,6 +4326,7 @@ const outerL = APRON_OUTER_L
     this.presentationLeft = 0
     this.presentationDelay = 0
     this.presentationQueue.length = 0
+    this.opponentShot = null
     this.venue?.hideCue()
   }
 
@@ -4214,6 +4400,9 @@ const outerL = APRON_OUTER_L
     // The camera eases after the balls have been moved, so the frame that goes to the
     // screen is the one the rig has just settled towards rather than the one before.
     this.stepCamera(dt)
+    this.stepOpponentAddress()
+    // After the camera, because the line's width is measured from where the lens now is.
+    this.stepOpponentLine()
     // The stick's shadow fades with the stick rather than cutting out with it.
     if (this.stickShadow) {
       this.stickShadowAlpha +=
@@ -4268,6 +4457,10 @@ const outerL = APRON_OUTER_L
   dispose(): void {
     this.venue?.dispose()
     this.venue = null
+    // The materials the cheap finish replaced are no longer on any mesh, so the sweep
+    // below would miss them.
+    for (const [, material] of this.environmentOriginals) material.dispose()
+    this.environmentOriginals.length = 0
     this.renderer.dispose()
     this.scene.traverse((obj) => {
       const mesh = obj as THREE.Mesh
@@ -4279,5 +4472,8 @@ const outerL = APRON_OUTER_L
     for (const rig of this.balls.values()) rig.dispose()
     this.balls.clear()
     this.wasPotted.clear()
+    // The table's procedural maps are cached across matches; a scene teardown is the
+    // one point where they must go, or a rebuild re-tags textures the GPU has dropped.
+    disposeTableTextures()
   }
 }

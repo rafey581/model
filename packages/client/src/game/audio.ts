@@ -98,3 +98,16 @@ export function playMatchEnd(): void {
   blip(392.0, 0.2, 'triangle', 0.16, 0.24)
   blip(523.25, 0.32, 'triangle', 0.16, 0.36)
 }
+/**
+ * The context this module's sounds play on, for the procedural sound effects in `src/sfx/`
+ * to share rather than make another. Same rules as every sound here: created on first
+ * use, resumed if the browser had it suspended, null where there is no Web Audio.
+ */
+export function sharedAudioContext(): AudioContext | null {
+  return ensure()
+}
+
+// Starts the procedural sound effects if their flag or `?sfxdebug=1` asks for them, and
+// does nothing otherwise. Loaded on the side so that nothing in it can hold up, or break,
+// the module the game's existing sounds live in.
+if (typeof window !== 'undefined') void import('../sfx/boot.js').catch(() => undefined)

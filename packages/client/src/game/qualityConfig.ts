@@ -8,8 +8,8 @@
  *
  * The tier is resolved once, in this order:
  *   1. `<html data-quality="...">` — set by `public/quality-boot.js` before any module
- *      loads, and the only place `?quality=` is interpreted. Reading it first is what
- *      keeps the 3D scene and the CSS on the same tier.
+ *      loads from `?quality=`, then the player's saved Settings choice, then the device
+ *      guess. Reading it first is what keeps the 3D scene and the CSS on the same tier.
  *   2. `?quality=low|medium|high` directly, in case the page was loaded without the boot
  *      script (a test harness, a bundled preview).
  *   3. The device guess below.
@@ -102,6 +102,7 @@ export function isQualityTier(value: unknown): value is QualityTier {
  *   - phone-sized screen with dpr >= 2 ..... low   (webviews and small windows)
  *   - hardwareConcurrency <= 4 or
  *     deviceMemory <= 4 .................... medium
+ *   - integrated or software GPU ........... medium  (cores say nothing about fill rate)
  *   - dpr >= 2.5 on a <= 6-core or
  *     <= 6GB device ....................... medium  (many pixels on a weak GPU)
  *   - otherwise ............................ high
@@ -121,8 +122,42 @@ export function detectQualityTier(): QualityTier {
   if (mobileUA) return 'low'
   if (smallScreen && dpr >= 2) return 'low'
   if (cores <= 4 || mem <= 4) return 'medium'
+  if (hasWeakGpu()) return 'medium'
   if (dpr >= 2.5 && (cores <= 6 || mem <= 6)) return 'medium'
   return 'high'
+}
+
+/**
+ * GPUs that cannot afford the high tier's MSAA at full resolution, by the name WebGL gives
+ * them: Intel's integrated chips (Arc is the discrete line and is left alone), AMD's
+ * integrated Radeon and Vega, and the software rasterisers. Mirrored in
+ * `public/quality-boot.js`.
+ */
+let weakGpu: boolean | null = null
+const WEAK_GPU = /Intel(?!.*Arc)|Radeon\(TM\) Graphics|Radeon.*Vega|SwiftShader|llvmpipe|Basic Render/i
+
+/**
+ * Whether the GPU is one of the {@link WEAK_GPU} family.
+ *
+ * Eight cores and eight gigabytes describe a great many laptops whose only GPU is the one
+ * built into the processor, and nothing else in the ladder can tell those from a machine
+ * with a graphics card. The renderer string can. False when the browser will not say.
+ */
+function hasWeakGpu(): boolean {
+  if (weakGpu !== null) return weakGpu
+  weakGpu = false
+  try {
+    if (typeof document === 'undefined') return false
+    const gl = document.createElement('canvas').getContext('webgl')
+    if (!gl) return false
+    const info = gl.getExtension('WEBGL_debug_renderer_info')
+    const name = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) ?? '')
+    gl.getExtension('WEBGL_lose_context')?.loseContext()
+    weakGpu = WEAK_GPU.test(name)
+  } catch {
+    // No WebGL to ask. The rest of the ladder decides.
+  }
+  return weakGpu
 }
 
 /**
@@ -148,6 +183,44 @@ export function requestedQualityTier(): QualityTier | null {
 /** The tier this session runs at: what was requested by name, or the device guess. */
 export function resolveQualityTier(): QualityTier {
   return requestedQualityTier() ?? detectQualityTier()
+}
+
+/** What the player asked for in Settings: a tier by name, or leave it to the device. */
+export type QualityPreference = 'auto' | QualityTier
+
+/** Where the Settings choice is kept. Read by `public/quality-boot.js` before any module. */
+export const QUALITY_STORAGE_KEY = 'snooker.quality'
+
+/** The player's saved choice. `auto` when they have never chosen, or storage is refused. */
+export function qualityPreference(): QualityPreference {
+  try {
+    const stored = globalThis.localStorage?.getItem(QUALITY_STORAGE_KEY)
+    return isQualityTier(stored) ? stored : 'auto'
+  } catch {
+    return 'auto'
+  }
+}
+
+/**
+ * Saves the player's choice and puts it into effect for the next match.
+ *
+ * Three things have to agree, and this is the one place that moves all of them: the saved
+ * choice, `<html data-quality>` (which the CSS tier rules and the arena read), and the
+ * cached tier config. A match that is already on screen keeps the tier it was built with
+ * — a scene's shadow map, textures and anti-aliasing are decided when it is built — so the
+ * change is seen from the next match on. Returns the tier now in effect.
+ */
+export function setQualityPreference(preference: QualityPreference): QualityTier {
+  try {
+    if (preference === 'auto') globalThis.localStorage?.removeItem(QUALITY_STORAGE_KEY)
+    else globalThis.localStorage?.setItem(QUALITY_STORAGE_KEY, preference)
+  } catch {
+    // Storage refused: the choice still holds for this page, it just is not remembered.
+  }
+  const tier = preference === 'auto' ? detectQualityTier() : preference
+  if (typeof document !== 'undefined') document.documentElement.dataset.quality = tier
+  resolved = QUALITY_TIERS[tier]
+  return tier
 }
 
 /** The tier one step down, or null at the bottom. Used by the adaptive scaler once. */

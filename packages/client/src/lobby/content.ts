@@ -67,7 +67,16 @@ export const SETTINGS_COPY = {
   eyebrow: 'preferences',
   headline: 'SETTINGS',
   soundLabel: 'Table sounds',
-  soundHint: 'Pots, cushions, fouls, and crowd cues share one mute.'
+  soundHint: 'Pots, cushions, fouls, and crowd cues share one mute.',
+  qualityLabel: 'Graphics quality',
+  qualityHint: 'Auto picks for this device and adjusts while you play. A fixed level stays exactly as chosen.',
+  qualityApplied: 'Applies from your next match.',
+  qualityOptions: [
+    { value: 'auto', label: 'Auto', hint: 'Recommended' },
+    { value: 'low', label: 'Low', hint: 'Fastest' },
+    { value: 'medium', label: 'Medium', hint: 'Balanced' },
+    { value: 'high', label: 'High', hint: 'Sharpest' }
+  ]
 } as const
 
 export interface NumberedSection {

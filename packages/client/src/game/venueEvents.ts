@@ -7,9 +7,12 @@ import { buildAudience, type Audience } from './audience.js'
 import { buildCrowdAudio, type CrowdAudio } from './crowdAudio.js'
 import { buildTurnBanner, type TurnBanner } from './turnBanner.js'
 import { buildOpponentCue, type OpponentCue, type OpponentShot } from './opponentCue.js'
+import { buildOpponentPowerMeter, type OpponentPowerMeter } from './opponentPowerMeter.js'
 import type { ArenaSeatPlacement } from './arenaEnvironment.js'
 import { VENUE_CONFIG, type VenueConfig } from './venueConfig.js'
 import { qualityConfig } from './qualityConfig.js'
+import { SPECTATOR_CAM } from './spectatorCamera.js'
+import { emitSfx } from '../sfx/sfxEvents.js'
 
 /**
  * The venue's reactions: who is in the crowd, who is at the table, and what the room did.
@@ -66,6 +69,27 @@ export interface VenueEvents {
   cuePreRoll(): number
   /** Takes it down. */
   hideCue(): void
+  /** True while the opponent's cue is lining up or drawing back, before it strikes. */
+  cueWinding(): boolean
+  /** Stands the opponent's cue at the cue ball, before their shot is known. Table coordinates. */
+  addressCue(x: number, y: number, angle: number): void
+  /** Takes an addressing cue away; a shot being played is left alone. */
+  stopAddressingCue(): void
+  /**
+   * Tells the venue the spectator view is up or down. While it is up the cue is drawn
+   * `cueThickness` times as thick, lines up for `cueAimSeconds`, and its power is shown on
+   * a meter at the screen's edge.
+   */
+  setSpectator(on: boolean, cueThickness: number, cueAimSeconds: number): void
+  /**
+   * Tells the venue which seat this player is in, and whose turn the table is showing.
+   *
+   * The venue normally learns the seat from `match:joined`, but it only starts listening
+   * on its first frame, and on a fresh match that message has usually already gone by —
+   * which left it with no seat, and so with no banner and no opponent's cue for the whole
+   * match. The scene is handed the seat with every snapshot, so it passes it on.
+   */
+  setSeat(seat: number, turnIndex: number): void
   dispose(): void
 }
 
@@ -175,6 +199,8 @@ export function buildVenueEvents(host: VenueHost, config: VenueConfig = VENUE_CO
   const audio: CrowdAudio = buildCrowdAudio(config)
   const banner: TurnBanner = buildTurnBanner(config)
   const cue: OpponentCue = buildOpponentCue(config)
+  const meter: OpponentPowerMeter = buildOpponentPowerMeter()
+  let spectator = false
 
   host.venueGroup.add(audience.group, cue.group)
 
@@ -259,13 +285,19 @@ export function buildVenueEvents(host: VenueHost, config: VenueConfig = VENUE_CO
         const drop = Math.max(...playback.pots.map(([, at]) => at)) / SHOT_PLAYBACK_SPEED
         clapAt = drop
       }
+      const clapBase = clapAt
       // Only ever the opponent's: "my own shot is one I aimed" is read off who shot,
       // which is the turn before this update — not the turn it lands on, which on a foul
       // or a miss has already flipped to the opponent and would wrongly put the
       // opponent's cue over my own replay.
       if (seatKnown() && previousTurn !== undefined && previousTurn !== mySeat) {
         const read = readOpponentShot(playback)
-        if (read) host.showOpponentCue({ x: read.x, y: read.y, angle: read.angle, power: read.power })
+        if (read) {
+          host.showOpponentCue({ x: read.x, y: read.y, angle: read.angle, power: read.power })
+          // In the spectator view the replay is held back until the cue has struck, so the
+          // applause for a pot in it waits the same time and still lands with the ball.
+          if (spectator && playback.pots.length) clapAt = clapBase + cue.preRoll()
+        }
       }
     }
   }
@@ -275,10 +307,15 @@ export function buildVenueEvents(host: VenueHost, config: VenueConfig = VENUE_CO
     if (!seatKnown()) return
     const mine = turn === mySeat
     banner.flash(mine)
+    // A small tick with the announcement. Goes nowhere unless the new sounds are on.
+    emitSfx({ type: 'aux', sound: 'turnTick' })
     // The room is given its beat either way. On the player's turn there is nothing to see
     // but a settled table, so the beat is only the banner; on the opponent's it is the cue
     // coming up behind the ball.
-    host.beginPresentation(config.turnDelaySeconds)
+    // With the spectator view on, nothing is held back at a change of turn: the camera
+    // has its own pause before it moves, and holding the table as well left the player's
+    // own aim line running a second and a half late at the start of every visit.
+    if (!SPECTATOR_CAM.enabled) host.beginPresentation(config.turnDelaySeconds)
   }
 
   const onJoined = (raw: unknown): void => {
@@ -323,6 +360,7 @@ export function buildVenueEvents(host: VenueHost, config: VenueConfig = VENUE_CO
       ballsMoving = replayRunning
       audience.step(dt)
       cue.step(dt)
+      meter.show(spectator && cue.active(), cue.power())
       banner.tick(dt)
       if (clapPots > 0) {
         clapAt -= dt
@@ -362,11 +400,30 @@ export function buildVenueEvents(host: VenueHost, config: VenueConfig = VENUE_CO
       cue.show(shot)
     },
     cuePreRoll(): number {
-      const c = config.cue
-      return c.aimSeconds + c.backswingSeconds + c.strikeSeconds
+      return cue.preRoll()
     },
     hideCue(): void {
       cue.hide()
+    },
+    cueWinding(): boolean {
+      return cue.winding()
+    },
+    addressCue(x: number, y: number, angle: number): void {
+      cue.address(x, y, angle)
+    },
+    stopAddressingCue(): void {
+      cue.stopAddressing()
+    },
+    setSpectator(on: boolean, cueThickness: number, cueAimSeconds: number): void {
+      spectator = on
+      cue.setSpectator(on, cueThickness, cueAimSeconds)
+    },
+    setSeat(seat: number, turnIndex: number): void {
+      if (mySeat === seat) return
+      mySeat = seat
+      rememberedSeat = seat
+      if (lastTurn === undefined) lastTurn = turnIndex
+      chipFor(lastTurn)
     },
     dispose(): void {
       if (socket && attached) {
@@ -379,6 +436,7 @@ export function buildVenueEvents(host: VenueHost, config: VenueConfig = VENUE_CO
       audience.dispose()
       audio.dispose()
       cue.dispose()
+      meter.dispose()
       banner.dispose()
     }
   }

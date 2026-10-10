@@ -113,3 +113,75 @@ export function powerPercent(power: number): number {
 export function easePower(displayed: number, target: number): number {
   return displayed + (target - displayed) * 0.35
 }
+
+/* ------------------------------------------------------------------ *
+ * The cue-stick slider.
+ *
+ * The slider is a cue in a groove: the player pulls it back and lets go. How far it has
+ * been pulled is `pull`, 0 at rest and 1 at the end of its travel; the power that makes is
+ * a curve of it, not a straight line, so the first half of the travel covers the soft
+ * shots where a few percent matter and the last part covers the hard ones where it does
+ * not. What leaves here is still the same 0..1 the shot has always been sent with.
+ * ------------------------------------------------------------------ */
+
+/** The curve's exponent. Above 1 gives fine control at the gentle end of the travel. */
+export const POWER_PULL_EXPONENT = 1.35
+/** A release with the cue pulled back no further than this is a change of mind, not a shot. */
+export const POWER_PULL_DEAD_ZONE = 0.04
+
+function clampUnit(value: number): number {
+  if (Number.isNaN(value)) return 0
+  return Math.min(1, Math.max(0, value))
+}
+
+/** The power a pull of the cue makes. */
+export function powerFromPull(pull: number): number {
+  return Math.pow(clampUnit(pull), POWER_PULL_EXPONENT)
+}
+
+/** How far back the cue sits for a power: the exact inverse of {@link powerFromPull}. */
+export function pullFromPower(power: number): number {
+  return Math.pow(clampUnit(power), 1 / POWER_PULL_EXPONENT)
+}
+
+/**
+ * The pull after a drag.
+ *
+ * Relative to where the gesture started, so the cue moves by exactly the distance the
+ * finger has, wherever on the groove it was picked up.
+ *
+ * @param dragPx how far the pointer has moved down since the press, in CSS pixels.
+ * @param travelPx the cue's whole travel, in CSS pixels.
+ * @param pullAtStart where the cue was when it was picked up.
+ */
+export function pullFromDrag(dragPx: number, travelPx: number, pullAtStart = 0): number {
+  if (!(travelPx > 0)) return clampUnit(pullAtStart)
+  return clampUnit(pullAtStart + dragPx / travelPx)
+}
+
+/** How far one tap of an arrow key moves the cue, as a share of its travel. */
+export const POWER_ARROW_PULL_STEP = 0.04
+
+/**
+ * The power after one tap of an arrow key.
+ *
+ * Stepped along the cue's travel rather than along the power, so every tap moves the cue
+ * in the slider the same distance. A fixed step of power would be a lurch at the top of
+ * the travel and a crawl everywhere else, because of the curve between the two.
+ */
+export function powerAfterArrow(power: number, direction: 1 | -1): number {
+  return powerFromPull(pullFromPower(power) + direction * POWER_ARROW_PULL_STEP)
+}
+
+/** Whether letting go at this pull plays the shot. At or inside the dead zone it does not. */
+export function pullShoots(pull: number): boolean {
+  return clampUnit(pull) > POWER_PULL_DEAD_ZONE
+}
+
+/**
+ * Which quarter mark a pull has reached: 0 below a quarter, up to 4 at full. The slider
+ * gives a tick of haptic feedback each time this number goes up.
+ */
+export function pullQuarter(pull: number): number {
+  return Math.floor(clampUnit(pull) * 4 + 1e-9)
+}

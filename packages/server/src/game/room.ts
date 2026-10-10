@@ -746,7 +746,9 @@ return { accepted: true }
         ? {
             duration: outcome.sim.simSeconds,
             keyframes: outcome.sim.keyframes,
-            pots: outcome.sim.pots ?? []
+            pots: outcome.sim.pots ?? [],
+            // For the client's sound effects only. Nothing on the server reads it.
+            contacts: outcome.sim.contacts ?? []
           }
         : undefined
       this.commit(events, frame, outcome.frameEnded, outcome.frameWinner, [shotEvent], playback)

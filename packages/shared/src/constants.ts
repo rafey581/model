@@ -15,6 +15,18 @@ export const CUSHION_RESTITUTION_SHORT = 0.85
 export const CUSHION_TANGENTIAL_DAMP = 0.85
 
 /**
+ * Radius of the rounded pocket jaw (knuckle) that caps each end of a cushion
+ * face, in mm.
+ *
+ * A real cushion does not run all the way into a pocket: its face stops a little
+ * short and the last few centimetres are a rounded jaw that steers a ball into
+ * the pocket mouth. Modelling that jaw as a circle of this radius is what lets a
+ * ball rolled along the rail drop in instead of being turned back by a cushion
+ * that is not physically there.
+ */
+export const CUSHION_KNUCKLE_RADIUS = 20
+
+/**
  * Ball-to-ball coefficient of restitution.
  *
  * Phenolic snooker balls collide nearly elastically — measured values sit around
@@ -96,16 +108,17 @@ export const MAX_SIM_TICKS = TICK_RATE * 60
  * finished. The two sides therefore have to agree on one number.
  *
  * The current cloth brings a routine shot to rest in 4-5 seconds and a full-power
- * break in 5-7. Replayed at 2x that is roughly 2-3.5 seconds on screen, which is
+ * break in 5-7. Replayed at 1.5x that is roughly 3-4.5 seconds on screen, which is
  * slow enough to follow any individual ball with your eye as it runs and settles
- * rather than having the whole position snap into place. Six times too fast made
- * the table look like it was twitching.
+ * rather than having the whole position snap into place. At 2x a hard-struck ball
+ * crossed too much cloth per frame to be followed, and six times too fast made the
+ * table look like it was twitching.
  *
  * This is a presentation choice only, and it is meant to be tuned by eye: the
  * simulation is unaffected by it, and the server's playback hold is derived from
  * it so the two cannot drift apart.
  */
-export const SHOT_PLAYBACK_SPEED = 2
+export const SHOT_PLAYBACK_SPEED = 1.5
 
 export const RED_VALUE = 1
 

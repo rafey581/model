@@ -1109,56 +1109,139 @@ th {
  * would not have been transform or opacity, and a two-word toast does not need it.
  */
 .event-banner-layer {
+  position: fixed;
+  left: 50%;
+  top: 34%;
+  transform: translate(-50%, -50%);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  width: 100%;
+  gap: 10px;
+  width: max-content;
+  max-width: 92vw;
   pointer-events: none;
+  z-index: 45;
 }
 
+/*
+ * The plate. One look for every announcement in the middle of the screen: the turn
+ * changing hands, a foul, a pot, ball in hand.
+ *
+ * A dark slanted plate with a line of the announcement's own colour along the top and a
+ * soft glow of it behind the words; it arrives with a small overshoot, a band of light
+ * crosses it once, and it lifts away. Everything that moves is opacity or transform, and
+ * there is no backdrop blur, so a plate on screen costs the frame nothing.
+ */
 .event-banner {
   --banner-tone: #f0f6fc;
+  position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  max-width: 100%;
-  padding: 5px 14px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(var(--blur-panel)) saturate(130%);
-  -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(130%);
-  box-shadow:
-    0 4px 10px rgba(0, 0, 0, 0.25),
-    0 12px 28px rgba(0, 0, 0, 0.3);
+  gap: 3px;
+  min-width: min(300px, 78vw);
+  max-width: 92vw;
+  padding: 13px 46px 14px;
+  overflow: hidden;
+  clip-path: polygon(16px 0, 100% 0, calc(100% - 16px) 100%, 0 100%);
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--banner-tone) 22%, transparent), transparent 70%),
+    linear-gradient(180deg, rgba(20, 27, 40, 0.96), rgba(7, 10, 16, 0.96));
   color: var(--banner-tone);
   font-family: var(--font-body);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0;
-  line-height: 1.35;
+  line-height: 1.2;
   text-align: center;
   opacity: 0;
-  transform: translateY(6px);
+  transform: translateY(16px) scale(0.9);
   transition:
-    opacity 220ms cubic-bezier(0.2, 0.9, 0.25, 1),
-    transform 220ms cubic-bezier(0.2, 0.9, 0.25, 1);
+    opacity 240ms cubic-bezier(0.2, 0.9, 0.25, 1),
+    transform 420ms cubic-bezier(0.2, 1.35, 0.35, 1);
+  will-change: opacity, transform;
+}
+
+/* The line of colour along the top edge. */
+.event-banner::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--banner-tone) 22%, var(--banner-tone) 78%, transparent);
+}
+
+/* The band of light that crosses the plate once as it arrives. */
+.event-banner::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, 0.2) 50%, transparent 62%);
+  transform: translateX(-130%);
+  pointer-events: none;
 }
 
 .event-banner.is-in {
   opacity: 1;
-  transform: translateY(0);
+  transform: translateY(0) scale(1);
+}
+
+.event-banner.is-in::after {
+  animation: event-banner-shine 820ms 180ms cubic-bezier(0.3, 0.7, 0.3, 1) forwards;
 }
 
 .event-banner.is-out {
   opacity: 0;
-  transform: translateY(-6px);
+  transform: translateY(-12px) scale(0.98);
+  transition:
+    opacity 320ms ease,
+    transform 420ms ease;
 }
 
-/* Two words, sometimes three. Wrapping is allowed here and nowhere else in the HUD: this
-   element is allowed to be taller than a pill because it only exists for a moment. */
+@keyframes event-banner-shine {
+  to {
+    transform: translateX(130%);
+  }
+}
+
+/* The headline: two words, sometimes three. */
 .event-banner-text {
+  position: relative;
   white-space: normal;
+  font-size: clamp(18px, 3vw, 30px);
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-shadow:
+    0 0 18px color-mix(in srgb, var(--banner-tone) 55%, transparent),
+    0 1px 0 rgba(0, 0, 0, 0.6);
+}
+
+/* The small line over the headline, and the reason under it. */
+.event-banner-kicker,
+.event-banner-detail {
+  position: relative;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(230, 237, 243, 0.66);
+}
+
+.event-banner-detail {
+  letter-spacing: 0.06em;
+  text-transform: none;
+  font-size: 12px;
+  max-width: 34ch;
+}
+
+/* A turn changing hands is the biggest thing this layer says. */
+.event-banner.is-turn {
+  min-width: min(380px, 84vw);
+  padding: 15px 56px 17px;
+}
+
+.event-banner.is-turn .event-banner-text {
+  font-size: clamp(22px, 3.8vw, 38px);
 }
 
 .event-banner.tone-good {
@@ -1166,37 +1249,27 @@ th {
 }
 
 .event-banner.tone-bad {
-  --banner-tone: #ff8a8a;
+  --banner-tone: #ff7b7b;
 }
 
 .event-banner.tone-info {
-  --banner-tone: #9cc8ff;
+  --banner-tone: #8fc4ff;
+}
+
+.event-banner.tone-turn {
+  --banner-tone: #e7c768;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .event-banner {
+  .event-banner,
+  .event-banner.is-out {
     transition: opacity 200ms ease;
     transform: none;
   }
 
-  .event-banner.is-out {
-    transform: none;
+  .event-banner.is-in::after {
+    animation: none;
   }
-}
-
-.hud-side {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.hud-left {
-  justify-content: flex-start;
-}
-
-.hud-right {
-  justify-content: flex-end;
 }
 
 /**
@@ -1265,16 +1338,16 @@ th {
 
 .shot-timer-arc {
   position: absolute;
-  inset: -1px;
+  inset: -3px;
   border-radius: 50%;
   background: conic-gradient(
     var(--timer) calc(var(--progress, 0) * 360deg),
     rgba(230, 237, 243, 0.12) 0
   );
-  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
-  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
   transform: rotate(-90deg);
-  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--timer) 45%, transparent));
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--timer) 60%, transparent));
 }
 
 /*
@@ -1285,10 +1358,10 @@ th {
  */
 .shot-timer-seconds {
   position: absolute;
-  right: -4px;
-  bottom: -4px;
-  min-width: 17px;
-  padding: 0 3px;
+  right: -7px;
+  bottom: -6px;
+  min-width: 22px;
+  padding: 0 4px;
   border-radius: 999px;
   background: var(--timer);
   /* Dark ink on the state colour, not white. The previous combination darkened the
@@ -1296,9 +1369,9 @@ th {
      3.2:1 on a 10px number. This reads at 5.2:1 or better in every state, and the
      fill stays the vivid colour that tells you which state you are in at a glance. */
   color: #0a0a0f;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 15px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 18px;
   text-align: center;
   font-variant-numeric: tabular-nums;
   box-shadow: 0 0 0 2px var(--panel), 0 1px 3px rgba(0, 0, 0, 0.7);
@@ -2041,32 +2114,189 @@ th {
 }
 
 .power-rail {
+  /* The groove's size. Everything inside is measured from these two. */
+  --groove-w: 30px;
+  --groove-h: min(46vh, 380px);
+  /* How far the cue can be pulled, and where its tip rests. Mirrors CUE_SLIDER_TRAVEL. */
+  --cue-travel: calc(var(--groove-h) * 0.8);
+  --cue-rest: calc(var(--groove-h) * 0.07);
+  --pull: 0;
+  --power-tone: #3ddc84;
   position: absolute;
   top: 50%;
-  right: calc(env(safe-area-inset-right, 0px) + clamp(6px, 1.4vw, 18px));
+  right: calc(env(safe-area-inset-right, 0px) + 12px);
   transform: translateY(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  width: 30px;
-  opacity: 0.55;
+  /* Twelve pixels either side of the groove are part of the touch target. */
+  padding: 0 12px;
+  opacity: 1;
   transition: opacity 220ms ease;
-  cursor: pointer;
+  cursor: grab;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
   /* The overlay layer is transparent to the pointer; the rail opts back in, because
-     it is now the control. Kept to the rail only, so the rest of the table overlay
+     it is the control. Kept to the rail only, so the rest of the table overlay
      still passes aim gestures straight through to the canvas. */
   pointer-events: auto;
 }
 
-.power-rail.is-charging {
-  opacity: 1;
+.power-rail.is-dragging {
+  cursor: grabbing;
 }
 
 .power-rail.is-disabled {
-  opacity: 0.3;
+  opacity: 0.4;
   cursor: default;
+}
+
+.power-rail[data-zone='mid'] {
+  --power-tone: #ffb020;
+}
+
+.power-rail[data-zone='high'] {
+  --power-tone: #ff4d4d;
+}
+
+/*
+ * The groove: a dark glass channel the cue slides in.
+ *
+ * No backdrop blur. It is a filter over the 3D canvas behind it on every frame, and this
+ * control is on screen for the whole match.
+ */
+.cue-slider-groove {
+  position: relative;
+  width: var(--groove-w);
+  height: var(--groove-h);
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(8, 12, 18, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.6);
+}
+
+/* The faint highlight down the left inner edge that makes the channel read as glass. */
+.cue-slider-groove::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 9%;
+  bottom: 9%;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+/*
+ * The colour that fills in above the tip as the cue is pulled back: green, then amber,
+ * then red. It is a fixed strip as long as the cue's travel, grown from the top by a scale,
+ * so its length is always exactly how far the tip has moved.
+ */
+.cue-slider-fill {
+  position: absolute;
+  left: 26%;
+  right: 26%;
+  top: var(--cue-rest);
+  height: var(--cue-travel);
+  border-radius: 999px 999px 4px 4px;
+  background: var(--power-tone);
+  opacity: 0.55;
+  transform-origin: top center;
+  transform: scaleY(var(--pull));
+  transition:
+    transform 90ms cubic-bezier(0.5, 0, 0.9, 0.5),
+    background-color 180ms ease;
+}
+
+.cue-slider-ticks {
+  position: absolute;
+  right: 2px;
+  top: var(--cue-rest);
+  width: 6px;
+  height: var(--cue-travel);
+  pointer-events: none;
+}
+
+.cue-slider-ticks svg,
+.cue-slider-cue svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/*
+ * The cue. Longer than the groove, so its butt runs out of the bottom and is clipped
+ * there; pulling it is one transform. Let go, it strikes forward in 90ms.
+ */
+.cue-slider-cue {
+  position: absolute;
+  left: 50%;
+  top: var(--cue-rest);
+  width: calc(var(--groove-w) * 0.46);
+  /* The whole cue is in view at rest, tip to bumper; pulled, the butt runs out below. */
+  height: calc(var(--groove-h) * 0.9);
+  margin-left: calc(var(--groove-w) * -0.23);
+  transform: translateY(calc(var(--pull) * var(--cue-travel)));
+  transition: transform 90ms cubic-bezier(0.5, 0, 0.9, 0.5);
+  pointer-events: none;
+  will-change: transform;
+}
+
+/* While the finger is on it the cue follows one-to-one, with no easing in the way. */
+.power-rail.is-dragging .cue-slider-cue,
+.power-rail.is-dragging .cue-slider-fill {
+  transition: none;
+}
+
+/* Full power: the groove's edge glows in a slow pulse. Nothing shakes. */
+.power-rail.is-max .cue-slider-groove {
+  animation: cue-slider-max 1s ease-in-out infinite;
+}
+
+@keyframes cue-slider-max {
+  0%,
+  100% {
+    border-color: rgba(255, 77, 77, 0.55);
+    box-shadow:
+      inset 0 2px 6px rgba(0, 0, 0, 0.6),
+      0 0 0 rgba(255, 77, 77, 0);
+  }
+  50% {
+    border-color: rgba(255, 120, 120, 1);
+    box-shadow:
+      inset 0 2px 6px rgba(0, 0, 0, 0.6),
+      0 0 14px rgba(255, 77, 77, 0.7);
+  }
+}
+
+/* Touch: a wider groove under the thumb, and room for the device's own edge. */
+@media (pointer: coarse) {
+  .power-rail {
+    --groove-w: 36px;
+    --groove-h: min(62vh, 340px);
+    right: calc(env(safe-area-inset-right, 0px) + 0px);
+    /* The groove is slim; the strip either side keeps the thumb's target at 64px. */
+    padding: 0 16px 0 12px;
+  }
+}
+
+/* A phone held upright: shorter, and in the lower half where the thumb is. */
+@media (pointer: coarse) and (orientation: portrait) {
+  .power-rail {
+    --groove-h: min(40vh, 300px);
+    top: 68%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cue-slider-cue,
+  .cue-slider-fill {
+    transition: none;
+  }
+
+  .power-rail.is-max .cue-slider-groove {
+    animation: none;
+    border-color: rgba(255, 120, 120, 1);
+  }
 }
 
 /**

@@ -1,10 +1,6 @@
 import {
   BALL_RADIUS,
   BALL_RESTITUTION,
-  TABLE_LENGTH,
-  TABLE_WIDTH,
-  CUSHION_RESTITUTION_LONG,
-  CUSHION_RESTITUTION_SHORT,
   CUSHION_TANGENTIAL_DAMP,
   CUSHION_SIDESPIN_KICK,
   ROLL_FRICTION,
@@ -22,10 +18,11 @@ import {
   SIDE_SPIN_THROW_DEG
 } from '../constants.js'
 import type { BallState } from '../state.js'
-import type { SimEvent, SimShot, SimResult, SimKeyframe } from '../events.js'
+import type { SimEvent, SimShot, SimResult, SimKeyframe, SimContact } from '../events.js'
 import type { Vec2 } from '../vec.js'
 import { sub, length, normalize, vec, clamp } from '../vec.js'
 import { reflectCushionX, reflectCushionY } from './collision.js'
+import { CUSHION_FACES, CUSHION_JAWS, resolveJawContact } from './cushions.js'
 import { applyShot } from './cue.js'
 import { pocketPositions } from './layout.js'
 import type { Pocket } from './layout.js'
@@ -51,6 +48,17 @@ export interface SimPlaybackOptions {
 
 const DEFAULT_KEYFRAME_RATE = 30
 
+/**
+ * The gentlest contacts worth recording for the sounds, in mm/s.
+ *
+ * Two balls resting against each other, or a ball creeping along a cushion, meet again on
+ * every substep at next to no speed. None of that is audible, and recording it would turn
+ * a couple of hundred contacts into thousands. These are below what the client plays, so
+ * nothing a player could hear is lost.
+ */
+const CONTACT_MIN_BALL_SPEED = 90
+const CONTACT_MIN_CUSHION_SPEED = 140
+
 export function simulateStroke(initialBalls: BallState[], shot: SimShot, options: SimOptions = {}): SimResult {
   const balls = initialBalls.map(cloneBall)
   const events: SimEvent[] = []
@@ -69,6 +77,10 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
 
   const keyframes: SimKeyframe[] | null = options.playback ? [] : null
   const pots: Array<[number, number]> | null = options.playback ? [] : null
+  // Recorded only when a replay was asked for, like the keyframes. The bot's own trial
+  // shots never ask, so they pay nothing for it. Nothing below reads this back: it is
+  // written to and returned, and the simulation is the same with or without it.
+  const contacts: SimContact[] | null = options.playback ? [] : null
   const sampleInterval = 1 / (options.playback?.rate ?? DEFAULT_KEYFRAME_RATE)
   let nextSampleAt = 0
   /** Balls potted during the current substep, mapped to their pocket centre. */
@@ -123,7 +135,27 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
           if (b.potted) continue
           const cue = a.isCue ? a : b.isCue ? b : null
           const cueVelBefore = cue ? vec(cue.vel.x, cue.vel.y) : vec(0, 0)
+          // How hard the two are closing along the line between them, measured before
+          // the collision changes it. Only worked out when contacts are being recorded.
+          let closing = 0
+          if (contacts) {
+            const cdx = b.pos.x - a.pos.x
+            const cdy = b.pos.y - a.pos.y
+            const cd = Math.sqrt(cdx * cdx + cdy * cdy)
+            if (cd > 0) closing = Math.abs(((b.vel.x - a.vel.x) * cdx + (b.vel.y - a.vel.y) * cdy) / cd)
+          }
           if (!resolveCollisionPair(a, b)) continue
+          if (contacts && closing >= CONTACT_MIN_BALL_SPEED) {
+            contacts.push([
+              0,
+              round(simTime + subDt * (step + 1), 3),
+              a.id,
+              b.id,
+              round(closing),
+              round((a.pos.x + b.pos.x) / 2),
+              round((a.pos.y + b.pos.y) / 2)
+            ])
+          }
           events.push({ type: 'BALL_HIT', tick, ballId: b.id, otherBallId: a.id })
           if (cue) {
             const other = cue === a ? b : a
@@ -146,7 +178,7 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
       // snapped back, which cost a fast ball most of a ball's width of travel.
       for (const ball of balls) {
         if (ball.potted) continue
-        reflectOffCushions(ball, events, tick)
+        reflectOffCushions(ball, events, tick, contacts, simTime + subDt * (step + 1))
         const pocket = checkPockets(ball, pockets, events, tick)
         if (pocket) {
           if (pots) pots.push([ball.id, round(simTime + TICK_DT, 3)])
@@ -205,7 +237,7 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
     // clock at this value, so if it were rounded more finely a keyframe could
     // land fractionally beyond the end of the replay and never be reached.
     simSeconds: round(simTime, 3),
-    ...(keyframes ? { keyframes, pots: pots ?? [] } : {})
+    ...(keyframes ? { keyframes, pots: pots ?? [], contacts: contacts ?? [] } : {})
   }
 }
 
@@ -300,35 +332,69 @@ function integrate(ball: BallState, dt: number): void {
   ball.pos.y += ball.vel.y * dt
 }
 
-function reflectOffCushions(ball: BallState, events: SimEvent[], tick: number): void {
-  const left = BALL_RADIUS
-  const right = TABLE_LENGTH - BALL_RADIUS
-  const top = BALL_RADIUS
-  const bottom = TABLE_WIDTH - BALL_RADIUS
+function reflectOffCushions(
+  ball: BallState,
+  events: SimEvent[],
+  tick: number,
+  contacts: SimContact[] | null = null,
+  time = 0
+): void {
   const damping = cushionDamping(ball)
   const side = clamp(ball.spin.x, -1, 1)
 
-  if (ball.pos.y < top && ball.vel.y < 0) {
-    ball.vel = reflectCushionY(ball.vel, CUSHION_RESTITUTION_SHORT * damping)
-    // Light sidespin influence along the rail (keep reflect helpers unchanged).
-    ball.vel.x += side * Math.abs(ball.vel.y) * CUSHION_SIDESPIN_KICK
-    ball.pos.y = top
-    events.push({ type: 'CUSHION', tick, ballId: ball.id })
-  } else if (ball.pos.y > bottom && ball.vel.y > 0) {
-    ball.vel = reflectCushionY(ball.vel, CUSHION_RESTITUTION_SHORT * damping)
-    ball.vel.x -= side * Math.abs(ball.vel.y) * CUSHION_SIDESPIN_KICK
-    ball.pos.y = bottom
+  // Straight cushion faces. Each face only exists over its own span, so a ball
+  // that has reached a pocket mouth passes the end of the face instead of being
+  // turned back by a cushion that is not physically there.
+  for (let faceIndex = 0; faceIndex < CUSHION_FACES.length; faceIndex++) {
+    const face = CUSHION_FACES[faceIndex]!
+    const along = face.along === 'x' ? ball.pos.x : ball.pos.y
+    if (along < face.from || along > face.to) continue
+    const perp = face.along === 'x' ? ball.pos.y : ball.pos.x
+    const perpVel = face.along === 'x' ? ball.vel.y : ball.vel.x
+    const into = face.into < 0 ? perp < face.limit && perpVel < 0 : perp > face.limit && perpVel > 0
+    if (!into) continue
+    // Recorded before the bounce, at the speed the ball came into the cushion with.
+    if (contacts && Math.abs(perpVel) >= CONTACT_MIN_CUSHION_SPEED) {
+      contacts.push([1, round(time, 3), ball.id, faceIndex, round(Math.abs(perpVel)), round(ball.pos.x), round(ball.pos.y)])
+    }
+    const rest = face.restitution * damping
+    if (face.along === 'x') {
+      ball.vel = reflectCushionY(ball.vel, rest)
+      ball.vel.x += face.kick * side * Math.abs(ball.vel.y) * CUSHION_SIDESPIN_KICK
+      ball.pos.y = face.limit
+    } else {
+      ball.vel = reflectCushionX(ball.vel, rest)
+      ball.vel.y += face.kick * side * Math.abs(ball.vel.x) * CUSHION_SIDESPIN_KICK
+      ball.pos.x = face.limit
+    }
     events.push({ type: 'CUSHION', tick, ballId: ball.id })
   }
-  if (ball.pos.x < left && ball.vel.x < 0) {
-    ball.vel = reflectCushionX(ball.vel, CUSHION_RESTITUTION_LONG * damping)
-    ball.vel.y -= side * Math.abs(ball.vel.x) * CUSHION_SIDESPIN_KICK
-    ball.pos.x = left
-    events.push({ type: 'CUSHION', tick, ballId: ball.id })
-  } else if (ball.pos.x > right && ball.vel.x > 0) {
-    ball.vel = reflectCushionX(ball.vel, CUSHION_RESTITUTION_LONG * damping)
-    ball.vel.y += side * Math.abs(ball.vel.x) * CUSHION_SIDESPIN_KICK
-    ball.pos.x = right
+
+  // Rounded jaws where each face meets a pocket. These are what a ball running
+  // along the rail meets just before the pocket mouth.
+  for (let jawIndex = 0; jawIndex < CUSHION_JAWS.length; jawIndex++) {
+    const jaw = CUSHION_JAWS[jawIndex]!
+    const jawSpeed = contacts ? Math.sqrt(ball.vel.x * ball.vel.x + ball.vel.y * ball.vel.y) : 0
+    const contact = resolveJawContact(
+      ball.pos.x,
+      ball.pos.y,
+      ball.vel.x,
+      ball.vel.y,
+      jaw,
+      jaw.restitution * damping,
+      CUSHION_TANGENTIAL_DAMP
+    )
+    if (!contact) continue
+    ball.pos.x = contact.x
+    ball.pos.y = contact.y
+    // A pure depenetration leaves a kissing ball untouched; only report a hit
+    // when the jaw actually turned it.
+    if (!contact.bounced) continue
+    if (contacts && jawSpeed >= CONTACT_MIN_CUSHION_SPEED) {
+      contacts.push([2, round(time, 3), ball.id, jawIndex, round(jawSpeed), round(contact.x), round(contact.y)])
+    }
+    ball.vel.x = contact.vx
+    ball.vel.y = contact.vy
     events.push({ type: 'CUSHION', tick, ballId: ball.id })
   }
 }

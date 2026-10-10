@@ -21,6 +21,21 @@ export interface SimEvent {
   otherBallId?: number
 }
 
+/**
+ * One contact during a shot, recorded for the client's sound effects and nothing else.
+ *
+ * `[kind, t, idA, idB, speed, x, y]`:
+ *  - `kind` 0 is ball on ball, 1 a ball on a cushion face, 2 a ball on a pocket jaw.
+ *  - `t` is simulated seconds since the cue strike, on the same clock as the keyframes.
+ *  - `idA` is the ball. `idB` is the other ball for kind 0, and the index of the cushion
+ *    face or jaw for kinds 1 and 2.
+ *  - `speed` is how hard they met, in mm/s along the line of the contact.
+ *  - `x`, `y` are where, in table millimetres.
+ *
+ * A tuple for the same reason a keyframe is: there can be a couple of hundred in a break.
+ */
+export type SimContact = [kind: number, t: number, idA: number, idB: number, speed: number, x: number, y: number]
+
 export interface SimResult {
   balls: BallState[]
   events: SimEvent[]
@@ -39,6 +54,8 @@ export interface SimResult {
   keyframes?: SimKeyframe[]
   /** Only present when `options.playback` was requested: [ballId, simSeconds]. */
   pots?: Array<[number, number]>
+  /** Only present when `options.playback` was requested. Read by nothing but the sounds. */
+  contacts?: SimContact[]
 }
 
 /**
@@ -68,6 +85,11 @@ export interface ShotPlayback {
   duration: number
   keyframes: SimKeyframe[]
   pots: Array<[number, number]>
+  /**
+   * What touched what, and how hard, for the client to make the sounds of the shot from.
+   * Optional: a client that is sent none plays the shot in silence, exactly as before.
+   */
+  contacts?: SimContact[]
   /**
    * Identifies this particular shot for the `shot:done` acknowledgement.
    *

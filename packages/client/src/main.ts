@@ -2,6 +2,7 @@ import './styles.css'
 import { api, connectSocket, getSocket, makeToast } from './game/network.js'
 import { drawTable, resetTableAnimation } from './game/renderer.js'
 import { Scene3D } from './game/scene3d.js'
+import { preloadTableModel } from './game/tableModel.js'
 import type { FrameSnapshotData } from './game/renderer.js'
 import { createCueController } from './game/input.js'
 import type { CueController } from './game/input.js'
@@ -34,6 +35,10 @@ import {
 import type { LobbyBridge, LobbySession, LoadPhase } from './lobby/index.js'
 import type { Socket } from 'socket.io-client'
 import { playCushion, playFoul, playFrameEnd, playMatchEnd, playPot, setSoundMuted, isSoundMuted, unlockAudio } from './game/audio.js'
+import { USE_NEW_SFX } from './lobby/flag.js'
+import { emitSfx } from './sfx/sfxEvents.js'
+import { replaySfx } from './sfx/replayAdapter.js'
+import { SHOT_PLAYBACK_SPEED } from './game/playback.js'
 import { ShotPlayer } from './game/playback.js'
 import type { PlaybackBall } from './game/playback.js'
 import { renderAuthScreen } from './auth.js'
@@ -48,6 +53,8 @@ import {
   stepPlacementFlow
 } from './game/placement.js'
 import { PLAYER_CAMERA_MODES, PLACEMENT_TRANSITION_SECONDS, type PlayerCameraMode } from './game/camera.js'
+import { createRenderScaler } from './game/renderScale.js'
+import { qualityConfig, qualityPreference } from './game/qualityConfig.js'
 /** Radians of camera orbit per pixel of right-drag: a full-width drag sweeps half a turn. */
 const CAMERA_ORBIT_PER_PIXEL = Math.PI / 900
 
@@ -155,6 +162,18 @@ let myTurn = false
 /** Non-null while a streamed shot is replaying; drives what the table shows. */
 let shotPlayer: ShotPlayer | null = null
 /**
+ * Seconds left before the replay in `shotPlayer` starts to move.
+ *
+ * Only ever non-zero for an opponent's shot, and only for as long as their cue takes to
+ * wind up: the replay is held on its first frame while the cue comes up and strikes, then
+ * runs exactly as it always did. Everything that waits on the replay — the pot sounds, the
+ * verdict, the score, the acknowledgement to the server — waits with it, so what is heard
+ * and read is what is being seen.
+ */
+let shotPreRoll = 0
+/** Where the balls stood before the shot being held, which is what is drawn while it waits. */
+let shotStartBalls: FrameSnapshotData['balls'] | null = null
+/**
  * A shot update that arrived while another shot was still animating. It waits here
  * until the current replay finishes rather than replacing it, so every shot is
  * played out in full and no two shots' worth of movement are ever applied in one
@@ -233,20 +252,78 @@ let matchPrizeCredits = 0
  * for the same picture. `DPR_CAP_DESKTOP` is sharp enough that a 2x panel is drawn at its
  * native density and no denser, and `DPR_CAP_MOBILE` is the fallback for a small screen.
  *
- * `dprCap` is where the adaptive ladder actually sits: it starts at the ceiling chosen
- * for this screen and only ever steps down, never below 1 and never above the ceiling.
+ * `dprCeiling` is the most this screen is ever drawn at. Where the game actually sits
+ * under it is the adaptive scale's business (see `renderScaler`): it turns the resolution
+ * down when the frame rate is being missed and back up when there is room, and the
+ * quality tier's own `renderScale` is the top of its range.
  */
 const DPR_CAP_DESKTOP = 2
 const DPR_CAP_MOBILE = 1.5
 /** Below this on either axis the screen is treated as a phone rather than a desktop. */
 const DPR_MOBILE_MAX_EDGE = 820
+/**
+ * The fewest backing pixels per CSS pixel the scene is ever drawn at.
+ *
+ * Under this the table stops reading as soft and starts reading as broken, and a steady
+ * frame rate is no longer worth what it costs.
+ */
+const MIN_PIXEL_RATIO = 0.85
+/** Where the scale a match settled on is kept, so the next one starts there. */
+const RENDER_SCALE_STORAGE_KEY = 'snooker.renderScale.v2'
+/** Set when a match had to put the surroundings on their cheaper finish, so the next starts there. */
+const ENVIRONMENT_LOW_STORAGE_KEY = 'snooker.environmentLow'
 
-let dprCap = DPR_CAP_DESKTOP
 let dprCeiling = DPR_CAP_DESKTOP
-let frameEma = 0
 let lastFrameTime = 0
-let slowFrames = 0
-let lastDprUpAt = 0
+/**
+ * The order things are given up in when frames are short: the arena and the table's legs
+ * go to a cheaper finish first, and only if that is not enough is resolution cut — so the
+ * balls and the top of the table, which is what a player is looking at, stay sharp for as
+ * long as the machine allows.
+ */
+const renderScaler = createRenderScaler({
+  cheapen: () => {
+    if (!scene3d?.lowerEnvironmentDetail()) return false
+    try {
+      localStorage.setItem(ENVIRONMENT_LOW_STORAGE_KEY, '1')
+    } catch {
+      // Storage refused. The next match finds out again in its first couple of seconds.
+    }
+    toast('Lowered background detail for smoother play', 'info')
+    return true
+  }
+})
+/** Set once the player has been told the resolution was lowered, so it is said once a match. */
+let renderScaleAnnounced = false
+/**
+ * Whether this match adjusts its own detail and resolution to hold the frame rate.
+ *
+ * True only when Settings is on Auto. A player who picked a level by name gets exactly that
+ * level for the whole match: nothing is lowered behind their back, and nothing raised.
+ */
+let adaptiveQuality = true
+
+/** Backing pixels per CSS pixel at full scale: the screen's density under the ceiling and the tier's cap. */
+function fullPixelRatio(): number {
+  return Math.min(dprCeiling, window.devicePixelRatio || 1) * qualityConfig().renderScale
+}
+
+function storedRenderScale(): number {
+  try {
+    const stored = Number(localStorage.getItem(RENDER_SCALE_STORAGE_KEY))
+    return stored > 0 && stored <= 1 ? stored : 1
+  } catch {
+    return 1
+  }
+}
+
+function storeRenderScale(scale: number): void {
+  try {
+    localStorage.setItem(RENDER_SCALE_STORAGE_KEY, scale.toFixed(3))
+  } catch {
+    // Storage refused. The scale is found again within a second or two of the next match.
+  }
+}
 
 /** The ratio ceiling for the screen in front of us, recomputed on every match. */
 function dprCeilingForScreen(): number {
@@ -1256,6 +1333,7 @@ function createLobbyBridge(): LobbyBridge {
       practiceDifficulty = aiLevel
       if (!USE_LOADING_SCREEN) {
         const data = await api<{ id: string }>('/practice/start', { method: 'POST', body: { aiLevel } })
+        await preloadTableModel()
         enterMatch(data.id, true)
         return
       }
@@ -1266,6 +1344,10 @@ function createLobbyBridge(): LobbyBridge {
         method: 'POST',
         body: { stakeTier: opts.stakeTier, format: opts.format as MatchFormat }
       })
+      // There is no loading screen on this path, so this is the only place to wait
+      // for the table model. The boot-time preload has usually finished by now and
+      // the call resolves null on failure, so the worst case is the code table.
+      await preloadTableModel()
       enterMatch(data.id, false)
     },
     toast: (message, kind) => toast(message, kind),
@@ -2214,6 +2296,11 @@ async function startPracticeWithLoadingScreen(aiLevel: PracticeAiLevel): Promise
     }
 
     await runPhase('scene', async () => {
+      // The Blender table has to be parsed before the scene is built or the scene
+      // falls back to the code table. The download itself was kicked off at boot;
+      // this only waits for it, and the preload resolves null rather than rejecting,
+      // so a missing model costs a fallback and never the match.
+      await preloadTableModel()
       pendingSceneBuildProgress = (fraction) => loading.report('scene', fraction)
       enterMatch(matchId, true)
       pendingSceneBuildProgress = undefined
@@ -2323,7 +2410,8 @@ function enterMatch(matchId: string, isPractice = false): void {
  * overhead view still arrives with the whole table in it, and the aim view gets a wider
  * field of view on a wide window rather than bars down either side.
  *
- * The backing store is the CSS box times the device pixel ratio, capped (see `dprCap`),
+ * The backing store is the CSS box times the device pixel ratio, capped and scaled (see
+ * `fullPixelRatio` and `renderScaler`),
  * and the element's own CSS size stays 100%, so the renderer draws at the device's density
  * without the layout ever being told about it.
  *
@@ -2339,7 +2427,7 @@ function applyCanvasSize(): void {
   const width = Math.floor(stage.clientWidth)
   const height = Math.floor(stage.clientHeight)
   if (width <= 0 || height <= 0) return
-  const dpr = Math.min(dprCap, window.devicePixelRatio || 1)
+  const dpr = fullPixelRatio() * renderScaler.scale
   const w = Math.max(320, Math.floor(width * dpr))
   const h = Math.max(180, Math.floor(height * dpr))
   if (canvas.width !== w) canvas.width = w
@@ -2594,9 +2682,12 @@ function renderGame(): void {
   gameResizeObserver = new ResizeObserver(() => applyCanvasSize())
   gameResizeObserver.observe(stage)
   dprCeiling = dprCeilingForScreen()
-  dprCap = dprCeiling
-  frameEma = 0
-  slowFrames = 0
+  // Starts from where the last match on this device settled rather than from the top, so
+  // a machine that cannot hold full resolution does not open every match by proving it.
+  adaptiveQuality = qualityPreference() === 'auto'
+  renderScaler.reset(adaptiveQuality ? storedRenderScale() : 1, Math.min(1, MIN_PIXEL_RATIO / fullPixelRatio()))
+  renderScaleAnnounced = false
+  applyCanvasSize()
 
   scene3d?.dispose()
   const buildOpts = pendingSceneBuildProgress
@@ -2604,6 +2695,15 @@ function renderGame(): void {
     : undefined
   pendingSceneBuildProgress = undefined
   scene3d = Scene3D.create(canvas, canvas.width, canvas.height, buildOpts)
+  try {
+    // A machine that needed the cheaper surroundings last match needs them this one too,
+    // and the low tier always has them. A level the player fixed by name is otherwise left
+    // exactly as it is.
+    const rememberedLow = adaptiveQuality && localStorage.getItem(ENVIRONMENT_LOW_STORAGE_KEY) === '1'
+    if (rememberedLow || qualityConfig().name === 'low') scene3d?.lowerEnvironmentDetail()
+  } catch {
+    // Storage refused: the scaler will ask for it within a second or two if it is needed.
+  }
 
   // A new scene has no camera move in it and is not holding the overhead placement view,
   // so a placement that was mid-flight against the old one would be describing a camera
@@ -2681,6 +2781,10 @@ function renderGame(): void {
   // While the slider is mid-drag it owns the power: the controller is locked out of
   // writing it, so neither the charge gesture, the wheel, the fine keys nor the eased
   // after-shot reset can drag the handle back down underneath the player's finger.
+  // Letting go of the cue in the slider plays the shot, through the same door as a release
+  // on the cue ball: the controller sends what it holds, and refuses if the visit is not
+  // playable.
+  hud?.setPowerShootListener(() => cueController?.shoot())
   hud?.setPowerDragListener((dragging) => {
     if (!cueController) return
     if (dragging) cueController.lockPower()
@@ -2782,6 +2886,9 @@ function resetSpin(): void {
  */
 function abandonPlayback(): void {
   shotPlayer = null
+  replaySfx?.shotEnded()
+  shotPreRoll = 0
+  shotStartBalls = null
   queuedUpdate = null
   shotInFlight = false
   deferredPots = []
@@ -2840,6 +2947,11 @@ function applyGameUpdate(data: GameUpdatePayload): void {
   if (data.playback && data.playback.keyframes.length && previous) {
     shotPlayer = new ShotPlayer(data.playback, previous.balls as PlaybackBall[])
     shotInFlight = true
+    const opponentsShot = mySeat !== undefined && previous.turnIndex !== mySeat
+    shotPreRoll = opponentsShot ? (scene3d?.opponentShotPreRoll(data.playback) ?? 0) : 0
+    shotStartBalls = previous.balls
+    // Sound only: tells the effects a replay has been set up. Nothing comes back.
+    replaySfx?.shotStarted(data.playback, previous.balls)
   } else if (data.playback) {
     // Playback arrived with no pre-shot snapshot to start from, so there is nothing
     // to animate. Tell the server straight away rather than stalling the visit.
@@ -2860,11 +2972,11 @@ function applyGameUpdate(data: GameUpdatePayload): void {
       // balls still rolling tells the striker the outcome before they have watched the
       // shot that caused it.
       const show = (): void => {
-        playFoul()
-        toast(d.reason ? `Foul: ${d.reason} (-${d.penalty})` : `Foul! -${d.penalty}`, 'error')
-        // The penalty is announced big and once: the value the server charged,
-        // 4 to 7, is the headline.
-        hud?.flashEvent(`FOUL -${d.penalty}`, 'bad')
+        if (USE_NEW_SFX) emitSfx({ type: 'aux', sound: 'foul' })
+        else playFoul()
+        // Announced once, centre-screen: the penalty is the headline and the reason sits
+        // under it. It used to be said twice, here and again as a toast in the corner.
+        hud?.flashEvent(`FOUL  \u2212${d.penalty}`, 'bad', d.reason)
       }
       if (verdictDeferred) deferredVerdict.push(show)
       else show()
@@ -2909,8 +3021,12 @@ function applyGameUpdate(data: GameUpdatePayload): void {
  */
 function announcePot(ids: number[]): void {
   if (ids.length === 0) return
-  playCushion()
-  playPot(ids.length)
+  // The procedural effects play the pocket themselves, from the replay, so the old blips
+  // stand down rather than sound on top of them. Off, they play exactly as they did.
+  if (!USE_NEW_SFX) {
+    playCushion()
+    playPot(ids.length)
+  }
   toast(`Potted: ${ids.map(ballName).join(', ')}`)
   // The centre-screen banner carries the score the pot is worth, so the moment
   // lands as a number as well as a sound: reds one each, colours their own value.
@@ -2951,6 +3067,7 @@ function handleSocketEvents(socket: Socket): void {
   })
   socket.on('match:start', (data: { snapshot: FrameSnapshotData; frameIndex: number; turn?: TurnTiming }) => {
     frameIndex = data.frameIndex
+    emitSfx({ type: 'frameStart' })
     // A new match replaces the table outright, so any replay in flight is void.
     abandonPlayback()
     frame = data.snapshot
@@ -2966,6 +3083,7 @@ function handleSocketEvents(socket: Socket): void {
   })
   socket.on('frame:start', (data: { frameIndex: number; snapshot: FrameSnapshotData; turn?: TurnTiming }) => {
     frameIndex = data.frameIndex
+    emitSfx({ type: 'frameStart' })
     // The frame change usually lands straight after the shot that won it, while that
     // shot is still animating, so it queues behind the replay rather than cutting it
     // off. Only the announcement is immediate. The turn timing rides along: it is
@@ -3219,6 +3337,7 @@ placementTarget = null
       // sends the release when that happens.
       placementResumePending = true
       toast('Cue ball placed', 'info')
+      emitSfx({ type: 'aux', sound: 'placeTick' })
     }
   }
 
@@ -3284,22 +3403,13 @@ function loop(): void {
       const now = performance.now()
       const fdt = Math.min(200, now - lastFrameTime)
       lastFrameTime = now
-      if (scene3d) {
-        frameEma = frameEma === 0 ? fdt : frameEma * 0.92 + fdt * 0.08
-        if (frameEma > 28) slowFrames++
-        else slowFrames = 0
-        if (slowFrames > 90 && dprCap > 1) {
-          dprCap = 1
-          slowFrames = 0
-          applyCanvasSize()
+      if (scene3d && adaptiveQuality && renderScaler.step(fdt, now)) {
+        const lowered = renderScaler.scale < 1
+        applyCanvasSize()
+        storeRenderScale(renderScaler.scale)
+        if (lowered && !renderScaleAnnounced) {
+          renderScaleAnnounced = true
           toast('Lowered graphics quality for smoother play', 'info')
-        }
-        // Back up to the ceiling for this screen, which is 2 on a desktop and 1.5 on a
-        // phone: the ladder restores the sharpness the device can take, and never more.
-        if (frameEma < 14 && dprCap < dprCeiling && now - lastDprUpAt > 20000) {
-          lastDprUpAt = now
-          dprCap = dprCeiling
-          applyCanvasSize()
         }
       }
       // While a shot replays, the table shows sampled simulation positions; the
@@ -3320,6 +3430,9 @@ function loop(): void {
       // guide and the power bar all come back on the same frame — and stay away on every
       // frame of a placement camera move.
       const canAim = isInputAllowed()
+      // A mouse resting over the table is re-read as the aim once the camera is down in the
+      // aim view: the camera pans under it, so the spot it is over is not standing still.
+      if (canAim && scene3d?.isAimViewSettled()) cueController?.refreshAim()
       hud?.setPowerEnabled(canAim)
       const renderOptions = {
         aim: cueController?.aim,
@@ -3381,8 +3494,16 @@ function finishShot(): void {
  * Advances the replay clock and returns the snapshot to draw this frame.
  */
 function stepShotPlayback(target: FrameSnapshotData, dtSeconds: number): FrameSnapshotData {
+  if (shotPlayer && shotPreRoll > 0 && shotStartBalls) {
+    // The opponent's cue is still winding up: the table stands exactly as it was before
+    // the shot, and the replay has not been started.
+    shotPreRoll -= dtSeconds
+    return { ...target, balls: shotStartBalls }
+  }
   if (shotPlayer) {
     const balls = shotPlayer.advance(dtSeconds)
+    // Sound only: where the replay has got to, so the effects follow the picture.
+    replaySfx?.tick(shotPlayer.time, SHOT_PLAYBACK_SPEED, balls, performance.now())
     if (deferredPots.length) {
       const due = shotPlayer.takeDuePots()
       if (due.length) {
@@ -3406,6 +3527,7 @@ function stepShotPlayback(target: FrameSnapshotData, dtSeconds: number): FrameSn
     }
     shotPlayer = null
     deferredPots = []
+    replaySfx?.shotEnded()
     finishShot()
   }
 
@@ -3487,6 +3609,11 @@ async function init(): Promise<void> {
     startAdminApp(app)
     return
   }
+  // Start the table model download now, in parallel with the auth/lobby boot. The
+  // online path has no loading screen to await it in, so `tableModelIfReady()` has
+  // to be able to answer by the time a scene is built; a cached, warmed download is
+  // what makes that true.
+  void preloadTableModel()
   const chip = document.createElement('div')
   chip.id = 'err-chip'
   chip.className = 'err-chip'

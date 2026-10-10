@@ -25,11 +25,11 @@ const HALF_W = TABLE_WIDTH / 2
  * ------------------------------------------------------------------ */
 
 /** Vertical field of view for the aim camera, in degrees. */
-export const AIM_FOV_DEG = 55
+export const AIM_FOV_DEG = 52
 /** How far behind the cue ball the aim camera sits, in millimetres. */
-export const AIM_BACK_MM = 540
+export const AIM_BACK_MM = 440
 /** How far above the cloth the aim camera sits, in millimetres. */
-export const AIM_HEIGHT_MM = 320
+export const AIM_HEIGHT_MM = 235
 /**
  * How far ahead of the cue ball the aim camera looks, in millimetres.
  *
@@ -37,7 +37,7 @@ export const AIM_HEIGHT_MM = 320
  * itself puts the horizon above the shot line, so the table runs away toward the top of
  * the screen and the cue ball sits low and near, the way a cue view actually looks.
  */
-export const AIM_LOOK_AHEAD_MM = 950
+export const AIM_LOOK_AHEAD_MM = 520
 /** The height the aim camera looks at: the cloth, not the ball. */
 export const AIM_LOOK_HEIGHT_MM = 0
 
@@ -79,7 +79,7 @@ export const TOP_DOWN_FOV_DEG = 48
  * overhead view is of the whole table and not of the bed with its edges shaved off.
  * Kept tight so balls read larger in top-down without changing physics scale.
  */
-export const TOP_DOWN_MARGIN = 1.03
+export const TOP_DOWN_MARGIN = 1.16
 /** A floor under the overhead height, so it never drops onto the cloth on a wide canvas. */
 export const TOP_DOWN_MIN_HEIGHT_MM = 1500
 
@@ -109,30 +109,37 @@ export const TRACK_MAX_HEIGHT_MM = 3400
 /* ------------------------------------------------------------------ *
  * Damping.
  *
- * Rates are in 1/seconds and are used as `1 - e^(-rate * dt)`, so the behaviour is the
- * same at any frame rate: a slow frame takes a bigger step, but the curve is identical,
- * which is what keeps a dropped frame from reading as a jump.
+ * The heading eases exponentially: rates are in 1/seconds and are used as
+ * `1 - e^(-rate * dt)`, so the behaviour is the same at any frame rate.
+ *
+ * The pose itself is a critically damped spring ({@link smoothDamp}) rather than an
+ * exponential. An exponential leaves at full speed on its very first frame — the lens
+ * lurches off the mark and then spends the rest of the move slowing down, which is what
+ * made every change of view read as a whip. The spring carries a velocity, so the camera
+ * accelerates away, cruises and settles, and a target that moves under it bends the path
+ * instead of kinking it. Times are in seconds and are roughly how long the camera trails
+ * a moving target; a move between two still poses is all but done in about three of them.
  * ------------------------------------------------------------------ */
 
 /**
- * How fast the camera's heading follows the aim angle, per second.
+ * How fast the camera's heading follows its latch, per second.
  *
- * Slower than the move rate on purpose. Aiming is a continuous gesture and the camera
- * has to feel attached to the cue, but a camera that snapped its heading would make the
- * aim line slide underneath the pointer and the whole thing would feel loose.
+ * This is the response to a deliberate gesture — a look-around drag, a played shot
+ * re-latching — so it is brisk. The aim following is slowed separately, in
+ * {@link followHeadingLatch}, before it ever reaches this.
  */
 export const YAW_RATE = 7
-/** How fast position and look-at point catch up with their targets, per second. */
-export const MOVE_RATE = 4.5
-/** How fast the field of view catches up, per second. */
-export const FOV_RATE = 3.5
+/** How long position and look-at point take to catch up with their targets, in seconds. */
+export const MOVE_SMOOTH_SECONDS = 0.34
+/** How long the field of view takes to catch up, in seconds. */
+export const FOV_SMOOTH_SECONDS = 0.4
 /**
- * How fast the tracking camera follows the balls, per second.
+ * How long the tracking camera takes to catch up with the balls, in seconds.
  *
  * Deliberately slower than the visit camera: a shot is a couple of seconds of watching,
  * and a camera that keeps up instantly reads as a cut rather than as a follow.
  */
-export const TRACK_MOVE_RATE = 2.4
+export const TRACK_SMOOTH_SECONDS = 0.6
 /** How fast the tracking camera's heading follows the shot line, per second. */
 export const TRACK_YAW_RATE = 3
 
@@ -198,13 +205,7 @@ export type CameraMode = 'AIM' | 'TOP_DOWN' | 'TRACK' | 'PLACEMENT_TOP_DOWN' | '
  */
 export type PlayerCameraMode = 'AIM' | 'BROADCAST' | 'SIDE' | 'CLOSE' | 'TOP_DOWN'
 
-export const PLAYER_CAMERA_MODES: readonly PlayerCameraMode[] = [
-  'AIM',
-  'BROADCAST',
-  'SIDE',
-  'CLOSE',
-  'TOP_DOWN'
-]
+export const PLAYER_CAMERA_MODES: readonly PlayerCameraMode[] = ['AIM', 'TOP_DOWN']
 
 /** Where the camera is, and where it is looking, all in table millimetres. */
 export interface CameraPose {
@@ -278,20 +279,48 @@ export function latchedCameraYaw(latch: HeadingLatch): number {
 export const AIM_FOLLOW_MAX_DELTA_RAD = Math.PI / 2
 
 /**
- * Follows the live aim with the camera's heading, while the aim camera is the view.
+ * How far the aim may swing either side of the lens before the camera starts to follow, in radians.
  *
- * The heading chases the aim so the lens stays directly behind the cue ball on the shot
- * line, and the rig's own easing is what makes the chase feel damped rather than snapped.
- * The gate is a half-plane: an aim more than a quarter turn from where the lens is
+ * The pointer is cast through the live camera, so a camera that turned with every degree
+ * of aim would be chasing its own tail: the turn moves the cloth under a pointer that has
+ * not moved, which moves the aim, which turns the camera again. Inside this band the lens
+ * stands still and the pointer means one fixed spot on the table, which is what makes a
+ * fine cut aimable at all. Only an aim pushed out past it pans the view.
+ */
+export const AIM_FOLLOW_DEADZONE_RAD = (38 * Math.PI) / 180
+
+/**
+ * How fast the camera closes on an aim that has left the band, per second.
+ *
+ * Applied to the part of the swing outside the band only, so the pan starts from rest at
+ * the band's edge and builds the further out the aim is pushed: a pointer at the edge of
+ * the frame turns the view at well under a radian a second, never the whip it used to be.
+ */
+export const AIM_FOLLOW_RATE = 2.2
+
+/**
+ * Follows the live aim with the camera's heading, while the player is free to aim.
+ *
+ * The heading is pulled towards the aim only by however far the aim has swung outside
+ * {@link AIM_FOLLOW_DEADZONE_RAD}, and only at {@link AIM_FOLLOW_RATE}: the lens stays put
+ * for fine aiming and pans smoothly when the shot is somewhere it is not yet looking.
+ * A played shot re-latches the heading onto the aim exactly ({@link stepHeadingLatch}), so
+ * the view the shot is watched from, and the one the next visit starts in, is square
+ * behind the cue ball again.
+ *
+ * The outer gate is a half-plane: an aim more than a quarter turn from where the lens is
  * pointed is not a turn but the pick landing behind the ball — the drag-back that sets
  * power — and chasing that would spin the camera round and round, so the camera holds
  * until the aim comes back in front of it.
  */
-export function followHeadingLatch(latch: HeadingLatch, aimAngle: number): HeadingLatch {
-  if (Math.abs(shortestAngleDelta(latchedCameraYaw(latch), aimAngle)) > AIM_FOLLOW_MAX_DELTA_RAD) {
-    return latch
-  }
-  return { heading: aimAngle, orbit: latch.orbit }
+export function followHeadingLatch(latch: HeadingLatch, aimAngle: number, dt: number): HeadingLatch {
+  const delta = shortestAngleDelta(latchedCameraYaw(latch), aimAngle)
+  const swing = Math.abs(delta)
+  if (swing > AIM_FOLLOW_MAX_DELTA_RAD) return latch
+  const excess = swing - AIM_FOLLOW_DEADZONE_RAD
+  if (excess <= 0) return latch
+  const step = excess * (1 - Math.exp(-AIM_FOLLOW_RATE * Math.max(0, Math.min(dt, 0.1))))
+  return { heading: latch.heading + Math.sign(delta) * step, orbit: latch.orbit }
 }
 
 /** What the rig is being asked to do this frame. */
@@ -336,6 +365,11 @@ export interface CameraRequest {
 export interface CameraRigState {
   pose: CameraPose
   yaw: number
+  /**
+   * How fast each part of the pose is moving, per second. Absent means at rest, which is
+   * what a rig that has just been placed somewhere — rather than eased there — is.
+   */
+  velocity?: CameraPose
 }
 
 const TABLE_CENTRE = { x: HALF_L, y: HALF_W }
@@ -373,6 +407,38 @@ export function dampAngle(current: number, target: number, rate: number, dt: num
 /** Eases a number towards a target, exponential and monotonic, like the heading. */
 export function damp(current: number, target: number, rate: number, dt: number): number {
   return current + (target - current) * (1 - Math.exp(-rate * dt))
+}
+
+/**
+ * Eases a number towards a target as a critically damped spring.
+ *
+ * Takes the speed it is already moving at and hands back the new one, so a move starts
+ * from rest, builds, and settles without ever overshooting a target that is standing
+ * still. `smoothTime` is in seconds. The exponential is the usual rational approximation,
+ * which stays stable for any step: a long frame takes a bigger stride along the same
+ * curve rather than a jump past the end of it.
+ */
+export function smoothDamp(
+  current: number,
+  target: number,
+  velocity: number,
+  smoothTime: number,
+  dt: number
+): { value: number; velocity: number } {
+  if (dt <= 0) return { value: current, velocity }
+  const omega = 2 / Math.max(0.0001, smoothTime)
+  const x = omega * dt
+  const decay = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x)
+  const change = current - target
+  const temp = (velocity + omega * change) * dt
+  let nextVelocity = (velocity - omega * temp) * decay
+  let value = target + (change + temp) * decay
+  // Past the target on a long step: land on it and stop, rather than swinging back.
+  if (target - current > 0 === value > target) {
+    value = target
+    nextVelocity = 0
+  }
+  return { value, velocity: nextVelocity }
 }
 
 /**
@@ -657,16 +723,26 @@ export function initialRigState(aspect: number): CameraRigState {
   return { pose, yaw: 0 }
 }
 
-function dampPose(current: CameraPose, target: CameraPose, rate: number, fovRate: number, dt: number): CameraPose {
-  return {
-    x: damp(current.x, target.x, rate, dt),
-    y: damp(current.y, target.y, rate, dt),
-    height: damp(current.height, target.height, rate, dt),
-    lookX: damp(current.lookX, target.lookX, rate, dt),
-    lookY: damp(current.lookY, target.lookY, rate, dt),
-    lookHeight: damp(current.lookHeight, target.lookHeight, rate, dt),
-    fov: damp(current.fov, target.fov, fovRate, dt)
+const POSE_KEYS = ['x', 'y', 'height', 'lookX', 'lookY', 'lookHeight', 'fov'] as const
+
+const AT_REST: CameraPose = { x: 0, y: 0, height: 0, lookX: 0, lookY: 0, lookHeight: 0, fov: 0 }
+
+function smoothPose(
+  current: CameraPose,
+  target: CameraPose,
+  velocity: CameraPose,
+  smoothTime: number,
+  fovSmoothTime: number,
+  dt: number
+): { pose: CameraPose; velocity: CameraPose } {
+  const pose = { ...current }
+  const next = { ...velocity }
+  for (const key of POSE_KEYS) {
+    const eased = smoothDamp(current[key], target[key], velocity[key], key === 'fov' ? fovSmoothTime : smoothTime, dt)
+    pose[key] = eased.value
+    next[key] = eased.velocity
   }
+  return { pose, velocity: next }
 }
 
 /**
@@ -674,9 +750,9 @@ function dampPose(current: CameraPose, target: CameraPose, rate: number, fovRate
  *
  * The order matters: the heading is eased first, and the aim pose is then rebuilt from
  * the eased heading rather than from the target. That is what makes a 179-to-minus-179
- * turn sweep through 180 degrees over about a fifth of a second instead of unwinding
- * the long way round through zero. Everything after that is a plain eased move towards
- * a pose the rig has already decided it is heading for.
+ * turn sweep through 180 degrees instead of unwinding the long way round through zero.
+ * Everything after that is a sprung move towards a pose the rig has already decided it is
+ * heading for, carrying its own velocity from one frame to the next.
  */
 export function stepCameraRig(state: CameraRigState, request: CameraRequest, dt: number): CameraRigState {
   const step = Math.max(0, Math.min(dt, 0.1))
@@ -693,10 +769,15 @@ export function stepCameraRig(state: CameraRigState, request: CameraRequest, dt:
       ? aimPose(request.cue, yaw, aimFovDeg(request.aspect))
       : resolveCameraTarget({ ...request, aimAngle: yaw })
 
-  const pose = clampPose(
-    dampPose(state.pose, target, tracking ? TRACK_MOVE_RATE : MOVE_RATE, FOV_RATE, step)
+  const eased = smoothPose(
+    state.pose,
+    target,
+    state.velocity ?? AT_REST,
+    tracking ? TRACK_SMOOTH_SECONDS : MOVE_SMOOTH_SECONDS,
+    FOV_SMOOTH_SECONDS,
+    step
   )
-  return { pose, yaw }
+  return { pose: clampPose(eased.pose), yaw, velocity: eased.velocity }
 }
 
 /** The heading a pose implies, for tests and for re-seeding the rig. */

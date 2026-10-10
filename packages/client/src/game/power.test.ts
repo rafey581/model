@@ -141,3 +141,105 @@ describe('easePower', () => {
     expect(shown).toBeGreaterThanOrEqual(0)
   })
 })
+
+import {
+  POWER_PULL_DEAD_ZONE,
+  powerFromPull,
+  pullFromDrag,
+  pullFromPower,
+  pullQuarter,
+  pullShoots
+} from './power.js'
+
+describe('the cue-stick slider', () => {
+  it('maps the ends of the pull onto the ends of the power', () => {
+    expect(powerFromPull(0)).toBe(0)
+    expect(powerFromPull(1)).toBe(1)
+    expect(powerFromPull(-3)).toBe(0)
+    expect(powerFromPull(9)).toBe(1)
+    expect(powerFromPull(Number.NaN)).toBe(0)
+  })
+
+  it('gives fine control at the gentle end: half the pull is well under half the power', () => {
+    expect(powerFromPull(0.5)).toBeLessThan(0.45)
+    expect(powerFromPull(0.5)).toBeGreaterThan(0.3)
+    // And it only ever goes up.
+    let previous = 0
+    for (let pull = 0.05; pull <= 1.0001; pull += 0.05) {
+      const power = powerFromPull(pull)
+      expect(power).toBeGreaterThan(previous)
+      previous = power
+    }
+  })
+
+  it('puts the cue back exactly where a power came from', () => {
+    for (const pull of [0, 0.04, 0.25, 0.5, 0.8, 1]) {
+      expect(pullFromPower(powerFromPull(pull))).toBeCloseTo(pull, 9)
+    }
+  })
+
+  it('moves the cue by the distance the finger moved, from wherever it was picked up', () => {
+    expect(pullFromDrag(0, 300)).toBe(0)
+    expect(pullFromDrag(150, 300)).toBeCloseTo(0.5, 9)
+    expect(pullFromDrag(300, 300)).toBe(1)
+    expect(pullFromDrag(900, 300)).toBe(1)
+    // Pushing back up past the top stops at the top.
+    expect(pullFromDrag(-50, 300)).toBe(0)
+    // Picked up part-way: relative to where it was.
+    expect(pullFromDrag(60, 300, 0.3)).toBeCloseTo(0.5, 9)
+    expect(pullFromDrag(-60, 300, 0.3)).toBeCloseTo(0.1, 9)
+    // A groove with no height cannot be dragged.
+    expect(pullFromDrag(100, 0, 0.2)).toBeCloseTo(0.2, 9)
+  })
+
+  it('does not shoot from inside the dead zone, and does from just outside it', () => {
+    expect(pullShoots(0)).toBe(false)
+    expect(pullShoots(POWER_PULL_DEAD_ZONE)).toBe(false)
+    expect(pullShoots(POWER_PULL_DEAD_ZONE + 0.001)).toBe(true)
+    expect(pullShoots(1)).toBe(true)
+  })
+
+  it('sends the shot the same kind of number the old bar did', () => {
+    // Same type, same range: a 0..1 number, with the same two ends.
+    for (const pull of [0.05, 0.3, 0.6, 1]) {
+      const power = powerFromPull(pull)
+      expect(typeof power).toBe('number')
+      expect(power).toBeGreaterThanOrEqual(0)
+      expect(power).toBeLessThanOrEqual(1)
+      expect(clampPowerLoose(power)).toBe(power)
+    }
+  })
+
+  it('counts the quarter marks for the haptic ticks', () => {
+    expect(pullQuarter(0)).toBe(0)
+    expect(pullQuarter(0.24)).toBe(0)
+    expect(pullQuarter(0.25)).toBe(1)
+    expect(pullQuarter(0.5)).toBe(2)
+    expect(pullQuarter(0.76)).toBe(3)
+    expect(pullQuarter(1)).toBe(4)
+  })
+})
+
+import { POWER_ARROW_PULL_STEP, powerAfterArrow } from './power.js'
+
+describe('the arrow keys on the cue slider', () => {
+  it('moves the cue the same distance on every tap, up and down', () => {
+    let power = 0
+    for (let tap = 1; tap <= 10; tap++) {
+      power = powerAfterArrow(power, 1)
+      expect(pullFromPower(power)).toBeCloseTo(tap * POWER_ARROW_PULL_STEP, 9)
+    }
+    for (let tap = 9; tap >= 0; tap--) {
+      power = powerAfterArrow(power, -1)
+      expect(pullFromPower(power)).toBeCloseTo(tap * POWER_ARROW_PULL_STEP, 9)
+    }
+  })
+
+  it('stops at the ends of the travel', () => {
+    expect(powerAfterArrow(0, -1)).toBe(0)
+    expect(powerAfterArrow(1, 1)).toBe(1)
+    let power = 0
+    for (let i = 0; i < 40; i++) power = powerAfterArrow(power, 1)
+    expect(power).toBe(1)
+  })
+})

@@ -84,6 +84,11 @@ export class ShotPlayer {
     return this.done
   }
 
+  /** How far into the shot the replay is, in simulated seconds. For the sound effects. */
+  get time(): number {
+    return this.clock
+  }
+
   /** Advances the replay clock and returns where every ball is now. */
   advance(dtSeconds: number): PlaybackBall[] {
     if (!this.done) {

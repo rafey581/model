@@ -4,6 +4,7 @@ import { clear } from './dom.js'
 import { renderHome } from './home.js'
 import { renderInfo } from './info.js'
 import { renderSettings } from './settingsView.js'
+import { emitSfx } from '../sfx/sfxEvents.js'
 import { createShell, syncTabIndicator, tabToView, viewToTab } from './shell.js'
 import { defaultSetupState, renderSetup } from './setup.js'
 import { renderStatistics } from './stats.js'
@@ -64,6 +65,15 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
     })
   }
 
+  // A soft click for the lobby's buttons, tabs, tiles and chips. One listener on the host,
+  // so nothing in the lobby is rebuilt or rewired for it; it says a sound may play and
+  // has no part in what the click does. Silent unless the new sounds are on.
+  const onLobbyClick = (event: Event): void => {
+    const target = event.target as Element | null
+    if (target?.closest?.('button, [role="button"], [role="tab"], [role="radio"], a')) emitSfx({ type: 'aux', sound: 'uiClick' })
+  }
+  host.addEventListener('click', onLobbyClick)
+
   const paint = (): void => {
     clear(host)
     const shell = createShell(bridge, state.view, {
@@ -78,9 +88,11 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
         paint()
       },
       onProfile: () => {
-        // Presentation only: there is no profile screen in this lobby, so the
-        // chip acknowledges the account without navigating away.
+        // There is no separate profile screen in this lobby: the profile chip opens the
+        // player's own settings, which is where their preferences live.
         bridge.onProfileActivate()
+        state.view = 'settings'
+        paint()
       }
     })
     root = shell.root
@@ -149,7 +161,8 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
       onToggleSound: () => {
         bridge.setSoundMuted(!bridge.getSoundMuted())
         paint()
-      }
+      },
+      onQualityChange: () => paint()
     })
   }
 

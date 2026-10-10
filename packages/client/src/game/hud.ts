@@ -3,6 +3,11 @@ import { ballColorHex } from './palette.js'
 import { createAvatarSlot, updateAvatarSubject } from './avatar.js'
 import type { AvatarSlot } from './avatar.js'
 import {
+  powerFromPull,
+  pullFromPower,
+  pullFromDrag,
+  pullShoots,
+  pullQuarter,
   clampPowerLoose,
   easePower,
   powerAdjust,
@@ -11,6 +16,10 @@ import {
   sliderValueFromPower
 } from './power.js'
 import { POWER_FINE_STEP } from './power.js'
+import { cueSliderSvg, cueSliderTicksSvg } from './cueSliderArt.js'
+
+/** How much of the groove's height the cue can be pulled through. */
+const CUE_SLIDER_TRAVEL = 0.8
 import {
   pointerToSpin,
   snapToCentre,
@@ -365,7 +374,7 @@ export interface Hud {
   spinDialRoot: HTMLElement
   update: (state: HudState) => void
   /** Raises a short-lived centre-screen banner for a key match event. */
-  flashEvent: (text: string, tone: 'good' | 'bad' | 'info') => void
+  flashEvent: (text: string, tone: 'good' | 'bad' | 'info', detail?: string) => void
   /** Driven per frame by the cue controller, not by update(). */
   setPower: (power: number) => void
   /**
@@ -377,6 +386,11 @@ export interface Hud {
   setPowerSink: (sink: (power: number) => void) => void
   /** Told when a slider drag starts and stops, so the controller can be locked out of power writes for the gesture. */
   setPowerDragListener: (listener: ((dragging: boolean) => void) | null) => void
+  /**
+   * Registers what happens when the cue in the slider is pulled back and let go: the shot
+   * is played. The slider has already written the power by then.
+   */
+  setPowerShootListener: (listener: (() => void) | null) => void
   /**
    * Shows a spin value on the dial, whatever wrote it: the drag, the arrow keys,
    * a reset. The dial is a view of the one spin value, never a second one.
@@ -596,20 +610,24 @@ export function createHud(): Hud {
   slider.setAttribute('aria-valuemin', '0')
   slider.setAttribute('aria-valuemax', '100')
   slider.setAttribute('aria-valuenow', '0')
-  slider.setAttribute('aria-valuetext', '0%')
+  slider.setAttribute('aria-valuetext', '0 percent')
   slider.setAttribute('aria-orientation', 'vertical')
 
-  const railValue = el('div', 'power-rail-value')
-  railValue.id = 'power-rail-value'
-  railValue.textContent = '0%'
-  const railTrack = el('div', 'power-rail-track')
+  // The cue in its groove. The groove is the whole hit target; inside it sit the colour
+  // that fills in above the tip as the cue is pulled, the tick marks down its edge, and
+  // the cue itself, which is one SVG moved by a transform. No number is shown anywhere:
+  // the power is read from how far back the cue is and the colour above it.
+  const railTrack = el('div', 'cue-slider-groove')
   railTrack.setAttribute('aria-hidden', 'true')
-  const railFill = el('div', 'power-rail-fill')
+  const railFill = el('div', 'cue-slider-fill')
   railFill.id = 'power-rail-fill'
-  const railHandle = el('div', 'power-rail-handle')
-  railHandle.id = 'power-rail-handle'
-  railTrack.append(railFill, railHandle)
-  rail.append(slider, railValue, railTrack)
+  const railTicks = el('div', 'cue-slider-ticks')
+  railTicks.innerHTML = cueSliderTicksSvg()
+  const railCue = el('div', 'cue-slider-cue')
+  railCue.id = 'power-rail-cue'
+  railCue.innerHTML = cueSliderSvg()
+  railTrack.append(railFill, railTicks, railCue)
+  rail.append(slider, railTrack)
   // Mounted here, once, into the overlay the game view attaches inside the table
   // frame. This line is the difference between a slider that exists and one that is
   // on the screen: the rail was built complete but never actually hung anywhere, so
@@ -623,11 +641,22 @@ export function createHud(): Hud {
   /** Told when a slider gesture begins and ends, so the caller can lock the cue controller out of power writes. */
   let powerDragListener: ((dragging: boolean) => void) | null = null
 
-  function railValueFromPointer(event: PointerEvent): number {
-    const rect = railTrack.getBoundingClientRect()
-    if (rect.height <= 0) return 0
-    const travel = (rect.bottom - event.clientY) / rect.height
-    return Math.min(1, Math.max(0, travel))
+  /** Called when the cue is let go of far enough back to be a shot. */
+  let powerShootListener: (() => void) | null = null
+  /** Where the pointer was pressed, where the cue was then, and how far the cue can travel. */
+  let dragStartY = 0
+  let dragStartPull = 0
+  let dragTravelPx = 1
+  /** The quarter mark last reached in this gesture, for the haptic ticks. */
+  let dragQuarter = 0
+
+  /** A tick in the hand as the cue passes each quarter, where the device has one to give. */
+  function haptic(ms: number): void {
+    try {
+      navigator.vibrate?.(ms)
+    } catch {
+      // No vibration on this device, or not allowed yet: the colour says the same thing.
+    }
   }
 
   /** The cue controller owns the value; this is the write-only wire to it, set by the caller. */
@@ -647,13 +676,36 @@ export function createHud(): Hud {
     slider.setAttribute('aria-valuetext', text)
   }
 
+  /** Sets the power from the keyboard, where the value asked for is the power itself. */
   function applySliderValue(value: number): void {
     const power = powerFromSliderValue(value)
     aimPowerSetter(power)
     renderRail(power)
-    const text = `${powerPercent(power)}%`
-    railValue.textContent = text
-    setAria(powerPercent(power), text)
+    setAria(powerPercent(power), `${powerPercent(power)} percent`)
+  }
+
+  /** Sets the power from the cue's position while it is being pulled. */
+  function applyPull(pull: number): void {
+    const power = powerFromPull(pull)
+    aimPowerSetter(power)
+    renderRail(power)
+    setAria(powerPercent(power), `${powerPercent(power)} percent`)
+    const quarter = pullQuarter(pull)
+    if (quarter > dragQuarter) haptic(quarter === 4 ? 15 : 8)
+    dragQuarter = quarter
+  }
+
+  /** Ends the gesture without a shot and puts the cue back at rest. */
+  function cancelRailDrag(): void {
+    if (!railDragging) return
+    railDragging = false
+    sliderDriving = false
+    setFlag(rail, 'is-dragging', false)
+    aimPowerSetter(0)
+    renderRail(0)
+    railShown = 0
+    setAria(0, '0 percent')
+    powerDragListener?.(false)
   }
 
   const onRailPointerDown = (event: PointerEvent): void => {
@@ -661,39 +713,67 @@ export function createHud(): Hud {
     event.preventDefault()
     railDragging = true
     sliderDriving = true
+    setFlag(rail, 'is-dragging', true)
     // The lock is taken before the first write, so the value this press sets cannot
     // be fought by the controller's charge or its eased reset for the whole gesture.
     powerDragListener?.(true)
     stopSliderReset()
-    // Capture is locked at pointerdown on the track itself, so every later move and
-    // the release arrive here even when the cursor swings off the rail across the
-    // table — the handle follows the pointer one-to-one with no jumping. The drag
-    // also locks the cue controller's power writes for the gesture (via the caller),
-    // so nothing can decay the value underneath the finger.
-    railTrack.setPointerCapture(event.pointerId)
-    applySliderValue(railValueFromPointer(event))
+    // The cue is picked up where it is, not thrown to where the finger landed: the pull
+    // is measured from this press, over the cue's own travel.
+    const rect = railTrack.getBoundingClientRect()
+    dragTravelPx = Math.max(1, rect.height * CUE_SLIDER_TRAVEL)
+    dragStartY = event.clientY
+    dragStartPull = pullFromPower(lastRailPower)
+    dragQuarter = pullQuarter(dragStartPull)
+    // Capture is locked on the groove, so every later move and the release arrive here
+    // even when the finger slides off it across the table. Taken last and allowed to
+    // fail: a pointer the browser will not capture still drags, it just has to stay
+    // over the rail, and the window listeners below still see it let go.
+    try {
+      railTrack.setPointerCapture(event.pointerId)
+    } catch {
+      // Not capturable. The gesture carries on without it.
+    }
   }
   const endRailDrag = (event: PointerEvent): void => {
     if (!railDragging) return
+    if (railTrack.hasPointerCapture(event.pointerId)) railTrack.releasePointerCapture(event.pointerId)
+    if (event.type === 'pointercancel') {
+      cancelRailDrag()
+      return
+    }
+    const pull = pullFromPower(lastRailPower)
+    if (!pullShoots(pull)) {
+      // Brought back to the top and let go: a change of mind, and no shot.
+      cancelRailDrag()
+      return
+    }
     railDragging = false
     sliderDriving = false
+    setFlag(rail, 'is-dragging', false)
     powerDragListener?.(false)
     // The displayed value and the eased one are the same number from here on, so the
-    // next controller-driven update eases from where the handle actually is rather
-    // than from wherever the charge animation had got to.
+    // strike eases the cue forward from exactly where it was let go.
     railShown = lastRailPower
-    if (railTrack.hasPointerCapture(event.pointerId)) railTrack.releasePointerCapture(event.pointerId)
+    powerShootListener?.()
   }
   const onRailPointerUp = endRailDrag
   const onRailPointerMove = (event: PointerEvent): void => {
     if (!railDragging || !sliderEnabled) return
     event.preventDefault()
-    applySliderValue(railValueFromPointer(event))
+    applyPull(pullFromDrag(event.clientY - dragStartY, dragTravelPx, dragStartPull))
   }
-  railTrack.addEventListener('pointerdown', onRailPointerDown)
-  railTrack.addEventListener('pointermove', onRailPointerMove)
-  railTrack.addEventListener('pointerup', onRailPointerUp)
-  railTrack.addEventListener('pointercancel', onRailPointerUp)
+  // Escape puts the cue back without playing, like bringing it back to the top by hand.
+  window.addEventListener('keydown', (event: KeyboardEvent) => {
+    if (event.key === 'Escape') cancelRailDrag()
+  })
+  // Listened for on the rail, which is wider than the groove it holds: the strip either
+  // side of the groove is part of the touch target, so a thumb does not have to land on a
+  // 44-pixel channel. The capture is on the groove, and its events bubble up to here.
+  rail.addEventListener('pointerdown', onRailPointerDown)
+  rail.addEventListener('pointermove', onRailPointerMove)
+  rail.addEventListener('pointerup', onRailPointerUp)
+  rail.addEventListener('pointercancel', onRailPointerUp)
   // Safety net for a lost or failed capture: with capture working, the track handler
   // has already ended the drag and this returns early; without it, a release outside
   // the track would never be seen here and the drag — and with it the power lock —
@@ -822,13 +902,23 @@ export function createHud(): Hud {
   /** The last power this module rendered, so a new render can diff against it. */
   let lastRailPower = 0
 
+  /** The pull last written to the stylesheet, so a frame that changes nothing writes nothing. */
+  let lastRailPull = -1
+
   function renderRail(power: number): void {
     const clamped = clampPowerLoose(power)
-    const value = sliderValueFromPower(clamped)
     lastRailPower = clamped
-    if (railFill.style.transform !== `scaleY(${clamped})`) railFill.style.transform = `scaleY(${clamped})`
-    if (railHandle.style.bottom !== `${value * 100}%`) railHandle.style.bottom = `${value * 100}%`
+    const pull = pullFromPower(clamped)
+    if (Math.abs(pull - lastRailPull) > 0.0005) {
+      lastRailPull = pull
+      // One custom property. The cue's slide and the fill's growth are both transforms
+      // read from it in the stylesheet, so a pull never lays anything out.
+      rail.style.setProperty('--pull', pull.toFixed(4))
+      const zone = pull >= 0.75 ? 'high' : pull >= 0.4 ? 'mid' : 'low'
+      if (rail.dataset.zone !== zone) rail.dataset.zone = zone
+    }
     setFlag(rail, 'is-charging', clamped > 0.001)
+    setFlag(rail, 'is-max', pull >= 0.999)
   }
 
   let sliderResetFrame = 0
@@ -887,13 +977,13 @@ export function createHud(): Hud {
       // shown: the controller's eased charge would otherwise drag the handle back
       // down mid-gesture. Any other power change (charging, wheel, keys) is adopted.
       if (sliderDriving) return
-      railShown = easePower(railShown, power)
-      if (Math.abs(power - railShown) < 0.002) railShown = power
+      // Shown as it is, not eased towards. This is only called when the power changes, so
+      // an eased follow stopped a third of the way after a single tap of an arrow key and
+      // the cue barely moved; the cue's own short transition does the smoothing now.
+      railShown = power
       const percent = powerPercent(railShown)
-      const text = `${percent}%`
-      if (railValue.textContent !== text) railValue.textContent = text
       renderRail(railShown)
-      setAria(percent, text)
+      setAria(percent, `${percent} percent`)
     },
     setPowerEnabled: (enabled: boolean) => {
       if (sliderEnabled === enabled) return
@@ -904,6 +994,7 @@ export function createHud(): Hud {
         // A turn ending or a shot firing mid-drag has to end the gesture outright —
         // including handing power writes back to the controller — or the lock would
         // outlive the drag and leave the cue stuck on a number nobody is setting.
+        setFlag(rail, 'is-dragging', false)
         railDragging = false
         sliderDriving = false
         powerDragListener?.(false)
@@ -915,6 +1006,9 @@ export function createHud(): Hud {
     },
     setPowerDragListener: (listener) => {
       powerDragListener = listener
+    },
+    setPowerShootListener: (listener) => {
+      powerShootListener = listener
     },
     setSpin: (spin) => {
       // While the dial itself is being dragged it is the authority on what is
@@ -933,23 +1027,36 @@ export function createHud(): Hud {
      * wall of text, and every banner removes its own node when the exit animation
      * has finished.
      */
-    flashEvent: (text: string, tone: 'good' | 'bad' | 'info') => {
+    flashEvent: (text: string, tone: 'good' | 'bad' | 'info', detail?: string) => {
+      // The same announcement landing twice in a row is one announcement: a foul reported
+      // by two events of the same shot must not stack two identical plates.
+      const last = eventLayer.lastElementChild as HTMLElement | null
+      if (last && !last.classList.contains('is-out') && last.dataset.key === `${tone}:${text}`) return
       while (eventLayer.children.length >= 3) eventLayer.firstElementChild?.remove()
       const banner = el('div', `event-banner tone-${tone}`)
       banner.setAttribute('role', 'status')
+      banner.dataset.key = `${tone}:${text}`
       const label = el('span', 'event-banner-text')
       label.textContent = text
       banner.appendChild(label)
+      if (detail) {
+        const sub = el('span', 'event-banner-detail')
+        sub.textContent = detail
+        banner.appendChild(sub)
+      }
       eventLayer.appendChild(banner)
       // Two frames in before the enter class, so the initial styles are committed
       // and the transition actually runs rather than snapping to the end state.
       requestAnimationFrame(() => {
         banner.classList.add('is-in')
-        window.setTimeout(() => {
-          banner.classList.remove('is-in')
-          banner.classList.add('is-out')
-          window.setTimeout(() => banner.remove(), 450)
-        }, 1500)
+        window.setTimeout(
+          () => {
+            banner.classList.remove('is-in')
+            banner.classList.add('is-out')
+            window.setTimeout(() => banner.remove(), 450)
+          },
+          detail ? 2200 : 1600
+        )
       })
     },
     turnFrame: () => {

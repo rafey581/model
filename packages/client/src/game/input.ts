@@ -2,7 +2,7 @@ import type { ShotInput } from '@snooker/shared'
 import { BALL_RADIUS } from '@snooker/shared'
 import { tableToCanvas } from './renderer.js'
 import { aimAngleTo, ballRadiusPx, cueAxisPixels } from './cameraPick.js'
-import { POWER_ARROW_STEP, POWER_FINE_STEP, POWER_RESTING_DEFAULT, powerAdjust, powerFromDrag } from './power.js'
+import { powerAfterArrow, POWER_FINE_STEP, POWER_RESTING_DEFAULT, powerAdjust, powerFromDrag } from './power.js'
 
 /**
  * How a view answers pointer questions.
@@ -55,6 +55,22 @@ export interface CueController {
   aim: AimState
   destroy: () => void
   setCuePosition: (x: number, y: number) => void
+  /**
+   * Re-reads the aim from a mouse pointer that is resting over the table.
+   *
+   * The pointer is cast through the live camera, so when the camera pans under a pointer
+   * that has not moved, the spot under it has. Called once a frame, this keeps the aim on
+   * what the pointer is actually over instead of leaving it behind until the next move
+   * and then jumping. Does nothing mid-gesture, with no mouse over the table, or while the
+   * visit cannot be played.
+   */
+  refreshAim: () => void
+  /**
+   * Plays the shot as it is set right now, exactly as a release on the cue ball would.
+   * For the power slider, which is let go of to shoot. Does nothing when the visit
+   * cannot be played.
+   */
+  shoot: () => void
   /** Eases the power back to rest, for between shots. */
   resetPower: () => void
   /**
@@ -139,6 +155,13 @@ export function createCueController(options: CueControllerOptions): CueControlle
   let orbiting = false
   /** The horizontal pixel the orbit drag started from, so deltas are measured from it. */
   let orbitOriginX = 0
+  /**
+   * Where a mouse was last seen hovering over the table with no button held, or null.
+   *
+   * Mouse only: a finger has no hover, and a touch that has lifted is not still pointing
+   * at anything.
+   */
+  let hover: { clientX: number; clientY: number } | null = null
 
   function pointerInCanvas(event: { clientX: number; clientY: number }): { px: number; py: number; rect: DOMRect } {
     const rect = options.canvas.getBoundingClientRect()
@@ -300,9 +323,14 @@ export function createCueController(options: CueControllerOptions): CueControlle
     // `buttons` is a bitmask here, unlike `button` above: bit 0 is the primary button.
     const buttons = event.buttons ?? PRIMARY_BUTTON
     if (buttons !== 0 && (buttons & PRIMARY_BUTTON) === 0) return
+    hover = event.pointerType === 'mouse' && buttons === 0 ? { clientX: event.clientX, clientY: event.clientY } : null
     handleMove(event)
   }
+  const onPointerLeave = () => {
+    hover = null
+  }
   const onPointerDown = (event: PointerEvent) => {
+    hover = null
     // A right- or middle-button press anywhere on the canvas is the camera's gesture,
     // and it never aims, charges or fires. The look-around is consumed as horizontal
     // drag pixels by the caller; the browser's own menu on the same button is refused
@@ -379,7 +407,7 @@ export function createCueController(options: CueControllerOptions): CueControlle
         if (!options.enabled() || powerLocked) return
         event.preventDefault()
         stopReset()
-        aim.power = powerAdjust(aim.power, event.key === 'ArrowUp' ? POWER_ARROW_STEP : -POWER_ARROW_STEP)
+        aim.power = powerAfterArrow(aim.power, event.key === 'ArrowUp' ? 1 : -1)
         break
       case 'ArrowLeft':
         aim.spinX = Math.max(-1, aim.spinX - 0.2)
@@ -439,6 +467,7 @@ export function createCueController(options: CueControllerOptions): CueControlle
   options.canvas.addEventListener('pointerdown', onPointerDown)
   options.canvas.addEventListener('pointerup', onPointerUp)
   options.canvas.addEventListener('pointercancel', onPointerCancel)
+  options.canvas.addEventListener('pointerleave', onPointerLeave)
   // The right button drags the camera. The menu the browser would open on its release
   // would swallow the gesture's own pointerup and leave the drag half-finished, so it
   // is refused where it would appear.
@@ -458,12 +487,21 @@ export function createCueController(options: CueControllerOptions): CueControlle
       options.canvas.removeEventListener('pointerdown', onPointerDown)
       options.canvas.removeEventListener('pointerup', onPointerUp)
       options.canvas.removeEventListener('pointercancel', onPointerCancel)
+      options.canvas.removeEventListener('pointerleave', onPointerLeave)
       options.canvas.removeEventListener('contextmenu', onContextMenu)
       options.canvas.removeEventListener('wheel', onWheel)
       window.removeEventListener('keydown', onKeyDown)
     },
     setCuePosition: (x: number, y: number) => {
       cue = { x, y }
+    },
+    refreshAim: () => {
+      if (!hover || dragging || orbiting || !options.enabled()) return
+      aim.angle = pointerAngle(hover)
+    },
+    shoot: () => {
+      if (!options.enabled()) return
+      options.onShoot({ aimAngle: aim.angle, power: aim.power, spin: { x: aim.spinX, y: aim.spinY } })
     },
     resetPower: () => {
       // The slider owns the value while locked; an eased decay running underneath a

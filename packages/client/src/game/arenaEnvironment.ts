@@ -905,6 +905,34 @@ export function arenaSeatPlacements(cfg: ArenaConfig, budget: ArenaBudget, rows:
  * and the block boundaries are what put the aisles in. That is what stops the rows reading
  * as one continuous ring of seating.
  */
+/** Where the pools of light fall round the bowl, as headings from the table's centre, in radians. */
+const SEAT_POOL_HEADINGS = [0.35, 1.45, 2.5, 3.55, 4.6, 5.65]
+/** How wide one pool is, in radians either side of its heading. */
+const SEAT_POOL_WIDTH = 0.3
+/** How bright a seat is in the dark between pools, and at the middle of one. */
+const SEAT_POOL_FLOOR = 0.2
+const SEAT_POOL_PEAK = 2.1
+
+/**
+ * How brightly a seat is lit, as a multiple of its own colour.
+ *
+ * Brightest at the heading of the nearest pool and falling off to either side, and dimmer
+ * the higher up the stand it is, the way a light aimed at the front rows spills up the bank
+ * behind them.
+ */
+function seatPoolLight(x: number, z: number, y: number): number {
+  const heading = Math.atan2(z, x)
+  let pool = 0
+  for (const at of SEAT_POOL_HEADINGS) {
+    let delta = Math.abs(heading - at) % (Math.PI * 2)
+    if (delta > Math.PI) delta = Math.PI * 2 - delta
+    const g = Math.exp(-(delta * delta) / (SEAT_POOL_WIDTH * SEAT_POOL_WIDTH))
+    if (g > pool) pool = g
+  }
+  const height = Math.max(0.55, 1 - Math.max(0, y) / 9000)
+  return (SEAT_POOL_FLOOR + (SEAT_POOL_PEAK - SEAT_POOL_FLOOR) * pool) * height
+}
+
 function buildSeats(cfg: ArenaConfig, budget: ArenaBudget, materials: ArenaMaterials, rows: ArenaSeatRow[]): THREE.Group {
   const group = new THREE.Group()
   const geometry = buildSeatGeometry(cfg)
@@ -936,6 +964,10 @@ function buildSeats(cfg: ArenaConfig, budget: ArenaBudget, materials: ArenaMater
       // A small lift per block on top of the deck's colour, so a block reads as one colour
       // rather than as a hundred different ones.
       tint.offsetHSL(((seat.block % 5) - 2) * 0.006, 0, ((seat.block % 3) - 1) * 0.018)
+      // House lights, not a floodlit bowl: a handful of pools round the stands with dark
+      // between them, falling away up the tiers. Written into the seat's own colour, so it
+      // costs nothing to draw and is there whichever material the stands are wearing.
+      tint.multiplyScalar(seatPoolLight(seat.x, seat.z, seat.y))
       mesh.setColorAt(i, tint)
     })
     mesh.instanceMatrix.needsUpdate = true
