@@ -506,7 +506,7 @@ export const ARENA_CONFIG: ArenaConfig = {
     radius: 7300, // was 5800 (4500 originally)
     // 2050 to the head, plus the body: about 2.5m standing on the landing, which is what
     // a venue camera on a fixed pedestal actually measures.
-    height: 2050,
+    height: 1450, // was 2050: a camera in each corner, not a pillar in each corner
     legs: 3,
     legSplay: 210,
     bodyWidth: 430,

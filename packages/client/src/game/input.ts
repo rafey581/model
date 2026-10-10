@@ -120,6 +120,22 @@ const BUTTON_MIDDLE = 1
  * without reaching so far that the point behind the ball would fall outside the frame.
  */
 const AXIS_PROBE_MM = BALL_RADIUS * 4
+/**
+ * How far the aim turns for a pixel of finger travel, in radians, at a brisk drag.
+ *
+ * The same figure the game turns its camera by for a pixel of look-around drag. It has to
+ * be: on a touch screen one drag does both — the aim turns and the camera turns with it —
+ * and if the two disagreed the cue would slide off the line of sight as the finger moved.
+ */
+const TOUCH_AIM_RAD_PER_PX = Math.PI / 900
+/**
+ * A slow drag turns the aim more finely than a fast one.
+ *
+ * Under this many pixels a move, the turn is scaled down towards the floor: a quick
+ * swipe swings the cue round the table, a careful creep of the finger trims a thin cut.
+ */
+const TOUCH_FINE_BELOW_PX = 7
+const TOUCH_FINE_FLOOR = 0.3
 
 export function createCueController(options: CueControllerOptions): CueController {
   const aim: AimState = { angle: 0, power: 0, spinX: 0, spinY: 0 }
@@ -155,6 +171,15 @@ export function createCueController(options: CueControllerOptions): CueControlle
   let orbiting = false
   /** The horizontal pixel the orbit drag started from, so deltas are measured from it. */
   let orbitOriginX = 0
+  /**
+   * The finger that is turning the aim, and where it was last seen, or null.
+   *
+   * A finger does not point at a spot the way a mouse does: it covers what it is on, and
+   * it cannot hover. So a touch aims by how far it has moved, not by where it is — drag
+   * left and right anywhere on the table and the cue turns, with the view turning with it.
+   * It never charges power and never fires; on a touch screen that is the slider's job.
+   */
+  let touch: { id: number; x: number } | null = null
   /**
    * Where a mouse was last seen hovering over the table with no button held, or null.
    *
@@ -309,6 +334,21 @@ export function createCueController(options: CueControllerOptions): CueControlle
   }
 
   const onPointerMove = (event: PointerEvent) => {
+    if (touch && event.pointerId === touch.id) {
+      const dx = event.clientX - touch.x
+      touch.x = event.clientX
+      if (dx === 0 || !options.enabled()) return
+      const fine = Math.max(TOUCH_FINE_FLOOR, Math.min(1, Math.abs(dx) / TOUCH_FINE_BELOW_PX))
+      const turn = dx * fine
+      aim.angle += turn * TOUCH_AIM_RAD_PER_PX
+      // The view turns by the same amount, so the cue stays straight up the screen.
+      options.onOrbit?.(turn)
+      options.onChange({ ...aim })
+      return
+    }
+    // Any other finger says nothing: a second one down, or one that started while the visit
+    // could not be played. A touch never aims by where it is.
+    if (event.pointerType === 'touch') return
     // The orbit drag comes first: while the camera gesture is live, every move is a
     // look-around step and says nothing about the shot.
     if (orbiting) {
@@ -348,6 +388,14 @@ export function createCueController(options: CueControllerOptions): CueControlle
     // over the top of the value the player is setting on the rail. The canvas simply
     // refuses to join a power drag it does not own.
     if (!options.enabled() || powerLocked) return
+    if (event.pointerType === 'touch') {
+      // One finger at a time turns the aim; a second one down is ignored.
+      if (touch) return
+      touch = { id: event.pointerId, x: event.clientX }
+      options.canvas.setPointerCapture(event.pointerId)
+      event.preventDefault()
+      return
+    }
     dragging = true
     settingPowerByDrag = false
     holdOrigin = { x: event.clientX, y: event.clientY }
@@ -366,6 +414,10 @@ export function createCueController(options: CueControllerOptions): CueControlle
       orbiting = false
       return
     }
+    if (touch && event.pointerId === touch.id) {
+      touch = null
+      return
+    }
     if (!dragging) return
     dragging = false
     stopCharging()
@@ -380,6 +432,7 @@ export function createCueController(options: CueControllerOptions): CueControlle
     options.onShoot({ aimAngle: aim.angle, power: aim.power, spin: { x: aim.spinX, y: aim.spinY } })
   }
   const onPointerCancel = (event: PointerEvent) => {
+    touch = null
     orbiting = false
     dragging = false
     stopCharging()

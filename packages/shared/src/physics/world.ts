@@ -144,7 +144,7 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
             const cd = Math.sqrt(cdx * cdx + cdy * cdy)
             if (cd > 0) closing = Math.abs(((b.vel.x - a.vel.x) * cdx + (b.vel.y - a.vel.y) * cdy) / cd)
           }
-          if (!resolveCollisionPair(a, b)) continue
+          if (!resolveCollisionPair(a, b, subDt)) continue
           if (contacts && closing >= CONTACT_MIN_BALL_SPEED) {
             contacts.push([
               0,
@@ -427,17 +427,60 @@ function checkPockets(ball: BallState, pockets: Pocket[], events: SimEvent[], ti
   return null
 }
 
-function resolveCollisionPair(a: BallState, b: BallState): boolean {
-  const dx = b.pos.x - a.pos.x
-  const dy = b.pos.y - a.pos.y
+function resolveCollisionPair(a: BallState, b: BallState, stepDt = 0): boolean {
+  let dx = b.pos.x - a.pos.x
+  let dy = b.pos.y - a.pos.y
   const minDist = BALL_RADIUS * 2
-  const d2 = dx * dx + dy * dy
+  let d2 = dx * dx + dy * dy
   if (d2 === 0 || d2 >= minDist * minDist) return false
+
+  // The two are found overlapping, which means they touched some way back along this
+  // substep. Where they touched is what decides which way each one leaves, so they are
+  // put back to that moment first, the collision is worked out there, and they are then
+  // carried forward again for the time that was left.
+  //
+  // Working it out from the overlapped positions instead turned every cut shot thin: by
+  // the time the overlap was noticed the cue ball had travelled up to a quarter of a
+  // radius past the point of contact, and the line between the centres had swung round
+  // with it. Measured, that was two degrees on a half-ball cut and over five at worst —
+  // several times the width of a pocket at the far end of the table — and it changed
+  // with every millimetre of distance, so the same shot did not go the same way twice.
+  let rewind = 0
+  const wx = b.vel.x - a.vel.x
+  const wy = b.vel.y - a.vel.y
+  const w2 = wx * wx + wy * wy
+  const dw = dx * wx + dy * wy
+  if (stepDt > 0 && w2 > 0 && dw < 0) {
+    const disc = dw * dw - w2 * (d2 - minDist * minDist)
+    const back = (dw + Math.sqrt(disc)) / w2
+    // Only a contact that happened inside this substep. An overlap older than that was
+    // not made by this motion (a ball pressed against two others, say), and is left to
+    // the plain separation below.
+    if (back > 0 && back <= stepDt) {
+      rewind = back
+      a.pos.x -= a.vel.x * back
+      a.pos.y -= a.vel.y * back
+      b.pos.x -= b.vel.x * back
+      b.pos.y -= b.vel.y * back
+      dx = b.pos.x - a.pos.x
+      dy = b.pos.y - a.pos.y
+      d2 = dx * dx + dy * dy
+    }
+  }
+
   const d = Math.sqrt(d2)
   const nx = dx / d
   const ny = dy / d
   const relSpeedAlongNormal = (b.vel.x - a.vel.x) * nx + (b.vel.y - a.vel.y) * ny
-  if (relSpeedAlongNormal > 0) return false
+  if (relSpeedAlongNormal > 0) {
+    if (rewind > 0) {
+      a.pos.x += a.vel.x * rewind
+      a.pos.y += a.vel.y * rewind
+      b.pos.x += b.vel.x * rewind
+      b.pos.y += b.vel.y * rewind
+    }
+    return false
+  }
   // Impulse for two equal masses with restitution e: j = -(1+e)·(v_rel·n) / 2, the
   // analytic equal-mass result. Going through e means the normal relative velocity
   // after the impulse is exactly -e times what it was before, so at e = 0.96 the
@@ -459,6 +502,14 @@ function resolveCollisionPair(a: BallState, b: BallState): boolean {
   const bw = b.angularVel
   a.angularVel += (bw - aw) * SPIN_TRANSFER
   b.angularVel += (aw - bw) * SPIN_TRANSFER
+  if (rewind > 0) {
+    // The rest of the substep, on the way out.
+    a.pos.x += a.vel.x * rewind
+    a.pos.y += a.vel.y * rewind
+    b.pos.x += b.vel.x * rewind
+    b.pos.y += b.vel.y * rewind
+    return true
+  }
   const overlap = minDist - d
   const cx = nx * (overlap / 2)
   const cy = ny * (overlap / 2)

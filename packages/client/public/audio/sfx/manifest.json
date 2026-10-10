@@ -1,57 +1,57 @@
 {
   "ball:soft": [
-    "ball_2.wav",
-    "ball_5.wav"
+    "ball_2.sfx",
+    "ball_5.sfx"
   ],
   "ball:medium": [
-    "ball_1.wav",
-    "ball_4.wav",
-    "ball_5.wav"
+    "ball_1.sfx",
+    "ball_4.sfx",
+    "ball_5.sfx"
   ],
   "ball:hard": [
-    "ball_3.wav",
-    "ball_4.wav",
-    "ball_1.wav"
+    "ball_3.sfx",
+    "ball_4.sfx",
+    "ball_1.sfx"
   ],
   "cue:soft": [
-    "cue_3.wav",
-    "cue_2.wav"
+    "cue_3.sfx",
+    "cue_2.sfx"
   ],
   "cue:medium": [
-    "cue_2.wav",
-    "cue_4.wav"
+    "cue_2.sfx",
+    "cue_4.sfx"
   ],
   "cue:hard": [
-    "cue_1.wav",
-    "cue_4.wav"
+    "cue_1.sfx",
+    "cue_4.sfx"
   ],
   "cushion:soft": [
-    "cushion_2.wav"
+    "cushion_2.sfx"
   ],
   "cushion:medium": [
-    "cushion_1.wav",
-    "cushion_2.wav"
+    "cushion_1.sfx",
+    "cushion_2.sfx"
   ],
   "cushion:hard": [
-    "cushion_3.wav",
-    "cushion_1.wav"
+    "cushion_3.sfx",
+    "cushion_1.sfx"
   ],
   "jaw": [
-    "knock_low.wav"
+    "knock_low.sfx"
   ],
   "drop": [
-    "pocket_drop.wav"
+    "pocket_drop.sfx"
   ],
   "net": [
-    "pocket_roll.wav"
+    "pocket_roll.sfx"
   ],
   "uiClick": [
-    "ui_click.wav"
+    "ui_click.sfx"
   ],
   "turnTick": [
-    "turn.wav"
+    "turn.sfx"
   ],
   "placeTick": [
-    "tick.wav"
+    "tick.sfx"
   ]
 }

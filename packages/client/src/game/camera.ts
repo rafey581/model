@@ -780,6 +780,23 @@ export function stepCameraRig(state: CameraRigState, request: CameraRequest, dt:
   return { pose: clampPose(eased.pose), yaw, velocity: eased.velocity }
 }
 
+/**
+ * Puts the rig straight onto what a request asks for, with no easing.
+ *
+ * For a change of view the player asked for by pressing the button. Easing between the
+ * view behind the cue ball and the one straight overhead takes the lens through looking
+ * very nearly straight down, where which way is "up" for it is undefined, and the picture
+ * rolls on its way there. A cut has no in-between to roll through.
+ */
+export function snapCameraRig(request: CameraRequest): CameraRigState {
+  const yaw = latchedCameraYaw(request.latch)
+  const target =
+    request.mode === 'AIM' && request.cue
+      ? aimPose(request.cue, yaw, aimFovDeg(request.aspect))
+      : resolveCameraTarget({ ...request, aimAngle: yaw })
+  return { pose: clampPose(target), yaw }
+}
+
 /** The heading a pose implies, for tests and for re-seeding the rig. */
 export function poseHeading(pose: CameraPose): number {
   return Math.atan2(pose.lookY - pose.y, pose.lookX - pose.x)

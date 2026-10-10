@@ -84,8 +84,13 @@ export const MAX_CUE_SPEED = 9000
 // Follow and draw are applied once, at the cue ball's first contact, as a
 // fraction of the cue ball's speed immediately before that contact. Scaling by
 // the post-contact residual instead makes both effects vanishingly small.
-export const FOLLOW_IMPULSE = 0.08
-export const DRAW_IMPULSE = 0.1
+//
+// A cue ball that hits an object ball full stops dead and is then driven by the spin it
+// still has: rolling forward it runs on at about two sevenths of the speed it arrived
+// with, and screwed back it comes back at up to about the same. At 0.08 and 0.1 a full
+// screw shot came back the width of three balls, which is not a screw shot.
+export const FOLLOW_IMPULSE = 0.2
+export const DRAW_IMPULSE = 0.26
 // Spin-induced throw, in degrees of object-ball deflection at full side spin.
 // A bounded rotation, so it cannot add energy to the collision.
 export const SIDE_SPIN_THROW_DEG = 3

@@ -24,6 +24,8 @@ export interface TurnBanner {
   setChip(mine: boolean): void
   /** Takes the plate down, for the end of a frame or a match. */
   clear(): void
+  /** Sends the plate off now, with its usual exit. For a shot that starts while it is still up. */
+  dismiss(): void
   /**
    * Counts the plate's life down. Driven by the render loop rather than a timer, so a tab
    * that was in the background comes back to an empty screen instead of a plate that
@@ -78,6 +80,13 @@ export function buildTurnBanner(config: VenueConfig = VENUE_CONFIG): TurnBanner 
     setChip(): void {},
     clear(): void {
       drop()
+    },
+    dismiss(): void {
+      if (!plate || hideIn <= 0) return
+      hideIn = 0
+      plate.classList.remove('is-in')
+      plate.classList.add('is-out')
+      removeIn = EXIT_SECONDS
     },
     tick(dt: number): void {
       if (hideIn > 0) {

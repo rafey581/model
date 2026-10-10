@@ -1053,7 +1053,10 @@ describe('playback', () => {
     // clocks agreeing is what makes the keyframe times line up with the replay.
     // `ticksUsed` counts the final tick that found the table already settled, which
     // adds no time, so the two agree to within a single tick.
-    expect(Math.abs(result.simSeconds - result.ticksUsed * TICK_DT)).toBeLessThanOrEqual(TICK_DT)
+    // `simSeconds` is reported to the millisecond, so half a millisecond of rounding sits
+    // on top of that tick: without it this passed or failed on which way the break's
+    // length happened to round.
+    expect(Math.abs(result.simSeconds - result.ticksUsed * TICK_DT)).toBeLessThanOrEqual(TICK_DT + 0.0005)
     expect(result.simSeconds).toBeLessThan(60)
   })
 

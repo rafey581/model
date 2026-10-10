@@ -39,6 +39,7 @@ import { USE_NEW_SFX } from './lobby/flag.js'
 import { emitSfx } from './sfx/sfxEvents.js'
 import { replaySfx } from './sfx/replayAdapter.js'
 import { SHOT_PLAYBACK_SPEED } from './game/playback.js'
+import { installHudMenu, type HudMenu } from './game/hudMenu.js'
 import { ShotPlayer } from './game/playback.js'
 import type { PlaybackBall } from './game/playback.js'
 import { renderAuthScreen } from './auth.js'
@@ -54,6 +55,7 @@ import {
 } from './game/placement.js'
 import { PLAYER_CAMERA_MODES, PLACEMENT_TRANSITION_SECONDS, type PlayerCameraMode } from './game/camera.js'
 import { createRenderScaler } from './game/renderScale.js'
+import { createPerfOverlay } from './game/perfOverlay.js'
 import { qualityConfig, qualityPreference } from './game/qualityConfig.js'
 /** Radians of camera orbit per pixel of right-drag: a full-width drag sweeps half a turn. */
 const CAMERA_ORBIT_PER_PIXEL = Math.PI / 900
@@ -126,6 +128,8 @@ let pendingSceneBuildProgress: ((fraction: number) => void) | undefined
  */
 let cameraMode: PlayerCameraMode = 'AIM'
 let cameraToggleEl: HTMLButtonElement | null = null
+/** The match screen's menu and pause curtain, rebuilt with each match's HUD. */
+let hudMenu: HudMenu | null = null
 /**
  * Where the cue-ball placement flow currently stands: idle, flying the camera up to the
  * overhead placement view, placing, or flying back to the gameplay view.
@@ -2559,6 +2563,14 @@ function renderGame(): void {
   // Directly under Leave, in the same column and the same material: the two controls a
   // player reaches for between shots, and nothing else in that corner.
   hud.toolsRoot.appendChild(buildCameraToggle())
+  // Once every button below has been built, they are gathered into the menu and pause is
+  // added. Presentation only: the buttons keep the handlers they are given here.
+  const menuHud = hud
+  hudMenu?.dispose()
+  hudMenu = null
+  queueMicrotask(() => {
+    if (hud === menuHud) hudMenu = installHudMenu(menuHud)
+  })
 
   /**
    * The top-right group: everything that is not leaving.
@@ -2645,8 +2657,9 @@ function renderGame(): void {
     help.hidden = true
     helpBtn.setAttribute('aria-controls', help.id)
     help.append(
-      el('p', undefined, 'Aim: mouse or touch'),
-      el('p', undefined, 'Power: drag the slider, hold to charge, or ↑/↓ to trim'),
+      el('p', undefined, 'Aim: move the mouse, or drag a finger left and right'),
+      el('p', undefined, 'Turn the view: right-drag, or the same finger drag'),
+      el('p', undefined, 'Power: pull the cue in the slider back and let go, or ↑/↓'),
       el('p', undefined, 'Spin: ↑/↓ side, W/S top-bottom'),
       el('p', undefined, 'Shoot: release or Space')
     )
@@ -2696,11 +2709,11 @@ function renderGame(): void {
   pendingSceneBuildProgress = undefined
   scene3d = Scene3D.create(canvas, canvas.width, canvas.height, buildOpts)
   try {
-    // A machine that needed the cheaper surroundings last match needs them this one too,
-    // and the low tier always has them. A level the player fixed by name is otherwise left
-    // exactly as it is.
+    // Only the high tier lights the arena in full. Below it the surroundings start on
+    // their cheaper finish: they are the backdrop, and the frame they cost is better spent
+    // on the table. A machine on Auto that needed it last match gets it too.
     const rememberedLow = adaptiveQuality && localStorage.getItem(ENVIRONMENT_LOW_STORAGE_KEY) === '1'
-    if (rememberedLow || qualityConfig().name === 'low') scene3d?.lowerEnvironmentDetail()
+    if (rememberedLow || qualityConfig().name !== 'high') scene3d?.lowerEnvironmentDetail()
   } catch {
     // Storage refused: the scaler will ask for it within a second or two if it is needed.
   }
@@ -3396,6 +3409,9 @@ function hintPlacement(text: string | null): void {
   }
 }
 
+/** The frame-rate readout, when the address asked for one with `?perf=1`. */
+const perfOverlay = createPerfOverlay()
+
 function loop(): void {
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement | null
   try {
@@ -3453,8 +3469,15 @@ function loop(): void {
           // own label while doing nothing is worse than one that is plainly unavailable.
           cameraToggleEl.disabled = !canAim
         }
+        const perfStart = perfOverlay ? performance.now() : 0
         scene3d.update(shown, renderOptions)
+        const perfMid = perfOverlay ? performance.now() : 0
         scene3d.render()
+        perfOverlay?.frame(fdt, perfMid - perfStart, performance.now() - perfMid, () => {
+          const scale = renderScaler.scale < 1 ? `  scale ${renderScaler.scale.toFixed(2)}` : ''
+          const room = scene3d?.isEnvironmentDetailLow() ? 'cheap room' : 'full room'
+          return `${qualityConfig().name}${adaptiveQuality ? ' (auto)' : ''}  ${canvas.width}x${canvas.height}${scale}  ${room}`
+        })
       } else {
         // The fallback renderer draws one fixed view, so there is nothing to switch
         // between and the button would be offering a choice that does not exist.

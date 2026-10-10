@@ -14,16 +14,22 @@ import { LAYERS, type Layer, type SoundType } from './sfxConfig.js'
  * Nothing is required. With no manifest the generated sounds are used, and a sound the
  * manifest does not list keeps its generated version, so a partial set works.
  *
+ * The files are ordinary audio (WAV, OGG, MP3 — whatever the browser decodes), but they
+ * are best given an extension that is not an audio one, such as `.sfx`. Download-manager
+ * browser extensions watch every request for names ending in `.wav` or `.mp3` and offer to
+ * download them, which to a player is a queue of download prompts every time the game
+ * loads. The decoder reads the bytes and does not care what the file is called.
+ *
  * `manifest.json` maps a sound, or a sound at one strength, to a list of files:
  *
  *   {
- *     "ball:soft":   ["ball_soft_1.wav", "ball_soft_2.wav"],
- *     "ball:medium": ["ball_medium_1.wav"],
- *     "ball:hard":   ["ball_hard_1.wav", "ball_hard_2.wav"],
- *     "cue":         ["cue_1.wav", "cue_2.wav"],
- *     "cushion":     ["cushion_1.wav"],
- *     "drop":        ["pocket_1.wav"],
- *     "rolling":     ["roll_loop.wav"]
+ *     "ball:soft":   ["ball_soft_1.sfx", "ball_soft_2.sfx"],
+ *     "ball:medium": ["ball_medium_1.sfx"],
+ *     "ball:hard":   ["ball_hard_1.sfx", "ball_hard_2.sfx"],
+ *     "cue":         ["cue_1.sfx", "cue_2.sfx"],
+ *     "cushion":     ["cushion_1.sfx"],
+ *     "drop":        ["pocket_1.sfx"],
+ *     "rolling":     ["roll_loop.sfx"]
  *   }
  *
  * A sound given without a strength ("cue") is used for all three: the loudness still

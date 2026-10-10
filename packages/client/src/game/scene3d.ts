@@ -37,6 +37,9 @@ import {
   disposeTableTextures,
   feltNormalTexture,
   feltTexture,
+  clothDetailTexture,
+  CLOTH_DETAIL_REPEAT_U,
+  CLOTH_DETAIL_REPEAT_V,
   leatherAlbedoTexture,
   leatherNormalTexture,
   leatherRoughnessTexture,
@@ -57,7 +60,7 @@ const SHOW_OLD_AUDIENCE = false
  */
 const AIM_SETTLED_HEIGHT_MM = 40
 /** How bright the arena's materials are drawn once they are unlit, against their own colour. */
-const ENVIRONMENT_UNLIT_LEVEL = 0.5
+const ENVIRONMENT_UNLIT_LEVEL = 0.82
 /** How much the ambient light is raised when the stand washes are switched off. */
 const ENVIRONMENT_LOW_AMBIENT_LIFT = 1.35
 import {
@@ -79,6 +82,7 @@ import {
   aimFovDeg,
   resolveCameraTarget,
   followHeadingLatch,
+  snapCameraRig,
   latchedCameraYaw,
   PLACEMENT_TRANSITION_SECONDS,
   type CameraPose
@@ -117,6 +121,7 @@ import {
 } from './tableGeometry.js'
 import { makeJawGeometry, jawSpecs, makePocketNetGeometry, pocketNetAlphaTexture } from './pocketGeometry.js'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { buildTableMarkings } from './tableMarkings.js'
 import {
   TABLE_LEGS_SUFFIX, instantiateTableModel, tableModelIfReady, type TableMaterials } from './tableModel.js'
 
@@ -236,7 +241,7 @@ let MAX_ANISO = 4
 /** The scene's clear colour: dark navy, the top of the room's gradient. */
 const ROOM_BG_COLOR = '#10235a'
 /** What the camera sees past the edge of the carpet: the darkened hall itself. */
-const ROOM_DARK_COLOR = '#04060d'
+const ROOM_DARK_COLOR = '#0a1638'
 /** Gentle exponential fog in the room's own colour, per millimetre. Nothing at gameplay distances, a fade at the far wall. */
 const ROOM_FOG_DENSITY = 0.00004
 /** The blue the wall is painted at its brightest. */
@@ -536,6 +541,56 @@ function aimRibbonSolidTexture(): THREE.CanvasTexture {
 }
 
 
+/** How long a potted ball takes to go, how far it falls, and how much of that time is the run to the middle of the pocket. */
+const POT_DROP_SECONDS = 0.42
+const POT_DROP_MM = 150
+const POT_RUN_IN = 0.45
+
+/** The bed's material: physically based on the high tier, baked and unlit below it. */
+type ClothMaterial = THREE.MeshPhysicalMaterial | THREE.MeshLambertMaterial | THREE.MeshBasicMaterial
+
+/**
+ * How bright the bed is when its light is baked in, as a multiple of the texture.
+ *
+ * Under the lamp the cloth came out at about 0.8 of its texture. This is a little over
+ * that on purpose: a table under a canopy of lights is the brightest thing in the room.
+ */
+const CLOTH_BAKED_LEVEL = 1.08
+
+/** How strongly the fibre tile shows in the bed's colour. */
+const CLOTH_DETAIL_STRENGTH = 0.55
+
+/**
+ * Lays the cloth's fibre over the bed's colour.
+ *
+ * The bed's own texture is stretched over the whole table and can only hold what is
+ * large; the fibre is a small tile repeated across it. A stock material samples one
+ * colour texture at one scale, so the second is added to its shader: one more texture
+ * read per pixel, multiplied in. If the shader ever stops having the line this hooks
+ * onto, nothing is replaced and the bed is simply drawn without the fibre.
+ */
+function withClothDetail<T extends ClothMaterial>(material: T): T {
+  const detail = { value: clothDetailTexture() }
+  const repeat = { value: new THREE.Vector2(CLOTH_DETAIL_REPEAT_U, CLOTH_DETAIL_REPEAT_V) }
+  const strength = { value: CLOTH_DETAIL_STRENGTH }
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.clothDetail = detail
+    shader.uniforms.clothDetailRepeat = repeat
+    shader.uniforms.clothDetailStrength = strength
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <map_pars_fragment>',
+        '#include <map_pars_fragment>\nuniform sampler2D clothDetail;\nuniform vec2 clothDetailRepeat;\nuniform float clothDetailStrength;'
+      )
+      .replace(
+        '#include <map_fragment>',
+        '#include <map_fragment>\n#ifdef USE_MAP\n\tdiffuseColor.rgb *= 1.0 + ( texture2D( clothDetail, vMapUv * clothDetailRepeat ).g - 0.5 ) * 2.0 * clothDetailStrength;\n#endif'
+      )
+  }
+  material.customProgramCacheKey = () => 'cloth-detail'
+  return material
+}
+
 /**
  * The nine materials the Blender table asks for, finished as one premium table.
  *
@@ -554,9 +609,10 @@ function aimRibbonSolidTexture(): THREE.CanvasTexture {
  * Quality knobs read from `qualityConfig()`: the lower tiers drop the roughness and
  * normal maps that cost the most sampling.
  */
-function tableMaterials(clothMat: THREE.MeshPhysicalMaterial): TableMaterials {
+function tableMaterials(clothMat: ClothMaterial): TableMaterials {
   const tier = qualityConfig()
   const isLow = tier.name === 'low'
+  const isHighTier = tier.name === 'high'
 
   const wood = new THREE.MeshPhysicalMaterial({
     map: woodTexture(),
@@ -585,18 +641,29 @@ function tableMaterials(clothMat: THREE.MeshPhysicalMaterial): TableMaterials {
   })
   if (!isLow) brass.roughnessMap = brassRoughnessTexture()
 
-  const jawCloth = new THREE.MeshPhysicalMaterial({
-    map: cushionFeltTexture(),
-    color: new THREE.Color(CLOTH_COLOR_MID),
-    vertexColors: true,
-    roughness: 0.9,
-    metalness: 0,
-    sheen: CLOTH_SHEEN,
-    sheenColor: new THREE.Color(CLOTH_SHEEN_COLOR),
-    sheenRoughness: CLOTH_SHEEN_ROUGHNESS,
-    side: THREE.DoubleSide,
-    envMapIntensity: 0.12
-  })
+  // The cushions are the same cloth as the bed and follow it: diffuse below the high tier.
+  let jawCloth: ClothMaterial
+  if (isHighTier) {
+    jawCloth = new THREE.MeshPhysicalMaterial({
+      map: cushionFeltTexture(),
+      color: new THREE.Color(CLOTH_COLOR_MID),
+      vertexColors: true,
+      roughness: 0.9,
+      metalness: 0,
+      sheen: CLOTH_SHEEN,
+      sheenColor: new THREE.Color(CLOTH_SHEEN_COLOR),
+      sheenRoughness: CLOTH_SHEEN_ROUGHNESS,
+      side: THREE.DoubleSide,
+      envMapIntensity: 0.12
+    })
+  } else {
+    jawCloth = new THREE.MeshLambertMaterial({
+      map: cushionFeltTexture(),
+      color: new THREE.Color(CLOTH_COLOR_MID),
+      vertexColors: true,
+      side: THREE.DoubleSide
+    })
+  }
   if (tier.clothNormal) {
     jawCloth.normalMap = feltNormalTexture()
     jawCloth.normalScale = new THREE.Vector2(CUSHION_NORMAL_STRENGTH, CUSHION_NORMAL_STRENGTH)
@@ -927,6 +994,11 @@ export class BallRig {
     this.group.visible = visible
   }
 
+  /** Turns the ball about the axis it was last rolling on, by a distance of travel. */
+  spinBy(distance: number): void {
+    if (this.rollAxis.lengthSq() > 0) this.sphere.rotateOnWorldAxis(this.rollAxis, distance / this.radius)
+  }
+
   startSink(targetX: number, targetZ: number): void {
     this.sinking = true
     this.sinkT = 0
@@ -1068,6 +1140,8 @@ export class Scene3D implements VenueHost {
    * re-read the pointer as an aim until this is true.
    */
   private aimViewSettled = false
+  /** Set when the player has picked a different view: the next camera step cuts to it. */
+  private cameraCut = false
   /** True once the surroundings have been put on their cheaper finish for this scene. */
   private environmentLow = false
   /** What each swapped mesh was wearing, so teardown can free the originals too. */
@@ -1490,6 +1564,8 @@ export class Scene3D implements VenueHost {
     this.venueSeats = SHOW_OLD_AUDIENCE ? arena.seats : []
     onBuild?.(0.32)
     this.buildTable()
+    // The baulk line, the D and the spots, over the bed whichever table was built.
+    this.scene.add(buildTableMarkings())
     // The old room's floor and back wall are built inside buildTable, so they can only be
     // stepped over once that has run. It has to happen: the old floor sits at exactly
     // `carpetY`, so leaving it in the scene puts two ground planes at the same depth and
@@ -1698,7 +1774,19 @@ export class Scene3D implements VenueHost {
     // surface receives light of two different hues. This is what separates the brass
     // from the wood behind it — a single-hue scene gives metal nowhere to put its
     // warm/cool split, and brass ends up looking like tinted plastic.
-    const fill = new THREE.DirectionalLight(0x9fc0e8, 0.12) 
+    // Four small shaping lights, on the high tier only.
+    //
+    // Each is a tenth of the lamp or less, and each one is a whole extra light for every
+    // lit pixel on the screen to be shaded under: between them they were a quarter of the
+    // frame on built-in graphics, for a difference that has to be looked for. Below the
+    // high tier their share of the light is given to the hemisphere and the ambient
+    // instead, which cost nothing per light, so the table is no darker for losing them.
+    if (qualityConfig().name !== 'high') {
+      ambient.intensity += 0.07
+      hemi.intensity += 0.16
+      return
+    }
+    const fill = new THREE.DirectionalLight(0x9fc0e8, 0.12)
     fill.position.set(2200, 1200, -1100)
     this.scene.add(fill)
 
@@ -1709,11 +1797,7 @@ export class Scene3D implements VenueHost {
     // A low grazing kicker from the front-right, just above rail height. It does almost
     // nothing for the bed — which faces up, so a near-horizontal light barely touches it
     // — but it rakes across the vertical faces of the apron and the cushion ends, which
-    // is where a premium table is actually read. Without it the whole body of the table
-    // sits in the lamp's ambient wash and the milled detail has no edge to catch.
-
-    
-    // No shadow: this is a shaping light, and a second shadow map is not worth it.
+    // is where a premium table is actually read. No shadow: this is a shaping light.
     const kicker = new THREE.DirectionalLight(0xfff0d4, 0.15)
     kicker.position.set(2600, 320, 1900)
     this.scene.add(kicker)
@@ -1732,7 +1816,27 @@ export class Scene3D implements VenueHost {
    * the same texture instance: `selfCheck` finds the cloth by its map, and the
    * model path in `buildTable` needs the material even though it builds no bed.
    */
-  private makeClothMaterial(): THREE.MeshPhysicalMaterial {
+  private makeClothMaterial(): ClothMaterial {
+    // Below the high tier the bed is a plain diffuse surface.
+    //
+    // The cloth is half of every frame, and it was being shaded as a physically based
+    // material: a specular lobe, a sheen lobe and a lookup into the environment map for
+    // every pixel of it, under every light — to draw a napped wool cloth, which has no
+    // shine to speak of. A diffuse material gives the same picture of it for a fraction
+    // of the work, and that fraction is the difference between a table that holds its
+    // frame rate on a laptop's built-in graphics and one that does not. The balls, which
+    // are small on screen and are where a shine actually reads, keep theirs.
+    if (qualityConfig().name !== 'high') {
+      // And its light is not worked out at all: it is in the texture. The lamp does not
+      // move and neither does the table, so what the lamp does to the cloth is the same
+      // picture every frame — a pool of light in the middle, falling away to the ends and
+      // under the cushions — and `feltTexture` has that picture painted in. Drawing the
+      // bed unlit shows it as painted, for one texture read per pixel, on the surface
+      // that fills half the screen.
+      const baked = new THREE.MeshBasicMaterial({ map: (this.feltTex = feltTexture()) })
+      baked.color.setScalar(CLOTH_BAKED_LEVEL)
+      return withClothDetail(baked)
+    }
     const clothMat = new THREE.MeshPhysicalMaterial({
       map: (this.feltTex = feltTexture()),
       color: 0xffffff,
@@ -1748,7 +1852,7 @@ export class Scene3D implements VenueHost {
       clothMat.normalMap = feltNormalTexture()
       clothMat.normalScale = new THREE.Vector2(CLOTH_NORMAL_STRENGTH, CLOTH_NORMAL_STRENGTH)
     }
-    return clothMat
+    return withClothDetail(clothMat)
   }
 
   /**
@@ -3562,7 +3666,11 @@ const outerL = APRON_OUTER_L
         this.balls.set(ball.id, rig)
         this.scene.add(rig.group)
       }
-      rig.setVisible(!ball.potted || rig.sinking)
+      // A ball potted on this very update is still on show: it has its drop to do. Hiding
+      // it here, before the drop below had a chance to start, is what made a potted ball
+      // blink out at the lip — the drop only starts for a ball that is visible.
+      const justPotted = ball.potted && this.wasPotted.get(ball.id) === false && rig.group.visible
+      rig.setVisible(!ball.potted || rig.sinking || justPotted)
       // The cue ball under a placement lock is drawn from the confirmed position and
       // stays visible even while the snapshot still has it potted: this is the ball the
       // player just placed, and it is what the camera is flying back to. Every other ball
@@ -3806,6 +3914,10 @@ const outerL = APRON_OUTER_L
    * eases between them — so this can be called as often as the button is pressed.
    */
   setCameraMode(mode: PlayerCameraMode): void {
+    // A different view from the one being shown is the player pressing the button: the
+    // next frame goes straight there. This is called every frame with the same mode, and
+    // that changes nothing.
+    if (mode !== this.cameraMode) this.cameraCut = true
     this.cameraMode = mode
   }
 
@@ -3982,24 +4094,51 @@ const outerL = APRON_OUTER_L
       this.rig = { pose: this.spectatorPose(), yaw: this.rig.yaw }
       this.aimViewSettled = false
     } else {
-      const mode = this.tracking ? 'TRACK' : this.placementViewHeld ? 'PLACEMENT_TOP_DOWN' : this.cameraMode
+      // While a shot is playing the view stays the one the player chose. There used to be
+      // a third view for this — the camera climbed up behind the balls to follow them —
+      // and it took the player out of their seat at the moment they most wanted to watch
+      // from it. From the view behind the cue ball the camera now simply holds still for
+      // the shot: the whole table is ahead of it, and it does not chase the cue ball
+      // down the cloth. It moves round behind the cue ball again once everything stops.
+      const mode = this.placementViewHeld ? 'PLACEMENT_TOP_DOWN' : this.cameraMode
+      const held = this.tracking && mode === 'AIM'
       // While the player is free to aim, the heading pans after an aim that has swung
       // out of the band in front of the lens — gated to the half-plane the camera can
       // see, so the drag-back that sets power cannot spin it.
       if (!this.tracking) this.latch = followHeadingLatch(this.latch, this.lastAimAngle, dt)
-      this.rig = stepCameraRig(
-        this.rig,
-        {
+      // The view the player just picked is cut to, not flown to. Only when the view on
+      // screen is theirs to pick: a shot being followed keeps its own easing.
+      const cut = this.cameraCut && !this.tracking && !this.placementViewHeld
+      this.cameraCut = false
+      if (cut) {
+        this.rig = snapCameraRig({
           mode,
           aspect: this.cvw / Math.max(1, this.cvh),
           cue,
           aimAngle: this.lastAimAngle,
           latch: this.latch,
-          focus: count > 0 ? { x: sumX / count, y: sumY / count, spread } : null
-        },
-        dt
-      )
+          focus: null
+        })
+      }
+      if (held) {
+        // Stopped dead, not left coasting on whatever speed the last pan had.
+        this.rig = { pose: this.rig.pose, yaw: this.rig.yaw }
+      } else {
+        this.rig = stepCameraRig(
+          this.rig,
+          {
+            mode,
+            aspect: this.cvw / Math.max(1, this.cvh),
+            cue,
+            aimAngle: this.lastAimAngle,
+            latch: this.latch,
+            focus: count > 0 ? { x: sumX / count, y: sumY / count, spread } : null
+          },
+          dt
+        )
+      }
       this.aimViewSettled =
+        !held &&
         mode === 'AIM' &&
         cue !== null &&
         Math.abs(this.rig.pose.height - aimPose(cue, this.rig.yaw).height) < AIM_SETTLED_HEIGHT_MM
@@ -4379,15 +4518,27 @@ const outerL = APRON_OUTER_L
       }
       for (const rig of this.balls.values()) {
         if (!rig.sinking) continue
-        rig.sinkT += dt * 3.4
+        // A pot is a ball running over the lip and dropping, in that order. It carries on
+        // to the middle of the pocket first, quickly, the way it was already travelling,
+        // and only then falls — under its own weight, so slowly at first and then fast —
+        // down through the hole in the cloth until the pocket hides it. It used to shrink
+        // to nothing on the spot where the simulation caught it, which is short of the
+        // pocket: a ball that vanished as it arrived rather than one that went in.
+        const before = rig.group.position.clone()
+        rig.sinkT += dt / POT_DROP_SECONDS
         const t = Math.min(1, rig.sinkT)
-        const eased = t * t
+        const across = Math.min(1, t / POT_RUN_IN)
+        const run = 1 - (1 - across) * (1 - across)
+        const fall = Math.max(0, (t - POT_RUN_IN * 0.5) / (1 - POT_RUN_IN * 0.5))
         rig.group.position.set(
-          rig.sinkStart.x + (rig.sinkTarget.x - rig.sinkStart.x) * eased,
-          rig.sinkStart.y - eased * 34,
-          rig.sinkStart.z + (rig.sinkTarget.z - rig.sinkStart.z) * eased
+          rig.sinkStart.x + (rig.sinkTarget.x - rig.sinkStart.x) * run,
+          rig.sinkStart.y - fall * fall * POT_DROP_MM,
+          rig.sinkStart.z + (rig.sinkTarget.z - rig.sinkStart.z) * run
         )
-        const s = 1 - eased * 0.55
+        // Still turning as it goes in.
+        const travelled = rig.group.position.distanceTo(before)
+        if (travelled > 1e-4) rig.spinBy(travelled)
+        const s = 1 - fall * 0.12
         rig.group.scale.set(s, s, s)
         if (t >= 1) {
           rig.sinking = false

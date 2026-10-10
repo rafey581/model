@@ -278,76 +278,48 @@ export function woodNormalTexture(): THREE.CanvasTexture {
 // from #147a3c down to #083d1e at the cushions — half the centre's brightness, painted
 // into the cloth itself — which is what made the ends of the table look unlit whatever
 // the lamp was doing.
-export const CLOTH_COLOR_CENTER = '#1e9c29'
+export const CLOTH_COLOR_CENTER = '#22a82e'
 export const CLOTH_COLOR_MID = '#1a8f25'
-export const CLOTH_COLOR_EDGE = '#14781e'
-const CLOTH_NOISE_STRENGTH = 0.03
-/** The baulk line, the D and the spots: white, and faint enough to sit in the cloth. */
-const TABLE_MARKING_COLOR = 'rgba(255,255,255,0.5)'
+export const CLOTH_COLOR_EDGE = '#116a19'
 /** How far out from each cushion its shade reaches across the bed, and how dark it starts. */
 const CUSHION_SHADE_MM = 95
 const CUSHION_SHADE_STRENGTH = 0.42
 const CLOTH_MIPMAPS = true
 
 /**
- * The bed: one tile across the whole playing surface, markings baked in.
+ * The bed: one tile across the whole playing surface.
  *
- * 512x512 with mipmapping does the smoothing work the lens can hold; the baulk
- * line, the D and the spots are painted here rather than as extra meshes, so no
- * line meshes and no extra draw calls, and the markings mip down with the baize.
+ * This texture carries only what is large and soft: the lamp's pool of light, brighter
+ * over the middle of the table and falling away to the cushions, and the cushions' own
+ * shade. It is the table's lighting, painted once instead of worked out for every pixel
+ * of every frame. Nothing fine is in it, because at seven millimetres of cloth to the
+ * pixel anything fine is a blur from the playing view: the fibre of the cloth is a small
+ * repeating texture laid over this one (`clothDetailTexture`), and the baulk line, the D
+ * and the spots are geometry (`tableMarkings.ts`).
  */
 export function feltTexture(): THREE.CanvasTexture {
   let tex = tableCache.get('felt')
   if (tex) return tex
   const size = 512
   const { canvas, ctx } = newScratchCanvas(size)
-  const g = ctx.createRadialGradient(size * 0.5, size * 0.48, size * 0.12, size * 0.5, size * 0.5, size * 0.82)
+  const g = ctx.createRadialGradient(size * 0.5, size * 0.5, size * 0.06, size * 0.5, size * 0.5, size * 0.78)
   g.addColorStop(0, CLOTH_COLOR_CENTER)
-  g.addColorStop(0.5, CLOTH_COLOR_MID)
-  g.addColorStop(0.72, '#178421')
+  g.addColorStop(0.45, CLOTH_COLOR_MID)
+  g.addColorStop(0.75, '#167f20')
   g.addColorStop(1, CLOTH_COLOR_EDGE)
   ctx.fillStyle = g
   ctx.fillRect(0, 0, size, size)
 
-  let seed = 20260930
-  const rand = (): number => {
-    seed = (seed * 1103515245 + 12345) & 0x7fffffff
-    return seed / 0x7fffffff
-  }
-  ctx.fillStyle = `rgba(255,255,255,${CLOTH_NOISE_STRENGTH * 0.5})`
-  const noiseCount = 1300
-  for (const sign of [1, 0]) {
-    for (let i = 0; i < noiseCount; i++) {
-      const x = rand() * size
-      const y = rand() * size
-      ctx.fillStyle = sign ? `rgba(255,255,255,${CLOTH_NOISE_STRENGTH * 0.5})` : `rgba(0,0,0,${CLOTH_NOISE_STRENGTH * 0.5})`
-      for (const dx of [-size, 0, size]) {
-        for (const dy of [-size, 0, size]) ctx.fillRect(x + dx, y + dy, 1.0, 1.0)
-      }
-    }
-  }
-
-  // Crossed nap. Faint and spaced so the overhead view does not read as scanlines.
-  ctx.save()
-  ctx.translate(size / 2, size / 2)
-  ctx.rotate(-Math.PI / 5)
-  ctx.translate(-size / 2, -size / 2)
-  ctx.strokeStyle = 'rgba(255,255,255,0.02)'
-  ctx.lineWidth = 1
-  for (let y = -size; y < size * 2; y += 6) {
-    ctx.beginPath()
-    ctx.moveTo(-size, y)
-    ctx.lineTo(size * 2, y + 8)
-    ctx.stroke()
-  }
-  ctx.strokeStyle = 'rgba(0,0,0,0.016)'
-  for (let y = -size; y < size * 2; y += 9) {
-    ctx.beginPath()
-    ctx.moveTo(-size, y + 1.5)
-    ctx.lineTo(size * 2, y + 9.5)
-    ctx.stroke()
-  }
-  ctx.restore()
+  // The lamp hangs over the middle, so the two ends of a twelve-foot table are further
+  // from it and catch its light at a slant. That falloff is painted here, because below
+  // the high quality level the bed is drawn unlit and this texture is all the light it has.
+  const ends = ctx.createLinearGradient(0, 0, size, 0)
+  ends.addColorStop(0, 'rgba(0,0,0,0.2)')
+  ends.addColorStop(0.3, 'rgba(0,0,0,0)')
+  ends.addColorStop(0.7, 'rgba(0,0,0,0)')
+  ends.addColorStop(1, 'rgba(0,0,0,0.2)')
+  ctx.fillStyle = ends
+  ctx.fillRect(0, 0, size, size)
 
   // The cushions' own shade on the bed. A cushion overhangs the cloth, so the strip of
   // baize under its nose is always darker than the open table; the bed itself takes no
@@ -368,35 +340,6 @@ export function feltTexture(): THREE.CanvasTexture {
   shade(0, 0, 0, alongWidth, size, alongWidth, 0, 0)
   shade(0, size, 0, size - alongWidth, size, alongWidth, 0, size - alongWidth)
 
-  const mark = (tableXmm: number, tableYmm: number): void => {
-    const u = (tableXmm / TABLE_LENGTH) * size
-    const v = (tableYmm / TABLE_WIDTH) * size
-    ctx.fillStyle = TABLE_MARKING_COLOR
-    ctx.beginPath()
-    ctx.arc(u, v, 2.25, 0, Math.PI * 2)
-    ctx.fill()
-  }
-
-  const bx = (BAULK_LINE_X / TABLE_LENGTH) * size
-  const mid = size / 2
-  ctx.strokeStyle = TABLE_MARKING_COLOR
-  ctx.lineWidth = 1.5
-  ctx.beginPath()
-  ctx.moveTo(bx, 0)
-  ctx.lineTo(bx, size)
-  ctx.stroke()
-  // The D is an ellipse here so it lands as a true circle on the stretched bed.
-  ctx.beginPath()
-  ctx.ellipse(bx, mid, (D_RADIUS / TABLE_LENGTH) * size, (D_RADIUS / TABLE_WIDTH) * size, 0, Math.PI * 0.5, Math.PI * 1.5)
-  ctx.stroke()
-
-  mark(BAULK_LINE_X, TABLE_WIDTH / 2 + D_RADIUS * 0.9)
-  mark(BAULK_LINE_X, TABLE_WIDTH / 2 - D_RADIUS * 0.9)
-  mark(BAULK_LINE_X, TABLE_WIDTH / 2)
-  mark(TABLE_LENGTH / 2, TABLE_WIDTH / 2)
-  mark(TABLE_LENGTH * 0.75, TABLE_WIDTH / 2)
-  mark(TABLE_LENGTH - 324, TABLE_WIDTH / 2)
-
   tex = new THREE.CanvasTexture(canvas)
   tex.colorSpace = THREE.SRGBColorSpace
   tex.generateMipmaps = CLOTH_MIPMAPS
@@ -408,6 +351,70 @@ export function feltTexture(): THREE.CanvasTexture {
   tex.wrapT = THREE.ClampToEdgeWrapping
   tex.anisotropy = tableAniso
   tableCache.set('felt', tex)
+  return tex
+}
+
+/** How many times the fibre tile repeats along the table and across it: one tile is about 130mm of cloth. */
+export const CLOTH_DETAIL_REPEAT_U = 27
+export const CLOTH_DETAIL_REPEAT_V = 14
+
+/**
+ * The fibre of the cloth: a small grey tile, repeated, that the bed's colour is multiplied by.
+ *
+ * Mid grey leaves the colour alone; lighter and darker specks and short strokes are the
+ * nap. Because it repeats every 130mm, a pixel of it is half a millimetre of cloth, so the
+ * bed has real texture under the cue ball where the stretched base texture has none. Far
+ * down the table it mips to plain grey and disappears, so it cannot shimmer.
+ */
+export function clothDetailTexture(): THREE.CanvasTexture {
+  const tex = canvasTexture('felt-detail', () => {
+    const size = 256
+    const { canvas, ctx } = newScratchCanvas(size)
+    ctx.fillStyle = 'rgb(128,128,128)'
+    ctx.fillRect(0, 0, size, size)
+    let seed = 20260930
+    const rand = (): number => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff
+      return seed / 0x7fffffff
+    }
+    // Every mark is drawn nine times, once in each neighbouring tile, so it wraps.
+    const wrapped = (draw: (dx: number, dy: number) => void): void => {
+      for (const dx of [-size, 0, size]) for (const dy of [-size, 0, size]) draw(dx, dy)
+    }
+    // Soft mottling first: wool is not one even shade.
+    for (let i = 0; i < 90; i++) {
+      const x = rand() * size
+      const y = rand() * size
+      const r = 10 + rand() * 22
+      const light = rand() > 0.5
+      wrapped((dx, dy) => {
+        const blot = ctx.createRadialGradient(x + dx, y + dy, 0, x + dx, y + dy, r)
+        blot.addColorStop(0, light ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)')
+        blot.addColorStop(1, light ? 'rgba(255,255,255,0)' : 'rgba(0,0,0,0)')
+        ctx.fillStyle = blot
+        ctx.fillRect(x + dx - r, y + dy - r, r * 2, r * 2)
+      })
+    }
+    // The nap: short fibres, mostly lying one way, as a brushed cloth's do.
+    ctx.lineWidth = 1
+    for (let i = 0; i < 5200; i++) {
+      const x = rand() * size
+      const y = rand() * size
+      const angle = -Math.PI / 5 + (rand() - 0.5) * 1.1
+      const length = 1.5 + rand() * 4
+      const alpha = 0.05 + rand() * 0.09
+      ctx.strokeStyle = rand() > 0.5 ? `rgba(255,255,255,${alpha})` : `rgba(0,0,0,${alpha})`
+      const ex = Math.cos(angle) * length
+      const ey = Math.sin(angle) * length
+      wrapped((dx, dy) => {
+        ctx.beginPath()
+        ctx.moveTo(x + dx, y + dy)
+        ctx.lineTo(x + dx + ex, y + dy + ey)
+        ctx.stroke()
+      })
+    }
+    return { canvas }
+  })
   return tex
 }
 

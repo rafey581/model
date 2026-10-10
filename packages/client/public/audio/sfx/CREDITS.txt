@@ -1,3 +1,6 @@
 Recordings in this folder are from "Pool And Billiards SFX" by Suraj Kispotta,
 released under CC0 1.0 (public domain): https://papapleygames.itch.io/pool-and-billiards
 Renamed, and the longer ones shortened; otherwise unaltered.
+
+The files are WAV audio. They carry the extension .sfx rather than .wav so that download-manager
+browser extensions, which watch for audio file names, do not offer to download them as the game loads.

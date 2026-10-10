@@ -279,6 +279,9 @@ export function buildVenueEvents(host: VenueHost, config: VenueConfig = VENUE_CO
 
     const playback = data.playback
     if (playback) {
+      // A shot has been played. Whatever the plate was announcing is over: an opponent who
+      // plays at once must not be hidden behind the words saying it is their turn.
+      if (hasReplay) banner.dismiss()
       if (playback.pots.length) {
         // Applause follows the ball down the replay, which runs at twice table speed, so
         // the wait is the pot's timestamp divided back down to wall-clock.

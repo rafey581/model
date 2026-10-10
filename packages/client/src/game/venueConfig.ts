@@ -183,7 +183,7 @@ export const VENUE_CONFIG: VenueConfig = {
   },
 
   banner: {
-    holdMs: 2000,
+    holdMs: 1100,
     youText: 'YOUR TURN',
     opponentText: "OPPONENT'S TURN",
     chipYouText: 'Your turn',

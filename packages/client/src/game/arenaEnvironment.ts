@@ -881,6 +881,8 @@ export function arenaSeatPlacements(cfg: ArenaConfig, budget: ArenaBudget, rows:
       // a radian angle fed to a degree sin, every seat in the row landed inside a six
       // degree wedge instead of around the bowl.
       const a = ((block * perBlock + indexInBlock + 0.5) / total) * 360
+      // No seats where the stairway comes up through the stand.
+      if (onStairway(a, row.radius)) continue
       const stripe = indexInBlock === 0 && cfg.seats.patternEvery > 0 && block % cfg.seats.patternEvery === 0
       out.push({
         x: row.radius * sin(a),
@@ -1195,6 +1197,204 @@ function cameraStand(cfg: ArenaConfig, materials: ArenaMaterials, baseY: number)
   return group
 }
 
+/** How tall the wall behind the top row is, and how many times its picture repeats round the hall. */
+const BACKDROP_HEIGHT_MM = 4600
+const BACKDROP_REPEATS = 8
+
+/**
+ * The picture on the wall behind the stands: one bay of it, repeated round the hall.
+ *
+ * Drapes lit from the floor by a pair of uplights, with a banner hung between them. All of
+ * the light is painted: the wall is drawn unlit, so it looks the same on every quality
+ * level and costs one texture read per pixel. The top fades into the dark of the roof, so
+ * the wall has no upper edge to see.
+ */
+function backdropTexture(size: number): THREE.CanvasTexture {
+  const w = size
+  const h = size / 2
+  const ctx = canvas2d(w, h)
+  const fall = ctx.createLinearGradient(0, h, 0, 0)
+  fall.addColorStop(0, '#22408f')
+  fall.addColorStop(0.45, '#152a66')
+  fall.addColorStop(1, '#0a1638')
+  ctx.fillStyle = fall
+  ctx.fillRect(0, 0, w, h)
+
+  // The folds of the drape: a soft dark line and a soft light one, every few centimetres.
+  for (let x = 0; x < w; x += w / 64) {
+    ctx.fillStyle = 'rgba(0,0,0,0.16)'
+    ctx.fillRect(x, 0, w / 256, h)
+    ctx.fillStyle = 'rgba(255,255,255,0.035)'
+    ctx.fillRect(x + w / 128, 0, w / 256, h)
+  }
+
+  // Two uplights at the foot of the wall, warm, each throwing a tall soft cone up the drape.
+  for (const at of [0.25, 0.75]) {
+    const cone = ctx.createRadialGradient(w * at, h * 1.02, 0, w * at, h * 1.02, h * 0.95)
+    cone.addColorStop(0, 'rgba(255,226,170,0.62)')
+    cone.addColorStop(0.35, 'rgba(255,200,130,0.22)')
+    cone.addColorStop(1, 'rgba(255,200,130,0)')
+    ctx.save()
+    ctx.translate(w * at, 0)
+    ctx.scale(0.55, 1)
+    ctx.translate(-w * at, 0)
+    ctx.fillStyle = cone
+    ctx.fillRect(-w, 0, w * 3, h)
+    ctx.restore()
+  }
+
+  // The banner between them: a hanging panel with a gold edge, lit a little from below.
+  const bw = w * 0.2
+  const bh = h * 0.56
+  const bx = w * 0.5 - bw / 2
+  const by = h * 0.2
+  const panel = ctx.createLinearGradient(0, by, 0, by + bh)
+  panel.addColorStop(0, '#5d0f1c')
+  panel.addColorStop(1, '#a41d30')
+  ctx.fillStyle = 'rgba(0,0,0,0.35)'
+  ctx.fillRect(bx + 6, by + 8, bw, bh)
+  ctx.fillStyle = panel
+  ctx.fillRect(bx, by, bw, bh)
+  ctx.strokeStyle = '#e2bb55'
+  ctx.lineWidth = Math.max(2, w / 340)
+  ctx.strokeRect(bx + ctx.lineWidth, by + ctx.lineWidth, bw - ctx.lineWidth * 2, bh - ctx.lineWidth * 2)
+  ctx.fillStyle = '#f3d98a'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.font = `800 ${Math.round(h * 0.085)}px system-ui, sans-serif`
+  ctx.fillText('WORLD', w * 0.5, by + bh * 0.3)
+  ctx.font = `700 ${Math.round(h * 0.058)}px system-ui, sans-serif`
+  ctx.fillText('SNOOKER', w * 0.5, by + bh * 0.5)
+  ctx.font = `600 ${Math.round(h * 0.04)}px system-ui, sans-serif`
+  ctx.fillStyle = '#ffffff'
+  ctx.fillText('CHAMPIONSHIP', w * 0.5, by + bh * 0.7)
+
+  const tex = new THREE.CanvasTexture(ctx.canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.wrapS = THREE.RepeatWrapping
+  tex.wrapT = THREE.ClampToEdgeWrapping
+  // Seen from inside the ring, so the picture is turned round to read the right way.
+  tex.repeat.set(-BACKDROP_REPEATS, 1)
+  tex.generateMipmaps = true
+  tex.minFilter = THREE.LinearMipmapLinearFilter
+  return tex
+}
+
+/**
+ * The wall behind the top row of seats.
+ *
+ * Without it the stands ended against nothing, and nothing is black: the room read as a
+ * table in a cellar. One open ring, one unlit material, one draw call.
+ */
+function buildBackdrop(rows: ArenaSeatRow[], budget: ArenaBudget): THREE.Group {
+  const group = new THREE.Group()
+  const last = rows[rows.length - 1]
+  if (!last) return group
+  const radius = last.radius + last.pitch / 2 + 420
+  const footY = last.y + last.rise - 200
+  const material = new THREE.MeshBasicMaterial({
+    map: cached('backdrop', () => backdropTexture(Math.max(512, budget.textureSize))),
+    side: THREE.BackSide,
+    fog: false
+  })
+  const wall = addRing(group, Math.max(48, budget.curveSegments), radius, radius, BACKDROP_HEIGHT_MM, footY + BACKDROP_HEIGHT_MM / 2, material)
+  wall.name = 'arena-backdrop'
+  return group
+}
+
+/** Where the stairway climbs the stand, as a heading from the table in degrees, and how wide it is. */
+export const STAIRWAY_AZIMUTH_DEG = 118
+export const STAIRWAY_WIDTH_MM = 1050
+/** Clear floor kept between the stairway and the nearest seat on either side. */
+const STAIRWAY_SEAT_GAP_MM = 300
+
+/** Whether a seat at this heading and radius would be standing on the stairway. */
+function onStairway(azimuthDeg: number, radius: number): boolean {
+  let delta = Math.abs(azimuthDeg - STAIRWAY_AZIMUTH_DEG) % 360
+  if (delta > 180) delta = 360 - delta
+  return delta * DEG * radius < STAIRWAY_WIDTH_MM / 2 + STAIRWAY_SEAT_GAP_MM
+}
+
+/**
+ * The stairway the crowd comes in by: steps up through the stand, a handrail either side,
+ * and the lit doorway at the top.
+ *
+ * Built for a room that may be drawn unlit. With no light to shade them, a tread and the
+ * riser under it are the same colour and a flight of steps is a ramp, so the two are
+ * different materials: pale treads, dark risers, and a yellow strip on the edge of each
+ * step the way a venue marks them. Everything is boxes, merged to one mesh per colour, so
+ * the whole stairway is a handful of draw calls and a few hundred triangles.
+ */
+function buildStairway(rows: ArenaSeatRow[], cfg: ArenaConfig): THREE.Group {
+  const group = new THREE.Group()
+  const first = rows[0]
+  const last = rows[rows.length - 1]
+  if (!first || !last) return group
+  const flat = (hex: string): THREE.MeshStandardMaterial =>
+    new THREE.MeshStandardMaterial({ color: color(hex), roughness: 0.9, metalness: 0, side: THREE.DoubleSide })
+  const tread = flat('#b9bfcc')
+  const riser = flat('#2f374c')
+  const nosing = flat('#f4c531')
+  const rail = flat('#d5dae2')
+  const frame = flat('#1c2233')
+  const sign = new THREE.MeshBasicMaterial({ color: '#46f09a' })
+  const dark = new THREE.MeshBasicMaterial({ color: '#04060b' })
+
+  const w = STAIRWAY_WIDTH_MM
+  const pitch = first.pitch
+  const rise = first.rise
+  const depth = pitch / 2
+  const stepRise = rise / 2
+  const bottomRadius = first.radius - pitch / 2
+  const bottomY = first.y - rise
+  const steps = rows.length * 2
+  const startR = bottomRadius - depth
+  const box = (sx: number, sy: number, sz: number, x: number, y: number, z: number, material: THREE.Material): void => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), material)
+    mesh.position.set(x, y, z)
+    group.add(mesh)
+  }
+
+  // Two steps to every row of seats: one standing on the row below, one level with the row.
+  for (let k = 0; k < steps; k++) {
+    const r = startR + k * depth
+    const top = bottomY + (k + 1) * stepRise + 6
+    box(w, stepRise, depth, 0, top - stepRise / 2, r + depth / 2, riser)
+    box(w, 8, depth - 60, 0, top + 4, r + 60 + (depth - 60) / 2, tread)
+    box(w, 10, 60, 0, top + 5, r + 30, nosing)
+  }
+
+  // Handrails: one sloping rail a side, on posts.
+  const endR = startR + steps * depth
+  const topY = bottomY + steps * stepRise
+  const railHeight = 760
+  for (const side of [-1, 1]) {
+    const x = side * (w / 2 + 40)
+    group.add(
+      strut(new THREE.Vector3(x, bottomY + railHeight, startR), new THREE.Vector3(x, topY + railHeight, endR), 30, rail, 6)
+    )
+    for (let k = 0; k <= steps; k += 2) {
+      const r = startR + k * depth
+      const y = bottomY + k * stepRise
+      group.add(strut(new THREE.Vector3(x, y, r), new THREE.Vector3(x, y + railHeight, r), 24, rail, 5))
+    }
+  }
+
+  // The doorway at the head of the stairs: two posts, a lintel, a lit sign, and the dark of
+  // the concourse behind it.
+  const doorHeight = 1650
+  for (const side of [-1, 1]) box(140, doorHeight, 170, side * (w / 2 + 110), topY + doorHeight / 2, endR + 90, frame)
+  box(w + 380, 300, 170, 0, topY + doorHeight + 150, endR + 90, frame)
+  box(w * 0.62, 130, 24, 0, topY + doorHeight + 150, endR - 6, sign)
+  box(w + 90, doorHeight, 20, 0, topY + doorHeight / 2, endR + 150, dark)
+
+  // Local +z is the way out from the table, so one turn puts the foot of the stairs at the
+  // boards and the doorway at the back of the stand.
+  group.rotation.y = STAIRWAY_AZIMUTH_DEG * DEG
+  void cfg
+  return mergeStaticMeshes(group, 'stairway')
+}
+
 /**
  * Four cameras on the diagonal corners, standing on the landing in front of the first row.
  *
@@ -1369,6 +1569,8 @@ export function buildArenaEnvironment(
   arena.add(mergeStaticMeshes(buildHoardings(config, budget, materials), 'hoardings'))
   if (config.buildShell) arena.add(buildShell(config, budget, materials, rows))
   arena.add(buildSeats(config, budget, materials, rows))
+  arena.add(buildStairway(rows, config))
+  if (!config.buildShell) arena.add(buildBackdrop(rows, budget))
   if (config.buildRig) arena.add(buildRig(config, budget, materials))
   if (config.buildCameraStands) arena.add(buildCameraStands(config, materials, rows))
   arena.add(buildStandLights(config))

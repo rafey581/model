@@ -36,6 +36,7 @@ import {
   latchedCameraYaw,
   addOrbit,
   followHeadingLatch,
+  snapCameraRig,
   smoothDamp,
   AIM_FOLLOW_DEADZONE_RAD,
   AIM_FOLLOW_RATE,
@@ -240,6 +241,29 @@ describe('following the aim with the camera', () => {
       state = run(state, request({ latch }), 3)
       expect(shortestAngleDelta(angle, poseHeading(state.pose))).toBeCloseTo(0, 5)
     }
+  })
+})
+
+describe('cutting to a view the player picked', () => {
+  it('lands exactly on the overhead view, and exactly back behind the cue ball', () => {
+    const top = snapCameraRig(request({ mode: 'TOP_DOWN' }))
+    const overhead = topDownPose(ASPECT_2_TO_1)
+    expect(top.pose.height).toBeCloseTo(overhead.height, 9)
+    expect(top.pose.x).toBeCloseTo(overhead.x, 9)
+    expect(top.velocity).toBeUndefined()
+
+    const latch = initialHeadingLatch(0.7)
+    const back = snapCameraRig(request({ mode: 'AIM', latch }))
+    expect(back.yaw).toBeCloseTo(0.7, 12)
+    expect(back.pose.height).toBeCloseTo(AIM_HEIGHT_MM, 9)
+    expect(shortestAngleDelta(0.7, poseHeading(back.pose))).toBeCloseTo(0, 9)
+  })
+
+  it('leaves nothing to ease afterwards: the next frame is where the cut put it', () => {
+    const cut = snapCameraRig(request({ mode: 'TOP_DOWN' }))
+    const next = stepCameraRig(cut, request({ mode: 'TOP_DOWN' }), 1 / 60)
+    expect(next.pose.height).toBeCloseTo(cut.pose.height, 6)
+    expect(next.pose.x).toBeCloseTo(cut.pose.x, 6)
   })
 })
 
