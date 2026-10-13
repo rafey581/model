@@ -1,0 +1,28 @@
+{
+  "name": "snooker-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Online multiplayer snooker platform - monorepo",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "pnpm --filter @snooker/shared build && pnpm --parallel --filter @snooker/server --filter @snooker/client dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:migrate": "pnpm --filter @snooker/server db:migrate",
+    "db:deploy": "pnpm --filter @snooker/server db:deploy",
+    "db:status": "pnpm --filter @snooker/server db:status",
+    "db:seed": "pnpm --filter @snooker/server db:seed",
+    "db:backup": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/db-backup.ps1",
+    "db:restore": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/db-restore.ps1",
+    "e2e": "pnpm --filter @snooker/server exec tsx scripts/e2e.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,641 @@
+﻿PASS  1920x1080 home        
+PASS  1920x1080 setup       
+PASS  1920x1080 statistics  
+PASS  1920x1080 info        
+PASS  1920x1080 settings    
+PASS  1600x900  home        
+PASS  1600x900  setup       
+PASS  1600x900  statistics  
+PASS  1600x900  info        
+PASS  1600x900  settings    
+PASS  1440x900  home        
+PASS  1440x900  setup       
+PASS  1440x900  statistics  
+PASS  1440x900  info        
+PASS  1440x900  settings    
+PASS  1366x768  home        
+PASS  1366x768  setup       
+PASS  1366x768  statistics  
+PASS  1366x768  info        
+PASS  1366x768  settings    
+PASS  1280x720  home        
+PASS  1280x720  setup       
+PASS  1280x720  statistics  
+PASS  1280x720  info        
+PASS  1280x720  settings    
+PASS  1024x768  home        
+PASS  1024x768  setup       
+PASS  1024x768  statistics  
+PASS  1024x768  info        
+PASS  1024x768  settings    
+PASS  800x450   home        
+PASS  800x450   setup       
+PASS  800x450   statistics  
+PASS  800x450   info        
+PASS  800x450   settings    
+
+TOTAL: 35/35 checks groups pass, 0 failures
+[
+  {
+    "tag": "1920x1080",
+    "view": "home",
+    "ok": true,
+    "notes": [],
+    "u": "max(min(calc(100dvh / 1080), calc(100vw / 1600)), 0.46px)",
+    "bar": [
+      {
+        "sel": ".gl-brand",
+        "c": 56
+      },
+      {
+        "sel": ".gl-tabs",
+        "c": 56
+      },
+      {
+        "sel": ".gl-chrome",
+        "c": 56
+      }
+    ],
+    "headGap": 24,
+    "indicator": {
+      "w": 81,
+      "transform": "translateX(5px)"
+    },
+    "sound": {
+      "label": "Mute table sounds",
+      "pressed": "false"
+    }
+  },
+  {
+    "tag": "1920x1080",
+    "view": "setup",
+    "ok": true,
+    "notes": [],
+    "stakes": {
+      "count": 3,
+      "rows": 1,
+      "inside": true,
+      "widths": [
+        190,
+        190,
+        190
+      ],
+      "grid": 5
+    }
+  },
+  {
+    "tag": "1920x1080",
+    "view": "statistics",
+    "ok": true,
+    "notes": [],
+    "score": {
+      "h": 15.8,
+      "fs": 15,
+      "ratio": 1.05,
+      "ok": true
+    }
+  },
+  {
+    "tag": "1920x1080",
+    "view": "info",
+    "ok": true,
+    "notes": [],
+    "scrollbar": {
+      "color": "rgba(255, 255, 255, 0.28) rgba(0, 0, 0, 0)",
+      "width": "thin"
+    }
+  },
+  {
+    "tag": "1920x1080",
+    "view": "settings",
+    "ok": true,
+    "notes": [],
+    "soundToggle": {
+      "before": {
+        "label": "Mute table sounds",
+        "pressed": "false"
+      },
+      "after": {
+        "label": "Unmute table sounds",
+        "pressed": "true",
+        "slash": true
+      }
+    }
+  },
+  {
+    "tag": "1600x900",
+    "view": "home",
+    "ok": true,
+    "notes": [],
+    "u": "max(min(calc(100dvh / 1080), calc(100vw / 1600)), 0.46px)",
+    "bar": [
+      {
+        "sel": ".gl-brand",
+        "c": 46.65
+      },
+      {
+        "sel": ".gl-tabs",
+        "c": 46.65
+      },
+      {
+        "sel": ".gl-chrome",
+        "c": 46.65
+      }
+    ],
+    "headGap": 20,
+    "indicator": {
+      "w": 67,
+      "transform": "translateX(4px)"
+    },
+    "sound": {
+      "label": "Mute table sounds",
+      "pressed": "false"
+    }
+  },
+  {
+    "tag": "1600x900",
+    "view": "setup",
+    "ok": true,
+    "notes": [],
+    "stakes": {
+      "count": 3,
+      "rows": 1,
+      "inside": true,
+      "widths": [
+        158,
+        158,
+        158
+      ],
+      "grid": 5
+    }
+  },
+  {
+    "tag": "1600x900",
+    "view": "statistics",
+    "ok": true,
+    "notes": [],
+    "score": {
+      "h": 13.1,
+      "fs": 12.5,
+      "ratio": 1.05,
+      "ok": true
+    }
+  },
+  {
+    "tag": "1600x900",
+    "view": "info",
+    "ok": true,
+    "notes": [],
+    "scrollbar": {
+      "color": "rgba(255, 255, 255, 0.28) rgba(0, 0, 0, 0)",
+      "width": "thin"
+    }
+  },
+  {
+    "tag": "1600x900",
+    "view": "settings",
+    "ok": true,
+    "notes": [],
+    "soundToggle": {
+      "before": {
+        "label": "Mute table sounds",
+        "pressed": "false"
+      },
+      "after": {
+        "label": "Unmute table sounds",
+        "pressed": "true",
+        "slash": true
+      }
+    }
+  },
+  {
+    "tag": "1440x900",
+    "view": "home",
+    "ok": true,
+    "notes": [],
+    "u": "max(min(calc(100dvh / 1080), calc(100vw / 1600)), 0.46px)",
+    "bar": [
+      {
+        "sel": ".gl-brand",
+        "c": 46.65
+      },
+      {
+        "sel": ".gl-tabs",
+        "c": 46.65
+      },
+      {
+        "sel": ".gl-chrome",
+        "c": 46.65
+      }
+    ],
+    "headGap": 20,
+    "indicator": {
+      "w": 67,
+      "transform": "translateX(4px)"
+    },
+    "sound": {
+      "label": "Mute table sounds",
+      "pressed": "false"
+    }
+  },
+  {
+    "tag": "1440x900",
+    "view": "setup",
+    "ok": true,
+    "notes": [],
+    "stakes": {
+      "count": 3,
+      "rows": 1,
+      "inside": true,
+      "widths": [
+        155,
+        155,
+        155
+      ],
+      "grid": 5
+    }
+  },
+  {
+    "tag": "1440x900",
+    "view": "statistics",
+    "ok": true,
+    "notes": [],
+    "score": {
+      "h": 13.1,
+      "fs": 12.5,
+      "ratio": 1.05,
+      "ok": true
+    }
+  },
+  {
+    "tag": "1440x900",
+    "view": "info",
+    "ok": true,
+    "notes": [],
+    "scrollbar": {
+      "color": "rgba(255, 255, 255, 0.28) rgba(0, 0, 0, 0)",
+      "width": "thin"
+    }
+  },
+  {
+    "tag": "1440x900",
+    "view": "settings",
+    "ok": true,
+    "notes": [],
+    "soundToggle": {
+      "before": {
+        "label": "Mute table sounds",
+        "pressed": "false"
+      },
+      "after": {
+        "label": "Unmute table sounds",
+        "pressed": "true",
+        "slash": true
+      }
+    }
+  },
+  {
+    "tag": "1366x768",
+    "view": "home",
+    "ok": true,
+    "notes": [],
+    "u": "max(min(calc(100dvh / 1080), calc(100vw / 1600)), 0.46px)",
+    "bar": [
+      {
+        "sel": ".gl-brand",
+        "c": 39.8
+      },
+      {
+        "sel": ".gl-tabs",
+        "c": 39.75
+      },
+      {
+        "sel": ".gl-chrome",
+        "c": 39.85
+      }
+    ],
+    "headGap": 20,
+    "indicator": {
+      "w": 57,
+      "transform": "translateX(4px)"
+    },
+    "sound": {
+      "label": "Mute table sounds",
+      "pressed": "false"
+    }
+  },
+  {
+    "tag": "1366x768",
+    "view": "setup",
+    "ok": true,
+    "notes": [],
+    "stakes": {
+      "count": 3,
+      "rows": 1,
+      "inside": true,
+      "widths": [
+        135,
+        135,
+        135
+      ],
+      "grid": 5
+    }
+  },
+  {
+    "tag": "1366x768",
+    "view": "statistics",
+    "ok": true,
+    "notes": [],
+    "score": {
+      "h": 11.2,
+      "fs": 10.6667,
+      "ratio": 1.05,
+      "ok": true
+    }
+  },
+  {
+    "tag": "1366x768",
+    "view": "info",
+    "ok": true,
+    "notes": [],
+    "scrollbar": {
+      "color": "rgba(255, 255, 255, 0.28) rgba(0, 0, 0, 0)",
+      "width": "thin"
+    }
+  },
+  {
+    "tag": "1366x768",
+    "view": "settings",
+    "ok": true,
+    "notes": [],
+    "soundToggle": {
+      "before": {
+        "label": "Mute table sounds",
+        "pressed": "false"
+      },
+      "after": {
+        "label": "Unmute table sounds",
+        "pressed": "true",
+        "slash": true
+      }
+    }
+  },
+  {
+    "tag": "1280x720",
+    "view": "home",
+    "ok": true,
+    "notes": [],
+    "u": "max(min(calc(100dvh / 1080), calc(100vw / 1600)), 0.46px)",
+    "bar": [
+      {
+        "sel": ".gl-brand",
+        "c": 37.35
+      },
+      {
+        "sel": ".gl-tabs",
+        "c": 37.35
+      },
+      {
+        "sel": ".gl-chrome",
+        "c": 37.3
+      }
+    ],
+    "headGap": 20,
+    "indicator": {
+      "w": 54,
+      "transform": "translateX(3px)"
+    },
+    "sound": {
+      "label": "Mute table sounds",
+      "pressed": "false"
+    }
+  },
+  {
+    "tag": "1280x720",
+    "view": "setup",
+    "ok": true,
+    "notes": [],
+    "stakes": {
+      "count": 3,
+      "rows": 1,
+      "inside": true,
+      "widths": [
+        126,
+        126,
+        126
+      ],
+      "grid": 5
+    }
+  },
+  {
+    "tag": "1280x720",
+    "view": "statistics",
+    "ok": true,
+    "notes": [],
+    "score": {
+      "h": 10.5,
+      "fs": 10,
+      "ratio": 1.05,
+      "ok": true
+    }
+  },
+  {
+    "tag": "1280x720",
+    "view": "info",
+    "ok": true,
+    "notes": [],
+    "scrollbar": {
+      "color": "rgba(255, 255, 255, 0.28) rgba(0, 0, 0, 0)",
+      "width": "thin"
+    }
+  },
+  {
+    "tag": "1280x720",
+    "view": "settings",
+    "ok": true,
+    "notes": [],
+    "soundToggle": {
+      "before": {
+        "label": "Mute table sounds",
+        "pressed": "false"
+      },
+      "after": {
+        "label": "Unmute table sounds",
+        "pressed": "true",
+        "slash": true
+      }
+    }
+  },
+  {
+    "tag": "1024x768",
+    "view": "home",
+    "ok": true,
+    "notes": [],
+    "u": "max(min(calc(100dvh / 1080), calc(100vw / 1600)), 0.46px)",
+    "bar": [
+      {
+        "sel": ".gl-brand",
+        "c": 35.8
+      },
+      {
+        "sel": ".gl-tabs",
+        "c": 35.8
+      },
+      {
+        "sel": ".gl-chrome",
+        "c": 35.8
+      }
+    ],
+    "headGap": 20,
+    "indicator": {
+      "w": 52,
+      "transform": "translateX(3px)"
+    },
+    "sound": {
+      "label": "Mute table sounds",
+      "pressed": "false"
+    }
+  },
+  {
+    "tag": "1024x768",
+    "view": "setup",
+    "ok": true,
+    "notes": [],
+    "stakes": {
+      "count": 3,
+      "rows": 1,
+      "inside": true,
+      "widths": [
+        109,
+        109,
+        109
+      ],
+      "grid": 5
+    }
+  },
+  {
+    "tag": "1024x768",
+    "view": "statistics",
+    "ok": true,
+    "notes": [],
+    "score": {
+      "h": 10.1,
+      "fs": 9.6,
+      "ratio": 1.05,
+      "ok": true
+    }
+  },
+  {
+    "tag": "1024x768",
+    "view": "info",
+    "ok": true,
+    "notes": [],
+    "scrollbar": {
+      "color": "rgba(255, 255, 255, 0.28) rgba(0, 0, 0, 0)",
+      "width": "thin"
+    }
+  },
+  {
+    "tag": "1024x768",
+    "view": "settings",
+    "ok": true,
+    "notes": [],
+    "soundToggle": {
+      "before": {
+        "label": "Mute table sounds",
+        "pressed": "false"
+      },
+      "after": {
+        "label": "Unmute table sounds",
+        "pressed": "true",
+        "slash": true
+      }
+    }
+  },
+  {
+    "tag": "800x450",
+    "view": "home",
+    "ok": true,
+    "notes": [],
+    "u": "max(min(calc(100dvh / 1080), calc(100vw / 1600)), 0.46px)",
+    "bar": [
+      {
+        "sel": ".gl-brand",
+        "c": 25.7
+      },
+      {
+        "sel": ".gl-tabs",
+        "c": 25.8
+      },
+      {
+        "sel": ".gl-chrome",
+        "c": 25.75
+      }
+    ],
+    "headGap": 20,
+    "indicator": {
+      "w": 37,
+      "transform": "translateX(2px)"
+    },
+    "sound": {
+      "label": "Mute table sounds",
+      "pressed": "false"
+    }
+  },
+  {
+    "tag": "800x450",
+    "view": "setup",
+    "ok": true,
+    "notes": [],
+    "stakes": {
+      "count": 3,
+      "rows": 1,
+      "inside": true,
+      "widths": [
+        86,
+        86,
+        86
+      ],
+      "grid": 5
+    }
+  },
+  {
+    "tag": "800x450",
+    "view": "statistics",
+    "ok": true,
+    "notes": [],
+    "score": {
+      "h": 7.3,
+      "fs": 6.9,
+      "ratio": 1.06,
+      "ok": true
+    }
+  },
+  {
+    "tag": "800x450",
+    "view": "info",
+    "ok": true,
+    "notes": [],
+    "scrollbar": {
+      "color": "rgba(255, 255, 255, 0.28) rgba(0, 0, 0, 0)",
+      "width": "thin"
+    }
+  },
+  {
+    "tag": "800x450",
+    "view": "settings",
+    "ok": true,
+    "notes": [],
+    "soundToggle": {
+      "before": {
+        "label": "Mute table sounds",
+        "pressed": "false"
+      },
+      "after": {
+        "label": "Unmute table sounds",
+        "pressed": "true",
+        "slash": true
+      }
+    }
+  }
+]

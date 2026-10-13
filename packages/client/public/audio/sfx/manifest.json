@@ -1,0 +1,57 @@
+{
+  "ball:soft": [
+    "ball_2.sfx",
+    "ball_5.sfx"
+  ],
+  "ball:medium": [
+    "ball_1.sfx",
+    "ball_4.sfx",
+    "ball_5.sfx"
+  ],
+  "ball:hard": [
+    "ball_3.sfx",
+    "ball_4.sfx",
+    "ball_1.sfx"
+  ],
+  "cue:soft": [
+    "cue_3.sfx",
+    "cue_2.sfx"
+  ],
+  "cue:medium": [
+    "cue_2.sfx",
+    "cue_4.sfx"
+  ],
+  "cue:hard": [
+    "cue_1.sfx",
+    "cue_4.sfx"
+  ],
+  "cushion:soft": [
+    "cushion_2.sfx"
+  ],
+  "cushion:medium": [
+    "cushion_1.sfx",
+    "cushion_2.sfx"
+  ],
+  "cushion:hard": [
+    "cushion_3.sfx",
+    "cushion_1.sfx"
+  ],
+  "jaw": [
+    "knock_low.sfx"
+  ],
+  "drop": [
+    "pocket_drop.sfx"
+  ],
+  "net": [
+    "pocket_roll.sfx"
+  ],
+  "uiClick": [
+    "ui_click.sfx"
+  ],
+  "turnTick": [
+    "turn.sfx"
+  ],
+  "placeTick": [
+    "tick.sfx"
+  ]
+}

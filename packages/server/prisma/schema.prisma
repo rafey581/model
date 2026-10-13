@@ -1,0 +1,402 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String  @id @default(cuid())
+  // The name the player typed at signup. A display name, not an identifier: it may
+  // repeat, and it is never used to look anyone up.
+  name String?
+  // Email and phone are both captured at signup and are both unique - a second
+  // account may not reuse either. Either one can be the address the player chooses
+  // to verify over OTP (email or WhatsApp); the other stays on file unverified.
+  email String? @unique
+  phone String? @unique
+  emailVerified Boolean @default(false)
+  phoneVerified Boolean @default(false)
+  dateOfBirth   DateTime?
+  passwordHash String?
+  // How this account authenticates. Local accounts (the only kind now) are
+  // PASSWORD; the column is kept so operators can tell accounts apart if a second
+  // method is ever added.
+  authProvider String @default("PASSWORD")
+  // TOTP second factor. Only ever populated for admin roles.
+  totpSecret String?
+  totpEnabled Boolean @default(false)
+  username     String                 @unique
+  role         String                 @default("PLAYER")
+  status       String                 @default("ACTIVE")
+  jgCheck      Json?
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+  profile      Profile?
+  wallet       Wallet?
+  sessions     Session[]
+  matchEntries MatchPlayer[]
+  matches      Match[]                @relation("MatchWinner")
+  transactions WalletTransaction[]
+  tournaments  TournamentPlayer[]
+  notifications Notification[]
+  friendRequestsSent     Friend[] @relation("FriendRequester")
+  friendRequestsReceived Friend[] @relation("FriendAddressee")
+  deposits          CryptoDeposit[] @relation("DepositOwner")
+  reviewedDeposits  CryptoDeposit[] @relation("DepositReviewer")
+  withdrawals       CryptoWithdrawal[] @relation("WithdrawalOwner")
+  reviewedWithdrawals CryptoWithdrawal[] @relation("WithdrawalReviewer")
+  challengesMade     MatchChallenge[] @relation("ChallengeChallenger")
+  challengesReceived MatchChallenge[] @relation("ChallengeTarget")
+  challengesAnswered MatchChallenge[] @relation("ChallengeResponder")
+  // Invitations. Every account gets one unique, shareable code. `referredById`
+  // names the inviter who is owed the reward; `referralRewardedAt` is stamped the
+  // first time this player finishes a real match, which is what pays the inviter
+  // (once — the stamp is the idempotency key).
+  referralCode       String?   @unique
+  referredById       String?
+  referredBy         User?     @relation("UserReferrals", fields: [referredById], references: [id], onDelete: SetNull)
+  referrals          User[]    @relation("UserReferrals")
+  referralRewardedAt DateTime?
+
+  @@index([referredById])
+}
+
+/// One in-flight OTP, keyed on the address being verified.
+///
+/// Kept in its own table rather than on `User` because a signup challenge exists
+/// *before* the account does. The signup payload is held here - never handed back to
+/// the client - so the password and date of birth never travel in a URL or a token
+/// the browser can read.
+model OtpChallenge {
+  id         String   @id @default(cuid())
+  identifier String
+  // EMAIL | WHATSAPP - which channel the code went out on.
+  channel    String
+  // SIGNUP | PASSWORD_RESET - what the code is allowed to unlock.
+  purpose    String
+  // SHA-256 of the code. The plaintext is never stored.
+  codeHash   String
+  // The pending signup form, held until the code verifies. Null for password reset.
+  payload    Json?
+  attempts   Int      @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime @default(now())
+
+  @@index([identifier, purpose])
+  @@index([expiresAt])
+}
+
+model Profile {
+  id          String  @id @default(cuid())
+  userId      String  @unique
+  countryCode String?
+  avatarUrl   String?
+  bio         String?
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  // USER | ADMIN. An admin session is a distinct, revocable server-side record so the
+  // admin panel never depends on a stateless JWT that outlives the login.
+  purpose   String   @default("USER")
+  expiresAt DateTime
+  lastSeenAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  ip        String?
+  userAgent String?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
+}
+
+model Wallet {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  available Decimal  @default(0)
+  locked    Decimal  @default(0)
+  currency  String   @default("USDT")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model WalletTransaction {
+  id            String   @id @default(cuid())
+  userId        String
+  type          String
+  amount        Decimal
+  currency      String   @default("USDT")
+  status        String   @default("COMPLETED")
+  refId         String?
+  balanceBefore Decimal
+  balanceAfter  Decimal
+  meta          Json?
+  createdAt     DateTime @default(now())
+  counterpartyId String?
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([refId])
+}
+
+model Match {
+  id             String       @id @default(cuid())
+  matchType      String       @default("ONE_V_ONE")
+  tournamentId   String?
+  round          Int?
+  aiLevel        String?
+  stakeTier      String?
+  status         String       @default("CREATED")
+  stakePerPlayer Decimal      @default(0)
+  currency       String       @default("USDT")
+  platformFeePct Decimal      @default(0)
+  format         String       @default("BO3")
+  winnerId       String?
+  resultJson     Json?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  players        MatchPlayer[]
+  events         GameEvent[]
+  winner         User?        @relation("MatchWinner", fields: [winnerId], references: [id])
+  tournament     Tournament?  @relation(fields: [tournamentId], references: [id])
+}
+
+model MatchPlayer {
+  id       String @id @default(cuid())
+  matchId  String
+  userId   String
+  seat     Int
+  result   String?
+  playSide Json?
+  match    Match  @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([matchId, seat])
+}
+
+model GameEvent {
+  id        String   @id @default(cuid())
+  matchId   String
+  seq       Int
+  type      String
+  data      Json?
+  createdAt DateTime @default(now())
+  match     Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@unique([matchId, seq])
+}
+
+model Tournament {
+  id          String             @id @default(cuid())
+  status      String             @default("DRAFT")
+  name        String             @default("8-Player Cup")
+  entryFee    Decimal            @default(0)
+  size        Int                @default(8)
+  format      String             @default("BO3")
+  championId  String?
+  runnerUpId  String?
+  createdAt   DateTime           @default(now())
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  players     TournamentPlayer[]
+  matches     Match[]
+  resultsJson Json?
+}
+
+model TournamentPlayer {
+  id           String     @id @default(cuid())
+  tournamentId String
+  userId       String
+  seed         Int
+  status       String     @default("ALIVE")
+  eliminatedIn Int?
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tournamentId, seed])
+}
+
+model CryptoDeposit {
+  id            String    @id @default(cuid())
+  userId        String
+  network       String
+  // The platform wallet address (e.g. the Solana USDT address) the player was told
+  // to send to. The address shown at request time is snapshotted here so a later
+  // address rotation still leaves an auditable record of where funds were sent.
+  address       String
+  amount        Decimal
+  // The asset the player says they sent. Only USDT (Solana) is offered today.
+  currency      String    @default("USDT")
+  // How this deposit was submitted. MANUAL = the player posted a transaction id +
+  // proof screenshot and an admin verifies it before credit. Future on-chain
+  // watchers get their own channel values.
+  channel       String    @default("MANUAL")
+  confirmations Int       @default(0)
+  status        String    @default("PENDING")
+  // The transaction id (Solana signature) the player submitted as proof of payment.
+  txHash        String?
+  // Proof screenshot as a base64 data URL, shown to the admin for verification.
+  screenshot    String?
+  // The USDT amount actually credited on approval (1:1 with the deposit amount).
+  creditedAmount Decimal?
+  creditedAt    DateTime?
+  reviewedById  String?
+  reviewedAt    DateTime?
+  rejectReason  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  user          User      @relation("DepositOwner", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy    User?     @relation("DepositReviewer", fields: [reviewedById], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  // A transaction id may fund at most one deposit request, ever. PostgreSQL allows
+  // the repeated NULLs a legacy row would carry.
+  @@unique([txHash])
+}
+
+model CryptoWithdrawal {
+  id           String    @id @default(cuid())
+  userId       String
+  // The player's own receiving wallet address (their id on the chain) — where
+  // the approved USDT is sent by the operator.
+  address      String
+  network      String
+  // Amount requested, in the withdrawn currency (USDT).
+  amount       Decimal
+  currency     String    @default("USDT")
+  // How this withdrawal was submitted. MANUAL = the player requested it here and
+  // an admin verifies + pays it out of band. Future payout providers get their
+  // own channel values.
+  channel      String    @default("MANUAL")
+  status       String    @default("PENDING")
+  // The USDT amount actually debited on approval (1:1 with the requested amount).
+  deducted     Decimal?
+  // Snapshot of the player's last finished (non-practice) matches, taken when the
+  // request is created. It travels with the request so the admin can see the games
+  // that funded the balance before approving — "the user really won the game".
+  matchHistory Json?
+  rejectReason String?
+  reviewedById String?
+  reviewedAt   DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  user         User      @relation("WithdrawalOwner", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy   User?     @relation("WithdrawalReviewer", fields: [reviewedById], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+model KycRecord {
+  id          String   @id @default(cuid())
+  userId      String
+  status      String   @default("NOT_SUBMITTED")
+  providerRef String?
+  submittedAt DateTime?
+  reviewedAt  DateTime?
+  result      Json?
+}
+
+model AdminAction {
+  id         String   @id @default(cuid())
+  adminId    String
+  action     String
+  targetType String
+  targetId   String?
+  meta       Json?
+  createdAt  DateTime @default(now())
+}
+
+model FraudFlag {
+  id        String   @id @default(cuid())
+  userId    String
+  kind      String
+  confidence Int     @default(0)
+  reason    String?
+  createdAt DateTime @default(now())
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  kind      String
+  title     String
+  body      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+  @@index([userId, createdAt])
+}
+
+model AppSetting {
+  key   String @id
+  value Json
+}
+
+/// A friendship edge between two players. Directions matter only while the request
+/// is pending: `requesterId` asked `addresseeId`. Once accepted the pair is friends,
+/// and both directions ask the same question, so the UI reads ACCEPTED rows as one
+/// relationship whichever user it is viewed from.
+model Friend {
+  id          String   @id @default(cuid())
+  requesterId String
+  addresseeId String
+  // PENDING | ACCEPTED | REJECTED. A rejected edge keeps its row so a re-request
+  // un-rejects rather than stacking up duplicates; ACCEPTED is final.
+  status      String   @default("PENDING")
+  createdAt   DateTime @default(now())
+  respondedAt DateTime?
+  requester   User     @relation("FriendRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  addressee   User     @relation("FriendAddressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+
+  // One edge per ordered pair: at most one request between A and B in a given
+  // direction. A reverse request while one is pending is answered by accepting it.
+  @@unique([requesterId, addresseeId])
+  @@index([addresseeId, status])
+  @@index([requesterId, status])
+}
+
+/// An open invitation to play a staked one-v-one match.
+///
+/// This is the matchmaking layer over the create/join table flow. A PUBLIC
+/// challenge is broadcast to every connected player; a FRIEND challenge is
+/// delivered only to `targetUserId`. Nothing is staked until somebody accepts:
+/// the accept path freezes both players and creates the match in one
+/// transaction, so no USDT is ever held on an untouched invitation.
+model MatchChallenge {
+  id             String   @id @default(cuid())
+  challengerId   String
+  // Null for a PUBLIC broadcast; the invited friend's id for a FRIEND invite.
+  targetUserId   String?
+  // PUBLIC | FRIEND
+  kind           String   @default("PUBLIC")
+  stakeTier      String
+  stakePerPlayer Decimal  @default(0)
+  format         String   @default("BO3")
+  // OPEN | ACCEPTED | DECLINED | CANCELLED | EXPIRED
+  status         String   @default("OPEN")
+  // The match created when this challenge was accepted.
+  matchId        String?
+  responderId    String?
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  challenger     User     @relation("ChallengeChallenger", fields: [challengerId], references: [id], onDelete: Cascade)
+  target         User?    @relation("ChallengeTarget", fields: [targetUserId], references: [id], onDelete: Cascade)
+  responder      User?    @relation("ChallengeResponder", fields: [responderId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([targetUserId, status])
+  @@index([challengerId, status])
+}
