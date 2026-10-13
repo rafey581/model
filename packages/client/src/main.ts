@@ -56,6 +56,7 @@ import {
 import { PLAYER_CAMERA_MODES, PLACEMENT_TRANSITION_SECONDS, type PlayerCameraMode } from './game/camera.js'
 import { createRenderScaler } from './game/renderScale.js'
 import { createPerfOverlay } from './game/perfOverlay.js'
+import { hasWeakGpu } from './game/qualityConfig.js'
 import { createCueHandle, type CueHandle } from './game/cueHandle.js'
 import { placementStatus, D_CENTRE, D_ZONE_RADIUS } from './game/placement.js'
 import { qualityConfig, qualityPreference } from './game/qualityConfig.js'
@@ -204,6 +205,23 @@ let lastPointerCanvas: { clientX: number; clientY: number } | null = null
 let myTurn = false
 /** Non-null while a streamed shot is replaying; drives what the table shows. */
 let shotPlayer: ShotPlayer | null = null
+/** The last shot played in this match and where the balls stood before it, for the end-of-match recap. */
+let lastShotRecap: { playback: ShotPlayback; start: PlaybackBall[] } | null = null
+/** Non-null while the recap of the final shot is on the table. Picture only. */
+let recapPlayer: ShotPlayer | null = null
+let recapStart: PlaybackBall[] = []
+/** Seconds the recap stands on its first frame before it moves, and on its last before it ends. */
+let recapHold = 0
+let recapDone: (() => void) | null = null
+const FINAL_SHOT_HOLD_SECONDS = 1.1
+/** The recap runs slower than the shot did, so it can be read. */
+const FINAL_SHOT_SPEED = 0.6
+/** The emblem on the result screen. */
+const END_TROPHY_SVG =
+  '<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M20 10h24v14a12 12 0 0 1-24 0z" fill="currentColor" fill-opacity="0.18"/>' +
+  '<path d="M20 14h-8v4a8 8 0 0 0 8 8M44 14h8v4a8 8 0 0 1-8 8"/>' +
+  '<path d="M32 36v10M22 54h20M26 46h12v8H26z"/></svg>'
 /**
  * Seconds left before the replay in `shotPlayer` starts to move.
  *
@@ -302,6 +320,27 @@ let matchPrizeCredits = 0
  */
 const DPR_CAP_DESKTOP = 2
 const DPR_CAP_MOBILE = 1.5
+/**
+ * The same ceiling on the High level, for a phone.
+ *
+ * A phone screen has two and a half or three real pixels to every one the page counts,
+ * so a picture drawn at one and a half is being stretched to nearly twice its size to
+ * fill the glass, and that is what soft edges and visible steps on a ball are. With the
+ * light on the table, the balls and the room painted instead of computed, a pixel costs
+ * a fraction of what it did, and High can afford to draw many more of them.
+ */
+const DPR_CAP_MOBILE_HIGH = 2.25
+/**
+ * How much larger than the screen High draws on a machine that cannot afford edge
+ * smoothing, on a screen with no spare pixels of its own.
+ *
+ * Built-in graphics get High without the smoothing pass, which leaves every edge stepped.
+ * Drawing a quarter larger and letting the browser shrink the picture to fit softens those
+ * steps for a fraction of what the smoothing pass cost. It is the first thing given back
+ * if frames run long: the floor High may be turned down to is at or just above the
+ * screen's own resolution, never below it.
+ */
+const HIGH_SUPERSAMPLE = 1.25
 /** Below this on either axis the screen is treated as a phone rather than a desktop. */
 const DPR_MOBILE_MAX_EDGE = 820
 /**
@@ -350,7 +389,10 @@ let adaptiveQuality = true
 
 /** Backing pixels per CSS pixel at full scale: the screen's density under the ceiling and the tier's cap. */
 function fullPixelRatio(): number {
-  return Math.min(dprCeiling, window.devicePixelRatio || 1) * qualityConfig().renderScale
+  const device = window.devicePixelRatio || 1
+  const high = qualityConfig().name === 'high'
+  const oversize = high && device <= 1.25 && hasWeakGpu() ? HIGH_SUPERSAMPLE : 1
+  return Math.min(dprCeiling, device) * qualityConfig().renderScale * oversize
 }
 
 function storedRenderScale(): number {
@@ -372,7 +414,9 @@ function storeRenderScale(scale: number): void {
 
 /** The ratio ceiling for the screen in front of us, recomputed on every match. */
 function dprCeilingForScreen(): number {
-  return Math.min(window.innerWidth, window.innerHeight) <= DPR_MOBILE_MAX_EDGE ? DPR_CAP_MOBILE : DPR_CAP_DESKTOP
+  const phone = Math.min(window.innerWidth, window.innerHeight) <= DPR_MOBILE_MAX_EDGE
+  if (!phone) return DPR_CAP_DESKTOP
+  return qualityConfig().name === 'high' ? DPR_CAP_MOBILE_HIGH : DPR_CAP_MOBILE
 }
 
 const BALL_NAMES: Record<number, string> = {
@@ -1483,27 +1527,120 @@ async function sendRematch(targetUsername: string, format: string, stakeTier: st
   }
 }
 
+/** How long to wait for a shot still on the table to finish before the match is called. */
+const FINAL_SHOT_WAIT_MS = 20_000
+
+/** Resolves when no shot is being replayed and none is waiting, or when the wait runs out. */
+function tableSettled(): Promise<void> {
+  return new Promise((resolve) => {
+    const started = performance.now()
+    const check = (): void => {
+      if ((shotPlayer === null && queuedUpdate === null) || performance.now() - started > FINAL_SHOT_WAIT_MS) resolve()
+      else window.setTimeout(check, 100)
+    }
+    check()
+  })
+}
+
+/**
+ * Shows the shot that ended the match once more, slowed down, before the result.
+ *
+ * A picture only. The recording of the last shot is played back through the same table
+ * and the same cameras the first time used, from the positions it started from, and when
+ * it is done the table goes back to where the match left it. Nothing is sent to the
+ * server and nothing about the match is read from it: the match is already over and its
+ * result is already known by the time this starts.
+ */
+function playFinalShotRecap(): Promise<void> {
+  const recap = lastShotRecap
+  if (!recap || !scene3d || !frame) return Promise.resolve()
+  return new Promise((resolve) => {
+    let finished = false
+    const done = (): void => {
+      if (finished) return
+      finished = true
+      recapPlayer = null
+      recapDone = null
+      scene3d?.planShotCamera(null)
+      resolve()
+    }
+    recapStart = recap.start.map((ball) => ({ ...ball }))
+    recapPlayer = new ShotPlayer(recap.playback, recap.start.map((ball) => ({ ...ball })))
+    recapHold = FINAL_SHOT_HOLD_SECONDS
+    recapDone = done
+    scene3d?.planShotCamera(recap.playback)
+    hud?.flashEvent('FINAL SHOT', 'info')
+    // Whatever happens to the picture, the result is never held up for long.
+    window.setTimeout(done, FINAL_SHOT_WAIT_MS)
+  })
+}
+
 async function finishMatch(winnerSeat: number, reason?: string): Promise<void> {
+  const matchId = activeMatchId
   const meta = activeMatchId ? await fetchMatchOutcome(activeMatchId) : null
+  // The shot that ended it is watched to the end, and then once more, before the result
+  // goes up over the table. A match that was conceded has no such shot.
+  await tableSettled()
+  if (reason !== 'concede') await playFinalShotRecap()
+  // The player may have left while all that was going on.
+  if (activeMatchId !== matchId) return
+
+  const iWon = mySeat !== undefined && winnerSeat === mySeat
+  const watching = mySeat === undefined
+  const myName = currentUser?.username ?? 'You'
+  const theirName = activeMatchIsPractice
+    ? 'Robot'
+    : (meta?.players.find((p) => p.seat !== mySeat)?.user.username ?? opponentName())
   const winnerName = activeMatchIsPractice
-    ? winnerSeat === mySeat
-      ? (currentUser?.username ?? 'You')
+    ? iWon
+      ? myName
       : 'Robot'
     : (meta?.players.find((p) => p.seat === winnerSeat)?.user.username ?? `Seat ${winnerSeat}`)
-  const box = card('Match finished')
-  box.appendChild(el('div', 'end-winner', `${winnerName} wins`))
+
+  const box = el('div', `card end-screen ${watching ? 'is-neutral' : iWon ? 'is-win' : 'is-loss'}`)
+  const emblem = el('div', 'end-emblem')
+  emblem.setAttribute('aria-hidden', 'true')
+  emblem.innerHTML = END_TROPHY_SVG
+  box.appendChild(emblem)
+  box.appendChild(el('div', 'end-title', watching ? 'MATCH OVER' : iWon ? 'YOU WIN' : 'YOU LOSE'))
+  box.appendChild(el('div', 'end-sub', reason === 'concede' ? `${winnerName} wins by concession` : `${winnerName} wins the match`))
+
+  // The last frame's points, mine on the left. The snapshot still holds them: the match
+  // ending does not clear the table.
+  const scores = frame?.scores
+  if (scores && !watching) {
+    const mine = mySeat === 0 ? scores.player0 : scores.player1
+    const theirs = mySeat === 0 ? scores.player1 : scores.player0
+    const board = el('div', 'end-score')
+    const side = (name: string, points: number, won: boolean): HTMLElement => {
+      const cell = el('div', `end-side${won ? ' is-winner' : ''}`)
+      cell.appendChild(el('span', 'end-side-name', name))
+      cell.appendChild(el('span', 'end-side-points', String(points)))
+      return cell
+    }
+    board.appendChild(side(myName, mine, iWon))
+    board.appendChild(el('span', 'end-score-dash', '\u2013'))
+    board.appendChild(side(theirName, theirs, !iWon))
+    box.appendChild(board)
+    const margin = Math.abs(mine - theirs)
+    if (margin > 0) {
+      box.appendChild(el('div', 'end-margin', `${iWon ? 'Won' : 'Lost'} the final frame by ${margin} point${margin === 1 ? '' : 's'}`))
+    }
+  }
+
   if (activeMatchIsPractice) {
-    box.appendChild(el('div', 'muted', 'Practice session — free play'))
+    box.appendChild(el('div', 'muted', 'Practice session \u2014 free play'))
   } else {
-    box.appendChild(el('div', 'muted', `Frames: ${framesWon[0]}-${framesWon[1]}`))
+    box.appendChild(el('div', 'end-frames', `Frames ${framesWon[0]} \u2013 ${framesWon[1]}`))
     const prize = meta?.resultJson?.prize
     if (typeof prize === 'number' && prize > 0) {
       box.appendChild(el('div', 'end-prize', `Winner receives ${formatCash(prize)}`))
     } else {
-      box.appendChild(el('div', 'muted', 'Settlement pending…'))
+      box.appendChild(el('div', 'muted', 'Settlement pending\u2026'))
     }
   }
-  if (reason === 'concede') box.appendChild(el('div', 'muted', 'by concession'))
+
+  const actions = el('div', 'end-actions')
   // A settled one-vs-one (never practice, never a tournament leg) can be played
   // straight back: the button opens a targeted invite to the same opponent at the
   // same stake and format, which they accept like any other table.
@@ -1515,12 +1652,13 @@ async function finishMatch(winnerSeat: number, reason?: string): Promise<void> {
       const rematchBtn = el('button', 'ghost', 'Rematch') as HTMLButtonElement
       rematchBtn.type = 'button'
       rematchBtn.onclick = () => void sendRematch(opponent, format, stakeTier)
-      box.appendChild(rematchBtn)
+      actions.appendChild(rematchBtn)
     }
   }
   const backBtn = el('button', undefined, activeTournamentId ? 'Back to tournament' : 'Back to home')
   backBtn.onclick = () => leaveToLobby()
-  box.appendChild(backBtn)
+  actions.appendChild(backBtn)
+  box.appendChild(actions)
   showOverlay(box)
 }
 
@@ -2688,6 +2826,10 @@ async function warmMatchAudioBuffers(): Promise<void> {
 
 function enterMatch(matchId: string, isPractice = false): void {
   activeMatchId = matchId
+  // A new match has no last shot yet, and no recap left over from the one before.
+  lastShotRecap = null
+  recapPlayer = null
+  recapDone = null
   activeMatchIsPractice = isPractice
   clearTournamentTimer()
   mySeat = undefined
@@ -3316,6 +3458,8 @@ function applyGameUpdate(data: GameUpdatePayload): void {
   deferredVerdict = []
   if (data.playback && data.playback.keyframes.length && previous) {
     shotPlayer = new ShotPlayer(data.playback, previous.balls as PlaybackBall[])
+    // Kept for the recap at the end of the match. A copy: the table goes on from here.
+    lastShotRecap = { playback: data.playback, start: (previous.balls as PlaybackBall[]).map((ball) => ({ ...ball })) }
     shotInFlight = true
     const opponentsShot = mySeat !== undefined && previous.turnIndex !== mySeat
     shotPreRoll = opponentsShot ? (scene3d?.opponentShotPreRoll(data.playback) ?? 0) : 0
@@ -3961,7 +4105,9 @@ function loop(): void {
       // `isInputAllowed` folds in the placement flow as well, so the cue stick, the aim
       // guide and the power bar all come back on the same frame — and stay away on every
       // frame of a placement camera move.
-      const canAim = isInputAllowed()
+      // Nobody aims while the final shot is being shown again.
+      const recapping = recapPlayer !== null
+      const canAim = isInputAllowed() && !recapping
       // A mouse resting over the table is re-read as the aim once the camera is down in the
       // aim view: the camera pans under it, so the spot it is over is not standing still.
       if (canAim && scene3d?.isAimViewSettled()) cueController?.refreshAim()
@@ -3969,17 +4115,19 @@ function loop(): void {
       const renderOptions = {
         aim: cueController?.aim,
         youSeat: mySeat,
-        immediate: shotPlayer !== null,
+        immediate: shotPlayer !== null || recapping,
         canAim
       }
       if (scene3d) {
         // The view the player picked, and whether the balls are moving. A shot overrides
         // the view for as long as it lasts, then hands it back.
         scene3d.setCameraMode(cameraMode)
-        scene3d.setTracking(shotPlayer !== null)
+        scene3d.setTracking(shotPlayer !== null || recapping)
         // The replay clock, for the pocket camera. Held at the start through the wind-up
         // before an opponent's shot, when the replay has been set up but is not moving.
-        scene3d.setShotTime(shotPlayer ? (shotPreRoll > 0 ? 0 : shotPlayer.time) : null)
+        scene3d.setShotTime(
+          recapPlayer ? recapPlayer.time : shotPlayer ? (shotPreRoll > 0 ? 0 : shotPlayer.time) : null
+        )
         if (cameraToggleEl) {
           cameraToggleEl.hidden = false
           // The toggle is one of the player's normal controls, so it goes away with the
@@ -4036,6 +4184,21 @@ function finishShot(): void {
  * Advances the replay clock and returns the snapshot to draw this frame.
  */
 function stepShotPlayback(target: FrameSnapshotData, dtSeconds: number): FrameSnapshotData {
+  if (recapPlayer) {
+    // The recap of the final shot. It only ever decides what is drawn: it does not touch
+    // the live shot, the queue behind it, the sounds, or anything that is sent anywhere.
+    if (recapHold > 0 && !recapPlayer.finished) {
+      recapHold -= dtSeconds
+      return { ...target, balls: recapStart }
+    }
+    const balls = recapPlayer.advance(dtSeconds * FINAL_SHOT_SPEED)
+    if (recapPlayer.finished) {
+      // Stand on where it finished for a moment, then hand the table back.
+      recapHold += dtSeconds
+      if (recapHold > FINAL_SHOT_HOLD_SECONDS) recapDone?.()
+    }
+    return { ...target, balls }
+  }
   if (shotPlayer && shotPreRoll > 0 && shotStartBalls) {
     // The opponent's cue is still winding up: the table stands exactly as it was before
     // the shot, and the replay has not been started.

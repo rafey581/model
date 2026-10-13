@@ -354,6 +354,21 @@ body.game-mode {
   overflow: hidden;
 }
 
+/*
+ * The corners of the picture fall away into dark, the way a lens and a lamp both do it.
+ * One still gradient over the canvas: it gives the table a middle to look at and takes
+ * the flatness out of an evenly lit scene. First in the frame, so everything the HUD puts
+ * there afterwards sits on top of it untouched.
+ */
+.table-frame::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse 78% 82% at 50% 54%, rgba(0, 0, 0, 0) 58%, rgba(0, 0, 0, 0.2) 82%, rgba(0, 0, 0, 0.46) 100%);
+}
+
 .table-frame canvas {
   display: block;
   width: 100%;
@@ -1200,6 +1215,126 @@ th {
 @keyframes event-banner-shine {
   to {
     transform: translateX(130%);
+  }
+}
+
+/**
+ * The opponent's turn: a plate that sweeps in.
+ *
+ * A slanted plate, about a third of the screen wide, comes in fast from the left with two
+ * streaks of light chasing it, settles above the table, and leaves by the right. It sits
+ * high, clear of the balls, and is small enough that the table is watched through the
+ * whole of it. Everything that moves is a transform.
+ */
+.turn-wipe {
+  position: fixed;
+  inset: 0;
+  z-index: 46;
+  pointer-events: none;
+  overflow: hidden;
+  --wipe-w: min(520px, 74vw);
+  --wipe-top: 17%;
+}
+
+.turn-wipe-band,
+.turn-wipe-stripe {
+  position: absolute;
+  left: 50%;
+  top: var(--wipe-top);
+  margin-left: calc(var(--wipe-w) / -2);
+  width: var(--wipe-w);
+  transform: translateX(-120vw);
+  transition: transform 460ms cubic-bezier(0.2, 1.25, 0.35, 1);
+  will-change: transform;
+}
+
+/* The plate: glass blue running to a bright edge, cut on the slant at both ends. */
+.turn-wipe-band {
+  padding: clamp(9px, 1.7vh, 15px) 0;
+  clip-path: polygon(7% 0, 100% 0, 93% 100%, 0 100%);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0) 46%),
+    linear-gradient(100deg, #0a2a78 0%, #1458d6 48%, #1fb6ee 100%);
+  transition-delay: 70ms;
+}
+
+.turn-wipe-words {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.5em;
+}
+
+.turn-wipe-text {
+  font-size: clamp(17px, 2.5vw, 28px);
+  font-weight: 800;
+  font-style: italic;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: #ffffff;
+  text-shadow: 0 2px 0 rgba(4, 18, 60, 0.55);
+}
+
+.turn-wipe-arrows {
+  font-size: clamp(17px, 2.5vw, 28px);
+  font-weight: 800;
+  letter-spacing: -0.08em;
+  color: #ffd866;
+}
+
+/* Two streaks, one ahead and one behind, each a narrow slanted sliver of light. */
+.turn-wipe-stripe {
+  height: clamp(5px, 0.9vh, 8px);
+  clip-path: polygon(3% 0, 100% 0, 97% 100%, 0 100%);
+}
+
+.turn-wipe-stripe.is-lead {
+  margin-top: clamp(-13px, -1.5vh, -8px);
+  margin-left: calc(var(--wipe-w) / -2 + var(--wipe-w) * 0.3);
+  width: calc(var(--wipe-w) * 0.72);
+  background: linear-gradient(90deg, rgba(255, 216, 102, 0), #ffd866 30%, #fff3c4);
+  transition-delay: 0ms;
+}
+
+.turn-wipe-stripe.is-trail {
+  margin-top: clamp(40px, 6.6vh, 62px);
+  width: calc(var(--wipe-w) * 0.62);
+  background: linear-gradient(90deg, #7fe3ff, rgba(127, 227, 255, 0));
+  transition-delay: 140ms;
+}
+
+.turn-wipe.is-in .turn-wipe-band,
+.turn-wipe.is-in .turn-wipe-stripe {
+  transform: translateX(0);
+}
+
+.turn-wipe.is-out .turn-wipe-band,
+.turn-wipe.is-out .turn-wipe-stripe {
+  transform: translateX(120vw);
+  transition-duration: 360ms;
+  transition-timing-function: cubic-bezier(0.6, 0, 0.9, 0.35);
+}
+
+/* Motion turned down: the plate is simply there, then simply gone. */
+@media (prefers-reduced-motion: reduce) {
+  .turn-wipe-band,
+  .turn-wipe-stripe {
+    transform: none;
+    opacity: 0;
+    transition: opacity 200ms ease;
+    transition-delay: 0ms;
+  }
+
+  .turn-wipe.is-in .turn-wipe-band,
+  .turn-wipe.is-in .turn-wipe-stripe {
+    transform: none;
+    opacity: 1;
+  }
+
+  .turn-wipe.is-out .turn-wipe-band,
+  .turn-wipe.is-out .turn-wipe-stripe {
+    transform: none;
+    opacity: 0;
   }
 }
 
@@ -2851,6 +2986,169 @@ button.bell::after {
 .overlay .card {
   min-width: 320px;
   max-width: 480px;
+}
+
+/**
+ * The result screen.
+ *
+ * One card over the table: who won, said in two words the size of the card, the last
+ * frame's points with the winner's side lit, and the way out. Gold for a win and red for
+ * a loss, carried by one colour the whole card reads from.
+ */
+.overlay .card.end-screen {
+  --end-tone: #e7c768;
+  position: relative;
+  width: min(460px, 92vw);
+  max-width: none;
+  padding: 26px 28px 24px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 70% at 50% 0%, color-mix(in srgb, var(--end-tone) 20%, transparent), transparent 70%),
+    linear-gradient(180deg, rgba(20, 26, 38, 0.98), rgba(8, 11, 17, 0.98));
+  border: 1px solid color-mix(in srgb, var(--end-tone) 45%, transparent);
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+  animation: end-screen-in 420ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+
+.overlay .card.end-screen::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 4px;
+  background: linear-gradient(90deg, transparent, var(--end-tone) 25%, var(--end-tone) 75%, transparent);
+}
+
+.overlay .card.end-screen.is-loss {
+  --end-tone: #ff6b6b;
+}
+
+.overlay .card.end-screen.is-neutral {
+  --end-tone: #8fc4ff;
+}
+
+.end-emblem {
+  width: 64px;
+  height: 64px;
+  color: var(--end-tone);
+  filter: drop-shadow(0 0 14px color-mix(in srgb, var(--end-tone) 55%, transparent));
+}
+
+.end-screen.is-loss .end-emblem {
+  opacity: 0.55;
+  filter: none;
+}
+
+.end-emblem svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.end-title {
+  font-size: clamp(32px, 7vw, 46px);
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  line-height: 1;
+  color: var(--end-tone);
+  text-shadow: 0 0 26px color-mix(in srgb, var(--end-tone) 45%, transparent);
+}
+
+.end-sub {
+  font-size: 14px;
+  color: rgba(230, 237, 243, 0.78);
+  margin-bottom: 6px;
+}
+
+.end-score {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 14px;
+  width: 100%;
+  margin: 6px 0 2px;
+}
+
+.end-side {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 8px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.end-side.is-winner {
+  background: color-mix(in srgb, var(--end-tone) 12%, transparent);
+  border-color: color-mix(in srgb, var(--end-tone) 50%, transparent);
+}
+
+.end-side-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(230, 237, 243, 0.8);
+}
+
+.end-side-points {
+  font-size: 38px;
+  font-weight: 800;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+  color: #f0f6fc;
+}
+
+.end-score-dash {
+  align-self: center;
+  font-size: 26px;
+  color: rgba(230, 237, 243, 0.4);
+}
+
+.end-margin,
+.end-frames {
+  font-size: 13px;
+  color: rgba(230, 237, 243, 0.7);
+}
+
+.end-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  width: 100%;
+  margin-top: 12px;
+}
+
+.end-actions button {
+  flex: 1 1 0;
+  min-height: 46px;
+}
+
+@keyframes end-screen-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay .card.end-screen {
+    animation: none;
+  }
 }
 
 .end-winner {

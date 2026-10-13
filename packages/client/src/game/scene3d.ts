@@ -20,8 +20,9 @@ import type { OpponentShot } from './opponentCue.js'
 import type { ShotPlayback } from '@snooker/shared'
 import { ballColor } from './palette.js'
 import {
-  createColouredBallMaterial,
-  createCueBallMaterial,
+  createBallMaterial,
+  setBallGlow,
+  type BallMaterial,
   cueShadowPixels,
   CUE_SHADOW_OFFSET_MM,
   CUE_SHADOW_PLANE,
@@ -294,7 +295,7 @@ const CLOTH_SHEEN_ROUGHNESS = 0.62
 const CLOTH_NORMAL_STRENGTH = 0.13
 
 /** The contact disc's size, as a multiple of the ball's radius. */
-const BALL_SHADOW_PLANE = 2.4
+const BALL_SHADOW_PLANE = 2.8
 /** The contact disc's height above the cloth, in millimetres. */
 const BALL_SHADOW_Y = 0.5
 /** How far the contact disc leans off the ball's centre, away from the lamp overhead. */
@@ -410,11 +411,11 @@ const RAIL_WOOD_UV_TILE_MM = 500
 const AIM_RIBBON_Y = 0.5
 /** LINE 1 — cue path: solid white rectangular strip to ghost ball or cushion. */
 const AIM_LINE1_COLOR = 0xffffff
-const AIM_LINE1_OPACITY = 0.82
+const AIM_LINE1_OPACITY = 0.72
 /** The contact ring — hollow, the size of the ball it wraps, nothing inside. */
 const AIM_RING_COLOR = 0xffffff
-const AIM_RING_OPACITY = 0.8
-const AIM_RING_STROKE_MM = 3
+const AIM_RING_OPACITY = 0.7
+const AIM_RING_STROKE_MM = 2.2
 const AIM_RING_Y = 1.1
 /** LINE 2 — object ball path along the line of centres: neon green. */
 const AIM_LINE2_COLOR = 0x46e868
@@ -434,12 +435,20 @@ function ballIsOn(targetId: number, ballOn: string): boolean {
   const colour = /colour:(\d+)/.exec(ballOn)
   return colour ? Number(colour[1]) === targetId : true
 }
-const AIM_LINE2_LENGTH = BALL_RADIUS * 22
-const AIM_LINE2_OPACITY = 0.85
+const AIM_LINE2_LENGTH = BALL_RADIUS * 8
+const AIM_LINE2_OPACITY = 0.72
 /** LINE 3 — cue ball deflection after contact: solid white. */
 const AIM_LINE3_COLOR = 0xffffff
-const AIM_LINE3_LENGTH = BALL_RADIUS * 14
-const AIM_LINE3_OPACITY = 0.5
+const AIM_LINE3_LENGTH = BALL_RADIUS * 4.5
+const AIM_LINE3_OPACITY = 0.42
+/**
+ * How wide the two departure lines are drawn, as a share of the main line. The line the
+ * player is aiming along is the one that matters; the object ball's line is a little
+ * lighter than it, and the cue ball's own line after the contact lighter again, so the
+ * three read as one guide with a main stroke and not as three beams of the same weight.
+ */
+const AIM_LINE2_WIDTH = 0.78
+const AIM_LINE3_WIDTH = 0.55
 /** The shortest either departure line is drawn, as a share of its full length. */
 const AIM_LINE_MIN_SHARE = 0.14
 /** How much of the way to its new length a line moves each frame. */
@@ -589,7 +598,7 @@ type ClothMaterial = THREE.MeshPhysicalMaterial | THREE.MeshLambertMaterial | TH
 const CLOTH_BAKED_LEVEL = 1.12
 
 /** How strongly the fibre tile shows in the bed's colour. */
-const CLOTH_DETAIL_STRENGTH = 0.16
+const CLOTH_DETAIL_STRENGTH = 0.3
 
 /**
  * Lays the cloth's fibre over the bed's colour.
@@ -885,6 +894,67 @@ function envTexture(): THREE.CanvasTexture {
 }
 
 /**
+ * What the balls reflect: their own picture of the room, not the one the table uses.
+ *
+ * A polished ball is a mirror, and the room's picture is drawn for wood and brass — a warm
+ * hard-edged band at the skirting, long thin strips of light at the horizon, a dark blue
+ * ceiling. In a ball those came out as a brown ring just inside the outline, pale stripes
+ * across the middle, and a grubby violet cast over the white. This one has nothing in it
+ * but what belongs on a ball: near-black all round, so a ball's own colour stays clean;
+ * one round lamp overhead and two small ones to the sides, which are the highlights; and
+ * the green of the cloth below, which is what lights a ball's underside.
+ *
+ * It is dark on purpose and turned up where it is used (`BALL_ENV_INTENSITY`). A canvas
+ * cannot hold a lamp's real brightness — white is as bright as it goes — and lacquer only
+ * mirrors about a twentieth of what faces it head on, so a lamp drawn at plain white
+ * reflects as nothing at all. Dark surroundings turned up stay dark; the lamp turned up
+ * becomes a highlight.
+ */
+function ballEnvTexture(): THREE.CanvasTexture {
+  return cachedTexture('ball-env', () => {
+    const w = 1024
+    const h = 512
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')!
+    const grad = ctx.createLinearGradient(0, 0, 0, h)
+    grad.addColorStop(0, '#0a0c10')
+    grad.addColorStop(0.5, '#12151a')
+    grad.addColorStop(0.56, '#0c2610')
+    grad.addColorStop(1, '#091c0c')
+    ctx.fillStyle = grad
+    ctx.fillRect(0, 0, w, h)
+    const lamp = (cx: number, cy: number, rw: number, rh: number, a: number): void => {
+      ctx.save()
+      ctx.translate(cx * w, cy * h)
+      ctx.scale(rw * w, rh * h)
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1)
+      g.addColorStop(0, `rgba(255,255,255,${a})`)
+      g.addColorStop(0.55, `rgba(255,250,235,${a})`)
+      g.addColorStop(1, 'rgba(255,250,235,0)')
+      ctx.fillStyle = g
+      ctx.beginPath()
+      ctx.arc(0, 0, 1, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.restore()
+    }
+    lamp(0.5, 0.19, 0.085, 0.17, 1)
+    lamp(0.5, 0.19, 0.15, 0.3, 0.22)
+    lamp(0.18, 0.31, 0.035, 0.07, 0.75)
+    lamp(0.82, 0.31, 0.035, 0.07, 0.75)
+    const texture = new THREE.CanvasTexture(canvas)
+    texture.colorSpace = THREE.SRGBColorSpace
+    texture.mapping = THREE.EquirectangularReflectionMapping
+    return texture
+  })
+}
+
+/** How far the balls' reflection picture is turned up: the coloured balls, and the cue ball. */
+const BALL_ENV_INTENSITY = 10
+const CUE_BALL_ENV_INTENSITY = 8
+
+/**
  * The back wall: blue paint, brightest at the height the lamp reaches, falling to
  * navy at the top, with the pool of light the table throws behind it.
  *
@@ -942,7 +1012,7 @@ export interface BallRigOptions {
 export class BallRig {
   group = new THREE.Group()
   sphere: THREE.Mesh
-  material: THREE.MeshPhysicalMaterial
+  material: BallMaterial
   blob: THREE.Mesh
   target = new THREE.Vector3()
   firstSeen = true
@@ -971,7 +1041,7 @@ export class BallRig {
     // Phenolic resin: tight diffuse under a clearcoat film. The coat carries the
     // crisp lamp highlight; the env map supplies the curved studio reflection.
     // Cue ball uses its own cream albedo with red spin dots so roll is readable.
-    this.material = opts.cue ? createCueBallMaterial() : createColouredBallMaterial(color)
+    this.material = createBallMaterial(color, opts.cue === true)
     const [segW, segH] = qualityConfig().ballSegments
     this.sphere = new THREE.Mesh(new THREE.SphereGeometry(radius, segW, segH), this.material)
     // Balls never cast into the scene's one static shadow map: a shadow baked at
@@ -1082,7 +1152,7 @@ export class BallRig {
       this.blob.position.set(0, shadowY - BALL_RADIUS, 0)
       this.blob.scale.set(1, 1, 1)
     }
-    this.material.emissive.setHex(highlight ? 0x7a5c10 : 0x000000)
+    setBallGlow(this.material, highlight ? 0x7a5c10 : 0x000000)
   }
 
   dispose(): void {
@@ -1186,6 +1256,8 @@ export class Scene3D implements VenueHost {
   private spectating = false
   /** Seconds the table has been at rest, for the settle before the spectator view goes up. */
   private restSeconds = 0
+  /** What the balls reflect. Their own, so the table's reflections can be tuned for wood and brass. */
+  private ballEnv: THREE.Texture | null = null
   /** When, in the shot being replayed, a ball drops, and into which pocket. Empty when none does. */
   private shotPots: Array<{ at: number; pocket: { x: number; y: number } }> = []
   /** How far into its replay the shot on screen is, in simulated seconds, or null with none on screen. */
@@ -1508,7 +1580,10 @@ export class Scene3D implements VenueHost {
   ): Scene3D | null {
     try {
       return new Scene3D(canvas, width, height, opts)
-    } catch {
+    } catch (error) {
+      // Said out loud. The caller falls back to the flat table when this returns null, and
+      // a silent null left nobody able to tell a browser with no WebGL from a bug in here.
+      console.error('[scene3d] could not build the 3D table; using the flat one', error)
       return null
     }
   }
@@ -1521,7 +1596,19 @@ export class Scene3D implements VenueHost {
   ) {
     this.cvw = width
     this.cvh = height
-    const onBuild = opts?.onBuildProgress
+    // A progress report is a courtesy to the loading screen. If the loading screen fails to
+    // take it, that is the loading screen's problem: it must never be the reason the table
+    // is not built, which is what an exception escaping from here used to mean.
+    const report = opts?.onBuildProgress
+    const onBuild = report
+      ? (fraction: number): void => {
+          try {
+            report(fraction)
+          } catch (error) {
+            console.warn('[scene3d] build progress callback failed', error)
+          }
+        }
+      : undefined
     // The Blender table, if one is ready. An explicit `tableModel` (even null) wins
     // over the boot preload, so a caller can force the code-built table; otherwise
     // this is a synchronous read of the preload's result.
@@ -1629,6 +1716,9 @@ export class Scene3D implements VenueHost {
 
     const pmrem = new THREE.PMREMGenerator(this.renderer)
     this.scene.environment = pmrem.fromEquirectangular(envTexture()).texture
+    this.ballEnv = pmrem.fromEquirectangular(ballEnvTexture()).texture
+    // Balls built before this point (none, in practice) are given it now.
+    for (const [id, rig] of this.balls) this.dressBall(rig, id === BALL_IDS.CUE)
     pmrem.dispose()
     onBuild?.(1)
 
@@ -3731,6 +3821,7 @@ const outerL = APRON_OUTER_L
           }
         }
         rig = new BallRig(BALL_RADIUS, tint, this.shadowTexCache || contactShadowTexture(), cueTuning)
+        this.dressBall(rig, ball.id === BALL_IDS.CUE)
         this.balls.set(ball.id, rig)
         this.scene.add(rig.group)
       }
@@ -3949,7 +4040,7 @@ const outerL = APRON_OUTER_L
       tableZ(guide.contact.y + guide.lineOfCentres.y * (2 * BALL_RADIUS)),
        Math.atan2(guide.lineOfCentres.y, guide.lineOfCentres.x),
       this.aimLength2,
-      1
+      AIM_LINE2_WIDTH
     )
 
     // LINE 3: the cue ball's departure after the contact, from the ghost's
@@ -3968,7 +4059,7 @@ const outerL = APRON_OUTER_L
           tableZ(first.from.y + ty * BALL_RADIUS),
           Math.atan2(ty, tx),
           this.aimLength3,
-          1
+          AIM_LINE3_WIDTH
         )
         return
       }
@@ -4318,6 +4409,15 @@ const outerL = APRON_OUTER_L
     return this.environmentLow
   }
 
+  /** Gives a lacquered ball its own reflections. A painted ball has none and is left alone. */
+  private dressBall(rig: BallRig, cue: boolean): void {
+    const material = rig.material
+    if (!this.ballEnv || !(material instanceof THREE.MeshPhysicalMaterial)) return
+    material.envMap = this.ballEnv
+    material.envMapIntensity = cue ? CUE_BALL_ENV_INTENSITY : BALL_ENV_INTENSITY
+    material.needsUpdate = true
+  }
+
   /**
    * Told about a shot as its replay is set up, so the camera knows whether a ball is going
    * to drop and where. Reads the recording and keeps a few numbers; changes nothing.
@@ -4356,10 +4456,14 @@ const outerL = APRON_OUTER_L
   private potCamera(): CameraPose | null {
     const t = this.shotTime
     if (t === null) return null
+    // One pocket a shot, the first ball to go: a shot that pots two is not chased from
+    // pocket to pocket.
+    let first: { at: number; pocket: { x: number; y: number } } | null = null
     for (const pot of this.shotPots) {
-      if (t >= pot.at - POT_CAM.leadSeconds && t <= pot.at + POT_CAM.tailSeconds) return potCameraPose(pot.pocket)
+      if (pot.at >= POT_CAM.earliestPotSeconds && (!first || pot.at < first.at)) first = pot
     }
-    return null
+    if (!first) return null
+    return t >= first.at - POT_CAM.leadSeconds && t <= first.at + POT_CAM.tailSeconds ? potCameraPose(first.pocket) : null
   }
 
   /** The spectator pose for the canvas as it is now, refitted only when its shape changes. */

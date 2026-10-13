@@ -58,17 +58,40 @@ export function buildTurnBanner(config: VenueConfig = VENUE_CONFIG): TurnBanner 
     flash(mine: boolean, seconds?: number): void {
       drop()
       const next = document.createElement('div')
-      // Gold for your own visit, blue for theirs: the two tones the score capsule uses.
-      next.className = `event-banner is-turn ${mine ? 'tone-turn' : 'tone-info'}`
       next.setAttribute('role', 'status')
-      const kicker = document.createElement('span')
-      kicker.className = 'event-banner-kicker'
-      kicker.textContent = mine ? 'At the table' : 'Watching'
       const text = document.createElement('span')
-      text.className = 'event-banner-text'
       text.textContent = mine ? cfg.youText : cfg.opponentText
-      next.append(kicker, text)
-      layer().appendChild(next)
+      if (mine) {
+        // Gold for your own visit: the plate, in the announcement layer.
+        next.className = 'event-banner is-turn tone-turn'
+        text.className = 'event-banner-text'
+        next.append(text)
+        layer().appendChild(next)
+      } else {
+        // The table changing hands to the other player is announced the way a broadcast
+        // does it: a slanted band sweeps in across the picture with the words on it,
+        // holds, and sweeps on out the other side, with two thin stripes running with it.
+        // It is the same element living the same life as the plate — in, hold, out — so
+        // everything that times or dismisses the plate does the same to this.
+        next.className = 'turn-wipe'
+        const band = document.createElement('div')
+        band.className = 'turn-wipe-band'
+        const words = document.createElement('div')
+        words.className = 'turn-wipe-words'
+        text.className = 'turn-wipe-text'
+        const arrows = document.createElement('span')
+        arrows.className = 'turn-wipe-arrows'
+        arrows.setAttribute('aria-hidden', 'true')
+        arrows.textContent = '\u203a\u203a\u203a'
+        words.append(text, arrows)
+        band.appendChild(words)
+        const lead = document.createElement('span')
+        lead.className = 'turn-wipe-stripe is-lead'
+        const trail = document.createElement('span')
+        trail.className = 'turn-wipe-stripe is-trail'
+        next.append(lead, band, trail)
+        document.body.appendChild(next)
+      }
       plate = next
       // One frame for the starting styles to be committed, so the entrance is a
       // transition and not a jump to its end.

@@ -21,6 +21,12 @@ import {
   CUE_SHADOW_STRETCH,
   CUE_SHADOW_TEXTURE_SIZE,
   CUE_SHADOW_Y_MM,
+  PAINTED_BALLS,
+  PaintedBallMaterial,
+  ballGlow,
+  setBallGlow,
+  ballLightAt,
+  ballLightPixels,
   createColouredBallMaterial,
   createCueBallMaterial,
   cueBallAlbedoPixels,
@@ -90,34 +96,97 @@ describe('coloured ball material', () => {
   })
 })
 
+describe('painted ball light', () => {
+  it('is brightest facing the lamp and never black on the far side', () => {
+    const top = ballLightAt(0.1, 0.7)
+    const bottom = ballLightAt(-0.1, -0.8)
+    expect(top.shade).toBeGreaterThan(bottom.shade)
+    expect(bottom.shade).toBeGreaterThan(0.1)
+  })
+
+  it('puts one hard highlight where the lamp reflects, and none in the middle of the shade', () => {
+    let peak = 0
+    let at = { x: 0, y: 0 }
+    for (let y = -1; y <= 1; y += 0.01) {
+      for (let x = -1; x <= 1; x += 0.01) {
+        if (Math.hypot(x, y) > 0.8) continue
+        const shine = ballLightAt(x, y).shine
+        if (shine > peak) {
+          peak = shine
+          at = { x, y }
+        }
+      }
+    }
+    expect(peak).toBeGreaterThan(0.9)
+    // Up the ball, towards the lamp.
+    expect(at.y).toBeGreaterThan(0.25)
+    expect(ballLightAt(0, -0.4).shine).toBeLessThan(0.05)
+  })
+
+  it('treats a point off the ball as its edge, so the picture has no hole round it', () => {
+    const corner = ballLightAt(1, 1)
+    expect(Number.isFinite(corner.shade)).toBe(true)
+    expect(Number.isFinite(corner.shine)).toBe(true)
+  })
+
+  it('keeps shade and shine in separate channels of the picture', () => {
+    const size = 32
+    const data = ballLightPixels(size)
+    expect(data.length).toBe(size * size * 4)
+    const mid = (size / 2) * size * 4 + (size / 2) * 4
+    const light = ballLightAt(1 / size, 1 / size)
+    expect(data[mid]).toBe(Math.round(light.shade * 255))
+    expect(data[mid + 1]).toBe(Math.round(light.shine * 255))
+    expect(data[mid + 3]).toBe(255)
+  })
+})
+
 describe('BallRig material wiring', () => {
+  // The balls on the table wear the lacquer. The painted light further up is built and
+  // tested but switched off.
+  const lacquer = (rig: BallRig): THREE.MeshPhysicalMaterial => {
+    expect(PAINTED_BALLS).toBe(false)
+    expect(rig.material).toBeInstanceOf(THREE.MeshPhysicalMaterial)
+    return rig.material as THREE.MeshPhysicalMaterial
+  }
+
   it('gives the cue rig the cue ball material', () => {
-    const rig = new BallRig(BALL_RADIUS, 0xffffff, fakeShadow(), { cue: true })
-    expect(rig.material.map).toBeTruthy()
-    expect(rig.material.roughness).toBe(CUE_BALL_ROUGHNESS)
-    expect(rig.material.clearcoatRoughness).toBe(CUE_BALL_CLEARCOAT_ROUGHNESS)
-    expect(rig.material.envMapIntensity).toBeGreaterThan(0)
-    expect(rig.material.clearcoat).toBeGreaterThan(0)
+    const material = lacquer(new BallRig(BALL_RADIUS, 0xffffff, fakeShadow(), { cue: true }))
+    expect(material.map).toBeTruthy()
+    expect(material.roughness).toBe(CUE_BALL_ROUGHNESS)
+    expect(material.clearcoatRoughness).toBe(CUE_BALL_CLEARCOAT_ROUGHNESS)
+    expect(material.envMapIntensity).toBeGreaterThan(0)
+    expect(material.clearcoat).toBeGreaterThan(0)
   })
 
   it('leaves the coloured balls on the shared phenolic material', () => {
-    const rig = new BallRig(BALL_RADIUS, 0xd91515, fakeShadow())
-    expect(rig.material.roughness).toBe(COLOURED_BALL_ROUGHNESS)
-    expect(rig.material.clearcoat).toBeGreaterThan(0)
-    expect(rig.material.clearcoatRoughness).toBe(COLOURED_BALL_CLEARCOAT_ROUGHNESS)
-    expect(rig.material.envMapIntensity).toBeGreaterThan(0)
-    expect(rig.material.ior).toBe(COLOURED_BALL_IOR)
-    expect(rig.material.color.getHex()).toBe(0xd91515)
+    const material = lacquer(new BallRig(BALL_RADIUS, 0xd91515, fakeShadow()))
+    expect(material.roughness).toBe(COLOURED_BALL_ROUGHNESS)
+    expect(material.clearcoat).toBeGreaterThan(0)
+    expect(material.clearcoatRoughness).toBe(COLOURED_BALL_CLEARCOAT_ROUGHNESS)
+    expect(material.envMapIntensity).toBeGreaterThan(0)
+    expect(material.ior).toBe(COLOURED_BALL_IOR)
+    expect(material.color.getHex()).toBe(0xd91515)
   })
 
   it('never shares a material instance between two rigs', () => {
-    const cue = new BallRig(BALL_RADIUS, 0xffffff, fakeShadow(), { cue: true })
-    const red = new BallRig(BALL_RADIUS, 0xd91515, fakeShadow())
-    expect(cue.material).not.toBe(red.material)
-    cue.material.emissive.setHex(0x7a5c10)
-    expect(red.material.emissive.getHex()).toBe(0x000000)
-    red.material.roughness = 0.9
-    expect(cue.material.roughness).toBe(CUE_BALL_ROUGHNESS)
+    const cueRig = new BallRig(BALL_RADIUS, 0xffffff, fakeShadow(), { cue: true })
+    const redRig = new BallRig(BALL_RADIUS, 0xd91515, fakeShadow())
+    const cue = lacquer(cueRig)
+    const red = lacquer(redRig)
+    expect(cue).not.toBe(red)
+    setBallGlow(cueRig.material, 0x7a5c10)
+    expect(ballGlow(cueRig.material)).toBe(0x7a5c10)
+    expect(ballGlow(redRig.material)).toBe(0x000000)
+    red.roughness = 0.9
+    expect(cue.roughness).toBe(CUE_BALL_ROUGHNESS)
+  })
+
+  it('keeps a painted ball free of the stock emissive slot the renderer would look for', () => {
+    const painted = new PaintedBallMaterial({ color: 0xd91515 })
+    expect('emissive' in painted).toBe(false)
+    setBallGlow(painted, 0x7a5c10)
+    expect(ballGlow(painted)).toBe(0x7a5c10)
   })
 
   it('rolls the sphere when the ball translates across the cloth', () => {

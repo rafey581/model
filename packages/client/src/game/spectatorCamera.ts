@@ -311,7 +311,13 @@ export const POT_CAM = {
   fovDeg: 46,
   /** Simulated seconds of the shot it is up for, before the ball drops and after. */
   leadSeconds: 1.5,
-  tailSeconds: 0.85
+  tailSeconds: 1.35,
+  /**
+   * A ball that drops sooner than this after the strike is not cut to. The picture has
+   * only just cut to the whole table; cutting again a third of a second later, and back
+   * again after that, is three pictures in the time it takes to read one.
+   */
+  earliestPotSeconds: 0.75
 } as const
 
 /**

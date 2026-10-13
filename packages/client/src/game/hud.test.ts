@@ -8,7 +8,7 @@ import {
   type HudInput,
   type HudSnapshot
 } from './hud.js'
-import { ballColorHex } from './palette.js'
+import { RED_BALL_COLOR, ballColorHex } from './palette.js'
 
 /**
  * A frame as the server would send it: 15 reds and 6 colours on the table, nothing
@@ -422,7 +422,10 @@ describe('the HUD uses the same colours as the table', () => {
   })
 
   it('falls back to the red for the fifteen reds', () => {
-    expect(ballColorHex(BALL_IDS.RED_MIN)).toBe('#d62828')
-    expect(ballColorHex(BALL_IDS.RED_MAX)).toBe('#d62828')
+    // Read from the palette, not written out again here: the red was retuned on the table
+    // once and this line, holding its own copy of the old value, has failed ever since.
+    const red = `#${RED_BALL_COLOR.toString(16).padStart(6, '0')}`
+    expect(ballColorHex(BALL_IDS.RED_MIN)).toBe(red)
+    expect(ballColorHex(BALL_IDS.RED_MAX)).toBe(red)
   })
 })

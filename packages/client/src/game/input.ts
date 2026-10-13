@@ -102,6 +102,13 @@ const SHOOT_RADIUS_PX = 12
  * `PointerEvent.buttons`, where bit 0 is the primary button.
  */
 const PRIMARY_BUTTON = 1
+/** How far one press of A or D turns the aim, in degrees, and with Shift held. */
+export const AIM_KEY_STEP_DEG = 0.25
+export const AIM_KEY_FINE_DEG = 0.05
+/** How much of the pointer's own turn the aim takes while Shift is held. */
+export const AIM_SHIFT_FACTOR = 0.15
+/** How far the pointer has to travel from a trimmed aim before it aims by position again. */
+export const AIM_TRIM_RELEASE_PX = 14
 /**
  * `PointerEvent.button` for the right button: the one held to drag the camera round,
  * not to aim. Note this is the `button` property value, not the `buttons` bitmask.
@@ -292,12 +299,62 @@ export function createCueController(options: CueControllerOptions): CueControlle
     resetFrame = 0
   }
 
-  function handleMove(event: { clientX: number; clientY: number }): void {
+  /**
+   * Where the aim was last trimmed by hand, in client pixels, or null when it has not been.
+   *
+   * From behind the cue ball the far end of the table is a few pixels tall, so a pointer
+   * that aims by where it is cannot make a small correction out there: one pixel of mouse
+   * is a ball's width at the far cushion. A trim — A and D on the keyboard, or the mouse
+   * with Shift held — turns the aim by a small fixed amount instead, and from then on the
+   * pointer is ignored until it has been moved away on purpose, so the hand coming off the
+   * mouse does not undo the correction it has just made.
+   */
+  let trimmedAt: { x: number; y: number } | null = null
+  /** The angle the pointer stood for on its last move, for the Shift trim to measure from. */
+  let lastPointerAngle: number | null = null
+
+  /** Turns the aim by a small amount and holds it there against the resting pointer. */
+  function trimAim(radians: number, at: { x: number; y: number } | null): void {
+    aim.angle += radians
+    trimmedAt = at ?? trimmedAt ?? (hover ? { x: hover.clientX, y: hover.clientY } : { x: NaN, y: NaN })
+    hover = null
+  }
+
+  function handleMove(event: { clientX: number; clientY: number; shiftKey?: boolean }): void {
     // A visit that cannot be played has no aim to set: the balls may be mid-shot, the
     // visit may be somebody else's. Holding the aim still is what keeps the angle the
     // player last set intact for when their visit does come round.
     if (!options.enabled()) return
-    aim.angle = pointerAngle(event)
+    const pointed = pointerAngle(event)
+    if (event.shiftKey && !dragging) {
+      // Shift held: the mouse turns the aim by a fraction of what it would have, from
+      // wherever the aim already is.
+      if (lastPointerAngle !== null) {
+        let delta = pointed - lastPointerAngle
+        if (delta > Math.PI) delta -= Math.PI * 2
+        if (delta < -Math.PI) delta += Math.PI * 2
+        trimAim(delta * AIM_SHIFT_FACTOR, { x: event.clientX, y: event.clientY })
+        options.onChange({ ...aim })
+      }
+      lastPointerAngle = pointed
+      return
+    }
+    lastPointerAngle = pointed
+    if (trimmedAt) {
+      // A trim made from the keyboard before the pointer had been seen has nowhere to
+      // measure from yet: wherever the pointer turns up first is where it was resting.
+      if (Number.isNaN(trimmedAt.x)) trimmedAt = { x: event.clientX, y: event.clientY }
+      // Trimmed, and the pointer has only drifted — or has been pressed where it rests to
+      // play the shot: the trim stands.
+      const moved = Math.hypot(event.clientX - trimmedAt.x, event.clientY - trimmedAt.y)
+      if (moved <= AIM_TRIM_RELEASE_PX) {
+        hover = null
+        if (dragging) options.onChange({ ...aim })
+        return
+      }
+      trimmedAt = null
+    }
+    aim.angle = pointed
     if (dragging) {
       if (
         !settingPowerByDrag &&
@@ -468,6 +525,17 @@ export function createCueController(options: CueControllerOptions): CueControlle
       case 'ArrowRight':
         aim.spinX = Math.min(1, aim.spinX + 0.2)
         break
+      case 'a':
+      case 'A':
+      case 'd':
+      case 'D': {
+        // The fine aim: a nudge to one side or the other, smaller again with Shift.
+        if (!options.enabled() || dragging) return
+        event.preventDefault()
+        const step = (event.shiftKey ? AIM_KEY_FINE_DEG : AIM_KEY_STEP_DEG) * (Math.PI / 180)
+        trimAim(event.key === 'a' || event.key === 'A' ? -step : step, null)
+        break
+      }
       case 'w':
       case 'W':
         aim.spinY = Math.min(1, aim.spinY + 0.2)

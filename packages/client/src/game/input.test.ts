@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TABLE_LENGTH, TABLE_WIDTH } from '@snooker/shared'
-import { createCueController, type AimState, type TableView } from './input.js'
+import { AIM_SHIFT_FACTOR, AIM_TRIM_RELEASE_PX, createCueController, type AimState, type TableView } from './input.js'
 import { setTableTransform } from './renderer.js'
 import { aimPose, topDownPose } from './camera.js'
 import { ndcToPixel, pickCameraAt, pixelToNdc, projectToNdc, screenToTable, type PickCamera } from './cameraPick.js'
@@ -368,5 +368,41 @@ it('fires when released on the ball, in the direction it was pressed', () => {
     narrow.canvas.fire('pointerdown', pointer(onBall.x, onBall.y))
     narrow.canvas.fire('pointerup', pointer(onBall.x + 40, onBall.y))
     expect(narrow.shots).toHaveLength(0)
+  })
+})
+
+describe('fine aiming with Shift held', () => {
+  it('turns the aim by a fraction of what the same mouse move would have', () => {
+    const cue = flatPixel(CUE.x, CUE.y)
+    // The plain move: from straight right of the ball to 45 degrees below it.
+    const plain = harness()
+    plain.canvas.fire('pointermove', pointer(cue.x + 200, cue.y))
+    plain.canvas.fire('pointermove', pointer(cue.x + 200, cue.y + 200))
+    expect(plain.aimNow().angle).toBeCloseTo(Math.PI / 4, 6)
+
+    // The same move with Shift held from the second position on.
+    const fine = harness()
+    fine.canvas.fire('pointermove', pointer(cue.x + 200, cue.y))
+    fine.canvas.fire('pointermove', { ...pointer(cue.x + 200, cue.y + 200), shiftKey: true })
+    expect(fine.aimNow().angle).toBeCloseTo((Math.PI / 4) * AIM_SHIFT_FACTOR, 6)
+  })
+
+  it('holds a trimmed aim against a pointer that only drifts, and lets go when it is moved away', () => {
+    const cue = flatPixel(CUE.x, CUE.y)
+    const h = harness()
+    h.canvas.fire('pointermove', pointer(cue.x + 200, cue.y))
+    h.canvas.fire('pointermove', { ...pointer(cue.x + 200, cue.y + 40), shiftKey: true })
+    const trimmed = h.aimNow().angle
+    expect(trimmed).toBeGreaterThan(0)
+
+    // Shift released, the hand settles: a few pixels of drift must not undo the trim.
+    const before = h.states.length
+    h.canvas.fire('pointermove', pointer(cue.x + 203, cue.y + 44))
+    expect(h.states.length).toBe(before)
+
+    // Moved away on purpose: the pointer aims by where it is again.
+    h.canvas.fire('pointermove', pointer(cue.x + 200, cue.y + 200))
+    expect(h.aimNow().angle).toBeCloseTo(Math.PI / 4, 6)
+    expect(AIM_TRIM_RELEASE_PX).toBeGreaterThan(5)
   })
 })

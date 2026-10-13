@@ -25,11 +25,11 @@ const HALF_W = TABLE_WIDTH / 2
  * ------------------------------------------------------------------ */
 
 /** Vertical field of view for the aim camera, in degrees. */
-export const AIM_FOV_DEG = 52
+export const AIM_FOV_DEG = 46
 /** How far behind the cue ball the aim camera sits, in millimetres. */
-export const AIM_BACK_MM = 440
+export const AIM_BACK_MM = 480
 /** How far above the cloth the aim camera sits, in millimetres. */
-export const AIM_HEIGHT_MM = 235
+export const AIM_HEIGHT_MM = 222
 /**
  * How far ahead of the cue ball the aim camera looks, in millimetres.
  *
@@ -37,7 +37,7 @@ export const AIM_HEIGHT_MM = 235
  * itself puts the horizon above the shot line, so the table runs away toward the top of
  * the screen and the cue ball sits low and near, the way a cue view actually looks.
  */
-export const AIM_LOOK_AHEAD_MM = 520
+export const AIM_LOOK_AHEAD_MM = 560
 /** The height the aim camera looks at: the cloth, not the ball. */
 export const AIM_LOOK_HEIGHT_MM = 0
 

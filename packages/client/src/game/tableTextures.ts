@@ -278,12 +278,15 @@ export function woodNormalTexture(): THREE.CanvasTexture {
 // from #147a3c down to #083d1e at the cushions — half the centre's brightness, painted
 // into the cloth itself — which is what made the ends of the table look unlit whatever
 // the lamp was doing.
-export const CLOTH_COLOR_CENTER = '#2fc23a'
+export const CLOTH_COLOR_CENTER = '#37cc43'
 export const CLOTH_COLOR_MID = '#23a92e'
 export const CLOTH_COLOR_EDGE = '#167f1f'
 /** How far out from each cushion its shade reaches across the bed, and how dark it starts. */
-const CUSHION_SHADE_MM = 95
-const CUSHION_SHADE_STRENGTH = 0.42
+const CUSHION_SHADE_MM = 120
+const CUSHION_SHADE_STRENGTH = 0.46
+/** How far the dark round a pocket reaches across the bed, and how dark it is at the mouth. */
+const POCKET_SHADE_MM = 170
+const POCKET_SHADE_STRENGTH = 0.36
 const CLOTH_MIPMAPS = true
 
 /**
@@ -300,7 +303,9 @@ const CLOTH_MIPMAPS = true
 export function feltTexture(): THREE.CanvasTexture {
   let tex = tableCache.get('felt')
   if (tex) return tex
-  const size = 512
+  // 1024 across the table: the shade under a cushion is a few centimetres deep, and at
+  // half this size it was three pixels of gradient, which is a smear and not a shadow.
+  const size = 1024
   const { canvas, ctx } = newScratchCanvas(size)
   const g = ctx.createRadialGradient(size * 0.5, size * 0.5, size * 0.06, size * 0.5, size * 0.5, size * 0.78)
   g.addColorStop(0, CLOTH_COLOR_CENTER)
@@ -327,8 +332,11 @@ export function feltTexture(): THREE.CanvasTexture {
   // as standing over the cloth instead of being a green stripe printed at its edge.
   const shade = (x0: number, y0: number, x1: number, y1: number, w: number, h: number, x: number, y: number): void => {
     const edge = ctx.createLinearGradient(x0, y0, x1, y1)
+    // Darkest right under the nose of the cushion, where no light gets in at all, then a
+    // long soft tail: a contact shadow and the penumbra beyond it.
     edge.addColorStop(0, `rgba(0,0,0,${CUSHION_SHADE_STRENGTH})`)
-    edge.addColorStop(0.35, `rgba(0,0,0,${CUSHION_SHADE_STRENGTH * 0.45})`)
+    edge.addColorStop(0.1, `rgba(0,0,0,${CUSHION_SHADE_STRENGTH * 0.72})`)
+    edge.addColorStop(0.4, `rgba(0,0,0,${CUSHION_SHADE_STRENGTH * 0.28})`)
     edge.addColorStop(1, 'rgba(0,0,0,0)')
     ctx.fillStyle = edge
     ctx.fillRect(x, y, w, h)
@@ -339,6 +347,49 @@ export function feltTexture(): THREE.CanvasTexture {
   shade(size, 0, size - alongLength, 0, alongLength, size, size - alongLength, 0)
   shade(0, 0, 0, alongWidth, size, alongWidth, 0, 0)
   shade(0, size, 0, size - alongWidth, size, alongWidth, 0, size - alongWidth)
+
+  // The dark at each pocket. A pocket is a hole with leather and a drop behind it, and the
+  // cloth running into it falls into shade: without this the mouth is a black shape cut
+  // out of an evenly lit sheet, which is what a sticker looks like. Drawn in millimetres,
+  // through a scale, so each patch is round on the table and not on the square texture.
+  ctx.save()
+  ctx.scale(size / TABLE_LENGTH, size / TABLE_WIDTH)
+  for (const [px, py] of [
+    [0, 0],
+    [TABLE_LENGTH, 0],
+    [0, TABLE_WIDTH],
+    [TABLE_LENGTH, TABLE_WIDTH],
+    [TABLE_LENGTH / 2, 0],
+    [TABLE_LENGTH / 2, TABLE_WIDTH]
+  ] as const) {
+    const dark = ctx.createRadialGradient(px, py, 20, px, py, POCKET_SHADE_MM)
+    dark.addColorStop(0, `rgba(0,0,0,${POCKET_SHADE_STRENGTH})`)
+    dark.addColorStop(0.45, `rgba(0,0,0,${POCKET_SHADE_STRENGTH * 0.4})`)
+    dark.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = dark
+    ctx.fillRect(px - POCKET_SHADE_MM, py - POCKET_SHADE_MM, POCKET_SHADE_MM * 2, POCKET_SHADE_MM * 2)
+  }
+  ctx.restore()
+
+  // A worn cloth is not one even sheet of colour: it is very slightly lighter and darker
+  // in broad patches, where it has been brushed and played on. A handful of large, very
+  // faint blots; nothing anyone would point at, and the reason it stops looking printed.
+  let mottle = 771
+  const mottleRand = (): number => {
+    mottle = (mottle * 1103515245 + 12345) & 0x7fffffff
+    return mottle / 0x7fffffff
+  }
+  for (let i = 0; i < 46; i++) {
+    const x = mottleRand() * size
+    const y = mottleRand() * size
+    const r = size * (0.07 + mottleRand() * 0.12)
+    const light = mottleRand() > 0.5
+    const blot = ctx.createRadialGradient(x, y, 0, x, y, r)
+    blot.addColorStop(0, light ? 'rgba(255,255,255,0.032)' : 'rgba(0,0,0,0.04)')
+    blot.addColorStop(1, light ? 'rgba(255,255,255,0)' : 'rgba(0,0,0,0)')
+    ctx.fillStyle = blot
+    ctx.fillRect(x - r, y - r, r * 2, r * 2)
+  }
 
   tex = new THREE.CanvasTexture(canvas)
   tex.colorSpace = THREE.SRGBColorSpace
@@ -380,6 +431,21 @@ export function clothDetailTexture(): THREE.CanvasTexture {
     // Every mark is drawn nine times, once in each neighbouring tile, so it wraps.
     const wrapped = (draw: (dx: number, dy: number) => void): void => {
       for (const dx of [-size, 0, size]) for (const dy of [-size, 0, size]) draw(dx, dy)
+    }
+    // The weave under everything: a fine twill, the diagonal rib every woven cloth has.
+    // Four pixels to a rib, which divides the tile exactly, so it carries across the seam.
+    ctx.lineWidth = 1
+    for (let c = -size; c < size * 2; c += 4) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.075)'
+      ctx.beginPath()
+      ctx.moveTo(c, 0)
+      ctx.lineTo(c - size, size)
+      ctx.stroke()
+      ctx.strokeStyle = 'rgba(0,0,0,0.085)'
+      ctx.beginPath()
+      ctx.moveTo(c + 2, 0)
+      ctx.lineTo(c + 2 - size, size)
+      ctx.stroke()
     }
     // Soft mottling first: wool is not one even shade.
     for (let i = 0; i < 90; i++) {
