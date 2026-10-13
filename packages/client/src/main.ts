@@ -12,7 +12,7 @@ import { frameForHud } from './game/hudFrame.js'
 import { createShotTimer } from './game/shotTimerView.js'
 import type { TurnTiming } from './game/shotTimer.js'
 import type { ShotInput, ShotPlayback } from '@snooker/shared'
-import { APP_TITLE, STAKE_TIERS, COLOR_VALUES } from '@snooker/shared'
+import { APP_TITLE, STAKE_TIERS, COLOR_VALUES, MATCH_CHAT_PHRASES, MATCH_CHAT_MAX_LOG, matchChatPhraseText } from '@snooker/shared'
 import type { MatchFormat, PracticeAiLevel } from '@snooker/shared'
 import { createAvatarBadge } from './game/avatar.js'
 import {
@@ -122,6 +122,8 @@ interface ChallengeDto {
   stakeLabel: string
   format: string
   expiresAt: string
+  /** True for an invite born from the rematch button, so the popup can say so. */
+  rematch?: boolean
 }
 
 /** Invitations other players have sent me and I have not answered. */
@@ -130,6 +132,14 @@ let incomingChallenges: ChallengeDto[] = []
 let pendingChallenge: ChallengeDto | null = null
 let challengeLayerEl: HTMLElement | null = null
 let challengeBusy = false
+
+/**
+ * In-match quick chat. The menu and the log are drawn inside the HUD by
+ * `renderGame`; these references are what the socket listener and the toolbar
+ * share so every phrase falls into the same box.
+ */
+let chatMenuEl: HTMLElement | null = null
+let chatLogEl: HTMLElement | null = null
 
 let activeMatchId: string | null = null
 /**
@@ -908,6 +918,10 @@ function leaveGameState(): void {
   players = []
   activeMatchIsPractice = false
   opponentGone = false
+  // The chat chrome belongs to the match being torn down; dropping the references
+  // keeps a stray incoming line from appending to a detached element.
+  chatMenuEl = null
+  chatLogEl = null
   scene3d?.dispose()
   scene3d = null
   cueController?.destroy()
@@ -928,6 +942,28 @@ function ballName(id: number): string {
 function seatName(seat: number | undefined): string {
   if (seat === undefined) return 'A player'
   return seat === mySeat ? 'You' : opponentName()
+}
+
+/**
+ * Quick chat: the client sends a phrase id, the server relays it to the room, and
+ * every client renders the shared text for that id. Nothing the user types ever
+ * exists, so there is no free-text input to police on either side.
+ */
+function sendChatPhrase(phraseId: string): void {
+  if (!activeMatchId || activeMatchIsPractice) return
+  getSocket().emit('match:chat', { matchId: activeMatchId, phraseId })
+}
+
+function appendMatchChat(sender: string, text: string): void {
+  const target = chatLogEl
+  if (!target) return
+  // The log stays out of the way until there is something to read, then appears
+  // and keeps only the most recent lines.
+  target.hidden = false
+  const msg = el('div', 'match-chat-msg')
+  msg.append(el('span', 'match-chat-msg__who', sender), el('span', 'match-chat-msg__text', text))
+  target.appendChild(msg)
+  while (target.children.length > MATCH_CHAT_MAX_LOG) target.removeChild(target.firstChild!)
 }
 
 function updateConnChip(): void {
@@ -1085,8 +1121,13 @@ function findingOverlay(challenge: ChallengeDto): HTMLElement {
 function challengePopup(challenge: ChallengeDto): HTMLElement {
   const overlay = el('div', 'challenge-overlay')
   const card = el('div', 'challenge-card')
-  card.appendChild(el('div', 'challenge-card__eyebrow', challenge.kind === 'FRIEND' ? 'FRIEND INVITE' : 'OPEN TABLE'))
-  card.appendChild(el('div', 'challenge-card__title', `${challenge.challengerUsername} wants to play`))
+  const isRematch = challenge.rematch === true
+  card.appendChild(
+    el('div', 'challenge-card__eyebrow', isRematch ? 'REMATCH' : challenge.kind === 'FRIEND' ? 'FRIEND INVITE' : 'OPEN TABLE')
+  )
+  card.appendChild(
+    el('div', 'challenge-card__title', isRematch ? `${challenge.challengerUsername} wants a rematch` : `${challenge.challengerUsername} wants to play`)
+  )
   card.appendChild(el('div', 'challenge-card__meta', `${challenge.stakeLabel} · ${challenge.format}`))
   card.appendChild(
     el('p', 'challenge-card__note', `Both players stake ${challenge.stakeLabel}; the winner takes the pool.`)
@@ -1401,19 +1442,45 @@ function bracketNode(slot: BracketSlotData, data: TournamentData): HTMLElement {
 
 async function fetchMatchOutcome(matchId: string): Promise<{
   status: string
+  format: string
+  stakeTier: string
   resultJson: { prize?: number } | null
   players: Array<{ id: string; userId: string; seat: number; user: { id: string; username: string } }>
 } | null> {
   for (let i = 0; i < 12; i++) {
     try {
-      const data = await api<{ status: string; resultJson: { prize?: number } | null; players?: Array<{ id: string; userId: string; seat: number; user: { id: string; username: string } }> }>(`/matches/${matchId}`)
-      if (data && data.status) return { status: data.status, resultJson: data.resultJson, players: data.players ?? [] }
+      const data = await api<{
+        status: string
+        format: string
+        stakeTier: string
+        resultJson: { prize?: number } | null
+        players?: Array<{ id: string; userId: string; seat: number; user: { id: string; username: string } }>
+      }>(`/matches/${matchId}`)
+      if (data && data.status) {
+        return { status: data.status, format: data.format, stakeTier: data.stakeTier, resultJson: data.resultJson, players: data.players ?? [] }
+      }
     } catch {
       /* retry */
     }
     await new Promise((r) => setTimeout(r, 500))
   }
   return null
+}
+
+async function sendRematch(targetUsername: string, format: string, stakeTier: string): Promise<void> {
+  // Drop the result card: the rematch invitation takes its place while it is open.
+  removeOverlay()
+  try {
+    const challenge = await api<ChallengeDto>('/challenges', {
+      method: 'POST',
+      body: { stakeTier, format, targetUsername, rematch: true }
+    })
+    pendingChallenge = challenge
+    renderChallengeLayer()
+    toast(`Rematch invite sent to ${targetUsername}`)
+  } catch (error) {
+    toast((error as Error).message, 'error')
+  }
 }
 
 async function finishMatch(winnerSeat: number, reason?: string): Promise<void> {
@@ -1437,6 +1504,20 @@ async function finishMatch(winnerSeat: number, reason?: string): Promise<void> {
     }
   }
   if (reason === 'concede') box.appendChild(el('div', 'muted', 'by concession'))
+  // A settled one-vs-one (never practice, never a tournament leg) can be played
+  // straight back: the button opens a targeted invite to the same opponent at the
+  // same stake and format, which they accept like any other table.
+  if (!activeMatchIsPractice && !activeTournamentId) {
+    const opponent = meta?.players.find((p) => p.seat !== mySeat)?.user.username ?? null
+    const format = meta?.format
+    const stakeTier = meta?.stakeTier
+    if (opponent && format && stakeTier) {
+      const rematchBtn = el('button', 'ghost', 'Rematch') as HTMLButtonElement
+      rematchBtn.type = 'button'
+      rematchBtn.onclick = () => void sendRematch(opponent, format, stakeTier)
+      box.appendChild(rematchBtn)
+    }
+  }
   const backBtn = el('button', undefined, activeTournamentId ? 'Back to tournament' : 'Back to home')
   backBtn.onclick = () => leaveToLobby()
   box.appendChild(backBtn)
@@ -2774,6 +2855,9 @@ function renderGame(): void {
     '<path d="M4 8.5v3h2.6L10 14.6V5.4L6.6 8.5H4z"/><path d="M12.6 8.4l4.2 3.2m0-3.2-4.2 3.2"/>'
   )
   const flagMark = stroke('<path d="M5.5 16.5v-13"/><path d="M5.5 4.5h8.5l-1.6 3.1 1.6 3.1h-8.5z"/>')
+  const chatMark = stroke(
+    '<path d="M4 4.5h12a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H9.5L5.5 15v-2.5H4a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z"/><path d="M7.5 8h5M7.5 10.5h3"/>'
+  )
   const expandMark = stroke(
     '<path d="M3.5 7.6V3.5h4.1M16.5 7.6V3.5h-4.1M3.5 12.4v4.1h4.1M16.5 12.4v4.1h-4.1"/>'
   )
@@ -2838,6 +2922,39 @@ function renderGame(): void {
   concedeBtn.onclick = () => {
     if (activeMatchIsPractice) void finishPractice()
     else askConcede()
+  }
+
+  /**
+   * Quick chat, for online matches only — practice has nobody to talk to, so the
+   * control and its log stay off the table. The menu is the whole input: a grid
+   * of fixed phrases, each sent by id, none of them typed.
+   */
+  if (!activeMatchIsPractice) {
+    const chatBtn = tool(sessionMount, 'Chat', chatMark)
+    chatBtn.setAttribute('aria-expanded', 'false')
+    const chatMenu = el('div', 'hud-pop hud-glass hud-chat')
+    chatMenu.id = 'match-chat-menu'
+    chatMenu.setAttribute('role', 'group')
+    chatMenu.hidden = true
+    chatBtn.setAttribute('aria-controls', chatMenu.id)
+    chatBtn.onclick = () => {
+      chatMenu.hidden = !chatMenu.hidden
+      chatBtn.setAttribute('aria-expanded', String(!chatMenu.hidden))
+    }
+    const grid = el('div', 'hud-chat-grid')
+    for (const phrase of MATCH_CHAT_PHRASES) {
+      const phraseBtn = el('button', 'hud-chat-phrase', phrase.text) as HTMLButtonElement
+      phraseBtn.type = 'button'
+      phraseBtn.onclick = () => {
+        sendChatPhrase(phrase.id)
+        chatMenu.hidden = true
+        chatBtn.setAttribute('aria-expanded', 'false')
+      }
+      grid.appendChild(phraseBtn)
+    }
+    chatMenu.appendChild(grid)
+    sessionMount.append(chatMenu)
+    chatMenuEl = chatMenu
   }
 
   /**
@@ -2909,6 +3026,17 @@ function renderGame(): void {
   hud.spinDialRoot.appendChild(spinLabel)
 
   app.appendChild(page)
+  // The chat log floats over the table edge and fills from the bottom as lines
+  // arrive; it is created here so the module references always point at the live
+  // DOM for the current match.
+  if (!activeMatchIsPractice) {
+    const chatLog = el('div', 'hud-glass match-chat-log')
+    chatLog.id = 'match-chat-log'
+    chatLog.setAttribute('aria-live', 'polite')
+    chatLog.hidden = true
+    page.appendChild(chatLog)
+    chatLogEl = chatLog
+  }
   // The stage is a fixed, inset-0 box, so its content box is the viewport and this
   // observer fires for a window resize and for an orientation change both — including
   // the rotation that changes the shape of the screen from portrait to landscape and so
@@ -3306,9 +3434,11 @@ function handleSocketEvents(socket: Socket): void {
     const wasPending = pendingChallenge?.id === payload.challengeId
     removeIncomingChallenge(payload.challengeId)
     if (wasPending) {
+      const wasRematch = pendingChallenge?.rematch === true
       pendingChallenge = null
-      if (payload.reason === 'declined') toast('Your friend declined the invite', 'error')
-      else if (payload.reason === 'expired') toast('Your table expired — nobody joined')
+      if (payload.reason === 'declined') {
+        toast(wasRematch ? 'Your opponent declined the rematch' : 'Your friend declined the invite', 'error')
+      } else if (payload.reason === 'expired') toast('Your table expired — nobody joined')
     }
     renderChallengeLayer()
   })
@@ -3395,6 +3525,13 @@ function handleSocketEvents(socket: Socket): void {
     opponentGone = false
     updateOpponentGone()
     toast('Opponent reconnected')
+  })
+  socket.on('match:chat', (data: { seat: number; phraseId: string }) => {
+    const text = matchChatPhraseText(data.phraseId)
+    if (!text) return
+    const sender =
+      data.seat === mySeat ? 'You' : (players.find((p) => p.seat === data.seat)?.user.username ?? opponentName())
+    appendMatchChat(sender, text)
   })
   socket.on(
     'match:replay',

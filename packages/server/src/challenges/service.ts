@@ -2,6 +2,7 @@ import { prisma } from '../db/index.js'
 import { ledger, runInTransaction, InsufficientBalanceError } from '../wallet/service.js'
 import { getSettings } from '../settings/index.js'
 import { assertNotBot, assertViableFormat, resolveStakeTier, MatchError } from '../matches/service.js'
+import { COMPLETED_STATUSES } from '../users/stats.js'
 import { STAKE_TIERS } from '@snooker/shared'
 import type { StakeTierId } from '@snooker/shared'
 
@@ -20,6 +21,14 @@ import type { StakeTierId } from '@snooker/shared'
  */
 
 export const CHALLENGE_TTL_MS = 90_000
+
+/**
+ * How recently two players must have finished a match for one of them to be
+ * allowed to rematch the other. Rematches deliberately skip the friendship
+ * check — the two of them just played — but the door stays narrow so a rematch
+ * invite cannot become a way to cold-call strangers on the platform.
+ */
+export const REMATCH_WINDOW_MS = 15 * 60_000
 
 export class ChallengeError extends Error {
   constructor(message: string) {
@@ -40,6 +49,8 @@ export interface ChallengeView {
   stakeLabel: string
   format: string
   expiresAt: string
+  /** True for an invite born from the rematch button; cosmetic, so the popup can say so. */
+  rematch?: boolean
 }
 
 /**
@@ -100,7 +111,8 @@ function serialize(
     expiresAt: Date
   },
   challengerUsername: string,
-  targetUsername: string | null = null
+  targetUsername: string | null = null,
+  rematch = false
 ): ChallengeView {
   return {
     id: row.id,
@@ -113,7 +125,8 @@ function serialize(
     stakePerPlayer: Number(row.stakePerPlayer),
     stakeLabel: stakeLabelFor(row.stakeTier),
     format: row.format,
-    expiresAt: row.expiresAt.toISOString()
+    expiresAt: row.expiresAt.toISOString(),
+    ...(rematch ? { rematch: true } : {})
   }
 }
 
@@ -122,6 +135,7 @@ export async function createChallenge(opts: {
   stakeTier: StakeTierId
   format: string
   targetUsername?: string
+  rematch?: boolean
 }): Promise<ChallengeView> {
   const { challengerId } = opts
   const tier = await validateForChallenge(challengerId, opts.stakeTier, opts.format)
@@ -143,16 +157,34 @@ export async function createChallenge(opts: {
     })
     if (!target) throw new ChallengeError('no active player with that username')
     if (target.id === challengerId) throw new ChallengeError('you cannot challenge yourself')
-    const friendship = await prisma.friend.findFirst({
-      where: {
-        status: 'ACCEPTED',
-        OR: [
-          { requesterId: challengerId, addresseeId: target.id },
-          { requesterId: target.id, addresseeId: challengerId }
-        ]
-      }
-    })
-    if (!friendship) throw new ChallengeError('you can only invite a friend to play')
+    if (opts.rematch) {
+      // No friendship is required to rematch somebody you just played; instead the
+      // target has to be the opponent of a match the challenger finished recently.
+      const recent = await prisma.match.findFirst({
+        where: {
+          AND: [
+            { matchType: 'ONE_V_ONE' },
+            { status: { in: [...COMPLETED_STATUSES] } },
+            { finishedAt: { gte: new Date(Date.now() - REMATCH_WINDOW_MS) } },
+            { players: { some: { userId: challengerId } } },
+            { players: { some: { userId: target.id } } }
+          ]
+        },
+        select: { id: true }
+      })
+      if (!recent) throw new ChallengeError('you can only rematch someone you just played')
+    } else {
+      const friendship = await prisma.friend.findFirst({
+        where: {
+          status: 'ACCEPTED',
+          OR: [
+            { requesterId: challengerId, addresseeId: target.id },
+            { requesterId: target.id, addresseeId: challengerId }
+          ]
+        }
+      })
+      if (!friendship) throw new ChallengeError('you can only invite a friend to play')
+    }
     targetUserId = target.id
     targetUsername = target.username
     kind = 'FRIEND'
@@ -182,7 +214,7 @@ export async function createChallenge(opts: {
 
   for (const id of cancelled) emitClosed(id, 'cancelled')
   const challenger = await prisma.user.findUnique({ where: { id: challengerId }, select: { username: true } })
-  const view = serialize(row, challenger?.username ?? 'A player', targetUsername)
+  const view = serialize(row, challenger?.username ?? 'A player', targetUsername, opts.rematch === true)
   emitNew(view)
   return view
 }

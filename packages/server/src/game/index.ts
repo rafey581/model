@@ -14,6 +14,7 @@ import { setChallengeSenders, expireStaleChallenges } from '../challenges/servic
 import { isMaintenance, getSettings } from '../settings/index.js'
 import { PRACTICE_DAILY_FREE_LIMIT } from '@snooker/shared'
 import type { PracticeAiLevel } from '@snooker/shared'
+import { isMatchChatPhrase, MATCH_CHAT_COOLDOWN_MS } from '@snooker/shared'
 import type { Prisma } from '@prisma/client'
 
 export interface GameServerContext {
@@ -29,6 +30,8 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
   const roomLocks = new Map<string, Promise<void>>()
   const graceTimers = new Map<string, NodeJS.Timeout>()
   const shots = new ShotEnforcement()
+  /** Last quick-chat line per user, for the per-line cooldown. */
+  const lastChatAt = new Map<string, number>()
 
   function clearGraceTimer(matchId: string): void {
     const timer = graceTimers.get(matchId)
@@ -81,11 +84,32 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
       const winnerUserId = room.userIdForSeat(winnerSeat)
       if (winnerUserId) {
         room.broadcast('match:end', { winnerSeat, reason: 'abandon' })
-        await settleMatch({ matchId, winnerId: winnerUserId, reason: 'abandon' })
+        await settleGracefully(winnerUserId)
       }
       return
     }
-    await refundMatch(matchId, 'abandon_double_disconnect')
+    await refundGracefully()
+
+    // The match can be deleted out from under the room between the lease being
+    // taken and this refund landing (an admin, or a result that was cleaned up
+    // while the grace timer was still counting). The room is already closed by
+    // then and a deleted match has no money to move, so the right move is to log
+    // and move on — letting the rejection escape would take the whole socket
+    // server down for no gain.
+    async function settleGracefully(winnerUserId: string): Promise<void> {
+      try {
+        await settleMatch({ matchId, winnerId: winnerUserId, reason: 'abandon' })
+      } catch (error) {
+        app.log.error({ err: error, matchId }, 'grace timer could not settle abandoned match')
+      }
+    }
+    async function refundGracefully(): Promise<void> {
+      try {
+        await refundMatch(matchId, 'abandon_double_disconnect')
+      } catch (error) {
+        app.log.error({ err: error, matchId }, 'grace timer could not refund abandoned match')
+      }
+    }
   }
 
   setNotificationPusher((userId, notification) => {
@@ -457,6 +481,42 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
         }
         room.handleConcede(userId)
       })
+    })
+
+    // In-match quick chat. The client never sends free text: it sends one of the
+    // shared phrase ids, so the only place unsanitised input could enter is a
+    // bot, and the whitelist refuses anything that is not a known id before the
+    // message is ever broadcast. Echoing ids to the room (rather than the text)
+    // keeps the render on every client in sync with the same list that validated
+    // this message, and leaves the door open to localised copy later.
+    socket.on('match:chat', (payload: { matchId: string; phraseId: string }) => {
+      const { matchId, phraseId } = payload ?? {}
+      if (!matchId || typeof phraseId !== 'string' || phraseId.length === 0) {
+        socket.emit('error', { code: 'bad_request' })
+        return
+      }
+      if (!isMatchChatPhrase(phraseId)) {
+        socket.emit('error', { code: 'bad_phrase' })
+        return
+      }
+      const room = getOrCreateRoom(matchId)
+      if (!room) {
+        socket.emit('error', { code: 'match_not_found' })
+        return
+      }
+      const seat = room.getSeat(userId)
+      if (seat === undefined) {
+        socket.emit('error', { code: 'not_in_match' })
+        return
+      }
+      const last = lastChatAt.get(userId) ?? 0
+      if (Date.now() - last < MATCH_CHAT_COOLDOWN_MS) {
+        socket.emit('error', { code: 'chat_rate_limited' })
+        return
+      }
+      if (lastChatAt.size > 5000) lastChatAt.clear()
+      lastChatAt.set(userId, Date.now())
+      room.broadcast('match:chat', { seat, phraseId, at: Date.now() })
     })
 
     socket.on('disconnect', () => {

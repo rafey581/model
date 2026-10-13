@@ -1903,6 +1903,84 @@ th {
 }
 
 /**
+ * Quick chat: a grid of fixed phrases behind a speech-bubble button, and a small
+ * log that floats over a table corner while a match is live. No free text exists,
+ * so the menu is the whole input — the server accepts phrase ids and nothing else.
+ */
+.hud-chat {
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 10px 12px;
+}
+
+.hud-chat-grid {
+  display: grid;
+  grid-template-columns: max-content max-content;
+  gap: 6px;
+  max-width: 280px;
+}
+
+.hud-chat-phrase {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.hud-chat-phrase:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.hud-chat-phrase:focus-visible {
+  outline: 2px solid var(--accent, #c9a84c);
+  outline-offset: 1px;
+}
+
+.match-chat-log {
+  position: absolute;
+  bottom: 14px;
+  left: 14px;
+  z-index: 7;
+  display: grid;
+  gap: 3px;
+  max-width: min(280px, calc(100vw - 28px));
+  padding: 8px 10px;
+  border-radius: 12px;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.match-chat-log[hidden] {
+  display: none;
+}
+
+.match-chat-msg {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.match-chat-msg__who {
+  flex: none;
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.match-chat-msg__text {
+  color: var(--text);
+}
+
+/**
  * The two centre chips: reds left on the table, and what the ball on is worth.
  *
  * DEAD since the chips were taken out of the HUD. There is no `.hud-centre-chips` in the

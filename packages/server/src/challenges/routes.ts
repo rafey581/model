@@ -6,7 +6,11 @@ import { ChallengeError, acceptChallenge, cancelChallenge, createChallenge, decl
 const createSchema = z.object({
   stakeTier: z.enum(STAKE_TIER_IDS),
   format: z.enum(MATCH_FORMATS).default('BO3'),
-  targetUsername: z.string().min(1).max(24).optional()
+  targetUsername: z.string().min(1).max(24).optional(),
+  // A rematch is an invite to the opponent of the challenger's last match. It exists
+  // only on the wire: the row does not need to remember it, because after an accept
+  // or decline the invitation is over and the match it would have started is fresh.
+  rematch: z.boolean().optional()
 })
 
 export async function registerChallengeRoutes(app: FastifyInstance): Promise<void> {
@@ -25,7 +29,8 @@ export async function registerChallengeRoutes(app: FastifyInstance): Promise<voi
         challengerId: request.authUser!.id,
         stakeTier: parsed.data.stakeTier,
         format: parsed.data.format,
-        targetUsername: parsed.data.targetUsername
+        targetUsername: parsed.data.targetUsername,
+        rematch: parsed.data.rematch
       })
       return reply.send({ ok: true, data })
     } catch (error) {

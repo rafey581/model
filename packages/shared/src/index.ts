@@ -1,4 +1,5 @@
 export * from './constants.js'
+export * from './chat.js'
 export * from './rng.js'
 export * from './vec.js'
 export type * from './state.js'

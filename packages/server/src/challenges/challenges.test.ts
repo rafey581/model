@@ -9,6 +9,7 @@ import {
   expireStaleChallenges,
   listIncomingChallenges
 } from './service.js'
+import { createOneVsOneMatch, joinOneVsOneMatch, settleMatch } from '../matches/service.js'
 
 const TAG = `ch${Date.now() % 1000000}`
 const USERS: string[] = []
@@ -34,6 +35,15 @@ async function befriend(a: { id: string }, b: { id: string }): Promise<void> {
   await prisma.friend.create({
     data: { requesterId: a.id, addresseeId: b.id, status: 'ACCEPTED', respondedAt: new Date() }
   })
+}
+
+/** Plays and settles a 1-USDT BO1 between two users, returning the match id. */
+async function playedOneVsOne(a: { id: string }, b: { id: string }): Promise<string> {
+  const open = await createOneVsOneMatch(a.id, 'TIER_1', 'BO1')
+  MATCHES.push(open.id)
+  await joinOneVsOneMatch(open.id, b.id)
+  await settleMatch({ matchId: open.id, winnerId: a.id, reason: 'frames' })
+  return open.id
 }
 
 async function cleanup(): Promise<void> {
@@ -201,5 +211,85 @@ describe('match challenges', () => {
     expect(row!.status).toBe('EXPIRED')
     expect((await listIncomingChallenges(bob.id)).map((c) => c.id)).not.toContain(view.id)
     await expect(acceptChallenge({ challengeId: view.id, userId: bob.id })).rejects.toThrow(/no longer open/)
+  })
+
+  it('lets you rematch the opponent of a settled match without being friends, from either side', async () => {
+    const alice = await createUser()
+    const bob = await createUser()
+
+    await playedOneVsOne(alice, bob)
+
+    const view = await createChallenge({
+      challengerId: alice.id,
+      stakeTier: 'TIER_1',
+      format: 'BO1',
+      targetUsername: bob.username,
+      rematch: true
+    })
+    expect(view.kind).toBe('FRIEND')
+    expect(view.rematch).toBe(true)
+    expect(view.targetUserId).toBe(bob.id)
+
+    // The loser can ask for the rematch too, and it is accepted exactly like any
+    // targeted invite — fresh stakes frozen, new match created.
+    const reverse = await createChallenge({
+      challengerId: bob.id,
+      stakeTier: 'TIER_1',
+      format: 'BO3',
+      targetUsername: alice.username,
+      rematch: true
+    })
+    expect(reverse.rematch).toBe(true)
+    expect(reverse.targetUserId).toBe(alice.id)
+    const accepted = await acceptChallenge({ challengeId: reverse.id, userId: alice.id })
+    MATCHES.push(accepted.matchId)
+  })
+
+  it('refuses a rematch to anyone who was not the opponent of a recent match', async () => {
+    const alice = await createUser()
+    const stranger = await createUser()
+    const carol = await createUser()
+
+    // Never played: no rematch.
+    await expect(
+      createChallenge({
+        challengerId: alice.id,
+        stakeTier: 'TIER_1',
+        format: 'BO1',
+        targetUsername: stranger.username,
+        rematch: true
+      })
+    ).rejects.toThrow(/just played/)
+
+    // Played recently, but the invite goes to a third party: still refused.
+    await playedOneVsOne(alice, stranger)
+    await expect(
+      createChallenge({
+        challengerId: alice.id,
+        stakeTier: 'TIER_1',
+        format: 'BO1',
+        targetUsername: carol.username,
+        rematch: true
+      })
+    ).rejects.toThrow(/just played/)
+  })
+
+  it('only rematches an opponent from the recent window, not an old match', async () => {
+    const alice = await createUser()
+    const bob = await createUser()
+    const matchId = await playedOneVsOne(alice, bob)
+    await prisma.match.update({
+      where: { id: matchId },
+      data: { finishedAt: new Date(Date.now() - 16 * 60_000) }
+    })
+    await expect(
+      createChallenge({
+        challengerId: alice.id,
+        stakeTier: 'TIER_1',
+        format: 'BO1',
+        targetUsername: bob.username,
+        rematch: true
+      })
+    ).rejects.toThrow(/just played/)
   })
 })
