@@ -56,6 +56,7 @@ import {
 import { PLAYER_CAMERA_MODES, PLACEMENT_TRANSITION_SECONDS, type PlayerCameraMode } from './game/camera.js'
 import { createRenderScaler } from './game/renderScale.js'
 import { createPerfOverlay } from './game/perfOverlay.js'
+import './tournaments.css'
 import { hasWeakGpu } from './game/qualityConfig.js'
 import { createCueHandle, type CueHandle } from './game/cueHandle.js'
 import { placementStatus, D_CENTRE, D_ZONE_RADIUS } from './game/placement.js'
@@ -1676,7 +1677,10 @@ function render(): void {
   lobbySession = null
   app.innerHTML = ''
   hud = null
-  document.body.classList.remove('game-mode', 'home-mode', 'practice-mode')
+  document.body.classList.remove('game-mode', 'home-mode', 'practice-mode', 'tour-mode')
+  // The tournaments list and a tournament's bracket are dressed as the tournament hall.
+  // A class on the page and nothing else: the screens and what they do are unchanged.
+  if (!activeMatchId && (activeTournamentId || activeScreen === 'tournaments')) document.body.classList.add('tour-mode')
 
   const shell = activeMatchId ? 'app-game' : activeScreen === 'home' ? 'app-home' : activeScreen === 'practice' ? 'app-practice' : null
   app.className = shell ? `app-root ${shell}` : 'app-root'

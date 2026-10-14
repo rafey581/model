@@ -1527,6 +1527,337 @@ function applyRenderSettings(scene: THREE.Scene, renderer: THREE.WebGLRenderer |
   if (renderer) renderer.toneMappingExposure = cfg.render.exposure
 }
 
+/* ------------------------------------------------------------------ *
+ * The studio: a room, not a stadium.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Whether the table stands in a walled studio rather than in the bowl of seating.
+ *
+ * The bowl was thousands of seats nobody sat in, on a stand far enough away to need
+ * stairs. A television snooker set is a room: four walls a couple of metres off the table,
+ * a band of sponsors' boards along the top, a big branded board on one side. It reads as
+ * a venue at once, it sits close enough to frame the table, and it is a handful of flat
+ * panels rather than a stadium.
+ */
+export const STUDIO_ROOM = true
+
+/** The room, in millimetres from the table's centre: how far each wall stands, and how tall. */
+const STUDIO_HALF_LENGTH = 5900
+const STUDIO_HALF_WIDTH = 4400
+const STUDIO_WALL_HEIGHT = 3200
+/**
+ * The sponsors' band: how tall it is, and how high its foot is off the floor. Low, just
+ * above the height of the table, so from behind the cue ball it runs along the far end of
+ * the table at eye level, which is where a broadcast set puts its boards.
+ */
+const STUDIO_BAND_HEIGHT = 440
+const STUDIO_BAND_FOOT = 900
+/** One repeat of the wall picture, square, and one repeat of the sponsors' band. */
+const STUDIO_WALL_TILE_MM = 3600
+const STUDIO_BAND_TILE_MM = 6400
+/** The branded board on the right-hand wall: its size, and the height of its middle above the floor. */
+const STUDIO_BOARD_WIDTH = 2100
+const STUDIO_BOARD_HEIGHT = 900
+const STUDIO_BOARD_MID = 2150
+const STUDIO_SPONSORS = ['SNOOKERX', 'WORLD SNOOKER', 'LIVE ON STREAM', 'CHAMPIONSHIP']
+
+function studioTexture(ctx: CanvasRenderingContext2D, repeatX: boolean, name: string): THREE.CanvasTexture {
+  const tex = new THREE.CanvasTexture(ctx.canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.wrapS = repeatX ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping
+  tex.wrapT = THREE.ClampToEdgeWrapping
+  tex.generateMipmaps = true
+  tex.minFilter = THREE.LinearMipmapLinearFilter
+  tex.anisotropy = 8
+  tex.name = name
+  return tex
+}
+
+/**
+ * One repeat of the wall: painted, light and all.
+ *
+ * Deep blue panelling, brightest in the middle of its height, with a downlight's pool on
+ * each half falling from the ceiling, the seams between panels, and a dark skirting with a
+ * lit edge along the floor. It is drawn unlit, so all of that is the lighting there is —
+ * the same in every view and costing nothing to show.
+ */
+function studioWallTexture(size: number): THREE.CanvasTexture {
+  const ctx = canvas2d(size, size)
+  const g = ctx.createLinearGradient(0, 0, 0, size)
+  g.addColorStop(0, '#050c20')
+  g.addColorStop(0.3, '#0c2253')
+  g.addColorStop(0.62, '#12306f')
+  g.addColorStop(0.86, '#0b1f4d')
+  g.addColorStop(1, '#08173c')
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, size, size)
+
+  // A downlight over each half of the repeat: a soft cone fanning down the panel.
+  for (const at of [0.25, 0.75]) {
+    ctx.save()
+    ctx.translate(size * at, size * 0.02)
+    ctx.scale(0.5, 1)
+    const cone = ctx.createRadialGradient(0, 0, 0, 0, 0, size * 0.85)
+    cone.addColorStop(0, 'rgba(170,200,255,0.34)')
+    cone.addColorStop(0.35, 'rgba(120,160,255,0.14)')
+    cone.addColorStop(1, 'rgba(120,160,255,0)')
+    ctx.fillStyle = cone
+    ctx.fillRect(-size, 0, size * 2, size)
+    ctx.restore()
+  }
+
+  // Panel seams: a dark groove with a catch of light beside it.
+  for (let i = 0; i < 3; i++) {
+    const x = (i / 3) * size
+    ctx.fillStyle = 'rgba(0,0,0,0.22)'
+    ctx.fillRect(x, 0, Math.max(2, size / 500), size * 0.86)
+    ctx.fillStyle = 'rgba(255,255,255,0.06)'
+    ctx.fillRect(x + Math.max(2, size / 400), 0, Math.max(1, size / 700), size * 0.86)
+  }
+
+  // The skirting, with the strip of light along its top edge.
+  ctx.fillStyle = '#060d22'
+  ctx.fillRect(0, size * 0.86, size, size * 0.14)
+  ctx.fillStyle = 'rgba(120,170,255,0.45)'
+  ctx.fillRect(0, size * 0.86, size, Math.max(2, size / 260))
+
+  // A little unevenness, so a wall this size does not read as one flat swatch.
+  const rand = rng(0x5717d10)
+  for (let i = 0; i < 40; i++) {
+    const x = rand() * size
+    const y = rand() * size * 0.86
+    const r = size * (0.04 + rand() * 0.1)
+    const blot = ctx.createRadialGradient(x, y, 0, x, y, r)
+    const light = rand() > 0.5
+    blot.addColorStop(0, light ? 'rgba(255,255,255,0.025)' : 'rgba(0,0,0,0.05)')
+    blot.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = blot
+    ctx.fillRect(x - r, y - r, r * 2, r * 2)
+  }
+  return studioTexture(ctx, true, 'studio-wall')
+}
+
+/** The sponsors' band: a run of boards, alternating colours, each with its name and an accent. */
+function studioBandTexture(width: number): THREE.CanvasTexture {
+  const boards = STUDIO_SPONSORS.length
+  const height = Math.round((width / boards) * (STUDIO_BAND_HEIGHT / (STUDIO_BAND_TILE_MM / boards)))
+  const ctx = canvas2d(width, height)
+  const boardW = width / boards
+  for (let i = 0; i < boards; i++) {
+    const x0 = i * boardW
+    const bg = ctx.createLinearGradient(0, 0, 0, height)
+    if (i % 2 === 0) {
+      bg.addColorStop(0, '#1d4fc4')
+      bg.addColorStop(1, '#0f2f86')
+    } else {
+      bg.addColorStop(0, '#16224a')
+      bg.addColorStop(1, '#0b1330')
+    }
+    ctx.fillStyle = bg
+    ctx.fillRect(x0, 0, boardW, height)
+    // A gloss along the top of each board, and the gap between boards.
+    const gloss = ctx.createLinearGradient(0, 0, 0, height * 0.5)
+    gloss.addColorStop(0, 'rgba(255,255,255,0.16)')
+    gloss.addColorStop(1, 'rgba(255,255,255,0)')
+    ctx.fillStyle = gloss
+    ctx.fillRect(x0, 0, boardW, height * 0.5)
+    ctx.fillStyle = '#04081a'
+    ctx.fillRect(x0, 0, Math.max(3, boardW * 0.006), height)
+    // The accent: gold on the blue boards, red on the dark ones.
+    ctx.fillStyle = i % 2 === 0 ? '#f2c14e' : '#e0323f'
+    ctx.fillRect(x0 + boardW * 0.06, height * 0.2, Math.max(4, boardW * 0.012), height * 0.6)
+    const text = STUDIO_SPONSORS[i] ?? 'SNOOKERX'
+    let font = Math.round(height * 0.46)
+    ctx.font = `800 ${font}px system-ui, "Segoe UI", sans-serif`
+    const room = boardW * 0.74
+    const measured = ctx.measureText(text).width
+    if (measured > room) {
+      font = Math.max(10, Math.floor((font * room) / measured))
+      ctx.font = `800 ${font}px system-ui, "Segoe UI", sans-serif`
+    }
+    ctx.fillStyle = '#f4f7ff'
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(text, x0 + boardW * 0.12, height * 0.52)
+  }
+  return studioTexture(ctx, true, 'studio-band')
+}
+
+/** The branded board: SnookerX on a deep gradient, a gold rule and a line under it, softly lit. */
+function studioBoardTexture(width: number): THREE.CanvasTexture {
+  const height = Math.round(width * (STUDIO_BOARD_HEIGHT / STUDIO_BOARD_WIDTH))
+  const ctx = canvas2d(width, height)
+  const bg = ctx.createLinearGradient(0, 0, width, height)
+  bg.addColorStop(0, '#2b0f6e')
+  bg.addColorStop(0.45, '#2347c9')
+  bg.addColorStop(1, '#0fa3c9')
+  ctx.fillStyle = bg
+  ctx.fillRect(0, 0, width, height)
+  // Two broad soft streaks of light across the face, the way a lit panel catches the room.
+  ctx.save()
+  ctx.globalCompositeOperation = 'lighter'
+  for (const [x, w, a] of [
+    [0.18, 0.16, 0.12],
+    [0.62, 0.08, 0.08]
+  ] as const) {
+    const streak = ctx.createLinearGradient(width * (x - w), 0, width * (x + w), 0)
+    streak.addColorStop(0, 'rgba(255,255,255,0)')
+    streak.addColorStop(0.5, `rgba(255,255,255,${a})`)
+    streak.addColorStop(1, 'rgba(255,255,255,0)')
+    ctx.fillStyle = streak
+    ctx.beginPath()
+    ctx.moveTo(width * (x - w) + height * 0.4, 0)
+    ctx.lineTo(width * (x + w) + height * 0.4, 0)
+    ctx.lineTo(width * (x + w) - height * 0.4, height)
+    ctx.lineTo(width * (x - w) - height * 0.4, height)
+    ctx.closePath()
+    ctx.fill()
+  }
+  ctx.restore()
+  // Darker at the edges, so the face reads as lit from the front.
+  const edge = ctx.createRadialGradient(width / 2, height / 2, height * 0.3, width / 2, height / 2, width * 0.62)
+  edge.addColorStop(0, 'rgba(0,0,0,0)')
+  edge.addColorStop(1, 'rgba(0,0,0,0.42)')
+  ctx.fillStyle = edge
+  ctx.fillRect(0, 0, width, height)
+  // The frame.
+  const border = Math.max(4, width * 0.008)
+  ctx.strokeStyle = '#e9c46a'
+  ctx.lineWidth = border
+  ctx.strokeRect(border / 2, border / 2, width - border, height - border)
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)'
+  ctx.lineWidth = Math.max(1, border * 0.3)
+  ctx.strokeRect(border * 1.8, border * 1.8, width - border * 3.6, height - border * 3.6)
+
+  // The name, with a glow behind it, and the line under it.
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  const nameSize = Math.round(height * 0.38)
+  ctx.font = `italic 900 ${nameSize}px "Segoe UI", system-ui, sans-serif`
+  ctx.shadowColor = 'rgba(120,220,255,0.85)'
+  ctx.shadowBlur = nameSize * 0.35
+  ctx.fillStyle = '#ffffff'
+  ctx.fillText('Snooker', width * 0.455, height * 0.43)
+  ctx.shadowColor = 'rgba(255,200,80,0.9)'
+  ctx.fillStyle = '#ffd25a'
+  const snookerW = ctx.measureText('Snooker').width
+  ctx.textAlign = 'left'
+  ctx.fillText('X', width * 0.455 + snookerW / 2 + nameSize * 0.04, height * 0.43)
+  ctx.shadowBlur = 0
+  ctx.textAlign = 'center'
+  ctx.fillStyle = '#e9c46a'
+  ctx.fillRect(width * 0.3, height * 0.66, width * 0.4, Math.max(2, height * 0.012))
+  const tagSize = Math.round(height * 0.085)
+  ctx.font = `700 ${tagSize}px "Segoe UI", system-ui, sans-serif`
+  ctx.fillStyle = 'rgba(240,246,255,0.92)'
+  const tag = 'WORLD  SNOOKER  CHAMPIONSHIP'
+  ctx.fillText(tag, width / 2, height * 0.77)
+  return studioTexture(ctx, false, 'studio-board')
+}
+
+/** The table's own shadow on the carpet: soft, darkest under the table, fading out past its edge. */
+function studioFloorShadowTexture(): THREE.CanvasTexture {
+  const w = 512
+  const h = 320
+  const ctx = canvas2d(w, h)
+  // Stacked translucent rectangles, each a little larger than the last: a soft-edged block
+  // without needing the canvas to blur anything.
+  const layers = 26
+  for (let i = 0; i < layers; i++) {
+    const t = i / (layers - 1)
+    const insetX = w * (0.04 + 0.13 * t)
+    const insetY = h * (0.06 + 0.17 * t)
+    ctx.fillStyle = 'rgba(0,0,0,0.055)'
+    ctx.beginPath()
+    const r = h * 0.06
+    const x = insetX
+    const y = insetY
+    const rw = w - insetX * 2
+    const rh = h - insetY * 2
+    ctx.moveTo(x + r, y)
+    ctx.arcTo(x + rw, y, x + rw, y + rh, r)
+    ctx.arcTo(x + rw, y + rh, x, y + rh, r)
+    ctx.arcTo(x, y + rh, x, y, r)
+    ctx.arcTo(x, y, x + rw, y, r)
+    ctx.closePath()
+    ctx.fill()
+  }
+  return studioTexture(ctx, false, 'studio-floor-shadow')
+}
+
+/**
+ * The walls, the sponsors' band, the branded board, and the shadow the table throws on
+ * the carpet.
+ *
+ * Every wall faces inwards and only its inward face is drawn, so a camera standing outside
+ * the room to look down on the table sees straight through the wall nearest it: the room
+ * frames the table from the low views and gets out of the way of the high ones.
+ */
+function buildStudio(cfg: ArenaConfig, budget: ArenaBudget): THREE.Group {
+  const group = new THREE.Group()
+  group.name = 'studio'
+  const floor = cfg.carpetY
+  const texSize = Math.max(512, budget.textureSize)
+  const wallTex = studioWallTexture(texSize)
+  const bandTex = studioBandTexture(Math.max(1024, texSize * 2))
+  const flat = (map: THREE.Texture, repeat: number, transparent = false): THREE.MeshBasicMaterial => {
+    const m = map.clone()
+    m.repeat.set(repeat, 1)
+    m.needsUpdate = true
+    return new THREE.MeshBasicMaterial({ map: m, transparent, side: THREE.FrontSide })
+  }
+
+  // Each wall: [centre x, centre z, length, turn about the vertical].
+  const walls: Array<[number, number, number, number]> = [
+    [0, -STUDIO_HALF_WIDTH, STUDIO_HALF_LENGTH * 2, 0],
+    [0, STUDIO_HALF_WIDTH, STUDIO_HALF_LENGTH * 2, Math.PI],
+    [-STUDIO_HALF_LENGTH, 0, STUDIO_HALF_WIDTH * 2, Math.PI / 2],
+    [STUDIO_HALF_LENGTH, 0, STUDIO_HALF_WIDTH * 2, -Math.PI / 2]
+  ]
+  for (const [x, z, length, turn] of walls) {
+    const wall = new THREE.Mesh(new THREE.PlaneGeometry(length, STUDIO_WALL_HEIGHT), flat(wallTex, length / STUDIO_WALL_TILE_MM))
+    wall.position.set(x, floor + STUDIO_WALL_HEIGHT / 2, z)
+    wall.rotation.y = turn
+    wall.name = 'studio-wall'
+    group.add(wall)
+
+    const band = new THREE.Mesh(new THREE.PlaneGeometry(length, STUDIO_BAND_HEIGHT), flat(bandTex, length / STUDIO_BAND_TILE_MM))
+    const inward = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), turn)
+    band.position.set(x + inward.x * 6, floor + STUDIO_BAND_FOOT + STUDIO_BAND_HEIGHT / 2, z + inward.z * 6)
+    band.rotation.y = turn
+    band.name = 'studio-band'
+    group.add(band)
+  }
+
+  // The branded board, on the wall to the player's right as they first stand at the table.
+  const board = new THREE.Mesh(
+    new THREE.PlaneGeometry(STUDIO_BOARD_WIDTH, STUDIO_BOARD_HEIGHT),
+    new THREE.MeshBasicMaterial({ map: studioBoardTexture(Math.max(1024, texSize)), side: THREE.FrontSide })
+  )
+  board.position.set(0, floor + STUDIO_BOARD_MID, STUDIO_HALF_WIDTH - 10)
+  board.rotation.y = Math.PI
+  board.name = 'studio-board'
+  group.add(board)
+
+  // The table's shadow on the carpet, just above it.
+  const shadow = new THREE.Mesh(
+    new THREE.PlaneGeometry(5400, 3400),
+    new THREE.MeshBasicMaterial({
+      map: studioFloorShadowTexture(),
+      transparent: true,
+      depthWrite: false,
+      color: 0xffffff
+    })
+  )
+  shadow.rotation.x = -Math.PI / 2
+  shadow.position.set(0, floor + 2, 0)
+  shadow.renderOrder = -2
+  shadow.name = 'studio-floor-shadow'
+  group.add(shadow)
+  return group
+}
+
 /** What {@link buildArenaEnvironment} hands back: the group, and where its seats are. */
 export interface ArenaEnvironment {
   group: THREE.Group
@@ -1565,6 +1896,13 @@ export function buildArenaEnvironment(
 
   const materials = buildMaterials(config, budget, renderer ? renderer.capabilities.getMaxAnisotropy() : 8)
   arena.add(buildFloor(config, budget, materials))
+  if (STUDIO_ROOM) {
+    // The studio stands in for the whole bowl: no stands, no seats, no stairs, no ring of
+    // boards and no washes to light them. It has no seats to report either.
+    arena.add(buildStudio(config, budget))
+    scene.add(arena)
+    return { group: arena, seats: [], rows }
+  }
   arena.add(mergeStaticMeshes(buildStands(config, budget, materials, rows), 'stands'))
   arena.add(mergeStaticMeshes(buildHoardings(config, budget, materials), 'hoardings'))
   if (config.buildShell) arena.add(buildShell(config, budget, materials, rows))

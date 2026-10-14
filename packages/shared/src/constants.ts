@@ -37,24 +37,20 @@ export const CUSHION_KNUCKLE_RADIUS = 20
 export const BALL_RESTITUTION = 0.96
 
 /**
- * Sliding friction, in mm/s^2, applied to a ball that is still skidding.
+ * Sliding friction, in mm/s^2: the cloth's grip on a ball that is skidding (mu_s * g).
  *
- * Right after the strike a snooker ball is sliding, not rolling, and sliding cloth
- * drags roughly five to eight times harder than rolling resistance does. 1800
- * mm/s^2 (1.8 m/s^2) sits in that band. The slide phase only lasts while the ball
- * is quick — it hands over to rolling resistance below `SLIDE_SPEED_THRESHOLD` —
- * so its job is the short, brisk scrub that takes the edge off a hard shot
- * immediately after impact, exactly the way cloth does.
+ * A ball skids whenever its surface is not keeping pace with its centre: straight off
+ * the tip on anything but a top-spin strike, an object ball just after it is hit, a
+ * ball just off a cushion. While it skids the cloth pulls on the contact point, which
+ * both slows the centre and spins the ball up (or, against back spin, wears the back
+ * spin off). The skid ends on its own the moment surface and centre agree — natural
+ * roll — and from then on only rolling resistance acts. Nothing here depends on how
+ * fast the ball is going; it depends only on whether it is skidding.
+ *
+ * 1800 mm/s^2 is a sliding coefficient of about 0.18 on cloth, the measured band for
+ * a phenolic ball on woollen cloth.
  */
 export const SLIDE_FRICTION = 1800
-/**
- * The speed, in mm/s, below which a ball is treated as rolling rather than sliding.
- *
- * Roughly the pace at which a snooker ball's surface speed matches its centre —
- * natural roll — reached in a fraction of a second on anything but a soft stun
- * shot. Below it the ball rolls and only rolling resistance applies.
- */
-export const SLIDE_SPEED_THRESHOLD = 800
 /**
  * Rolling resistance coefficient: the constant-deceleration model of C_rr.
  *
@@ -73,24 +69,24 @@ export const GRAVITY_MM_S2 = 9810
  * simulation uses is the one the tests read.
  */
 export const ROLL_FRICTION = CLOTH_CRR * GRAVITY_MM_S2
-// Fractional topspin/backspin bleed-off per second: retains (1 - SPIN_FRICTION)^TICK_RATE
-// each second, i.e. about 37% per second at 1.
-export const SPIN_FRICTION = 1
 // Sidespin lasts longer on cloth than vertical tip spin.
 export const SIDE_SPIN_FRICTION = 0.55
 export const MIN_SPEED = 1.5
 export const MAX_CUE_SPEED = 9000
 
-// Follow and draw are applied once, at the cue ball's first contact, as a
-// fraction of the cue ball's speed immediately before that contact. Scaling by
-// the post-contact residual instead makes both effects vanishingly small.
-//
-// A cue ball that hits an object ball full stops dead and is then driven by the spin it
-// still has: rolling forward it runs on at about two sevenths of the speed it arrived
-// with, and screwed back it comes back at up to about the same. At 0.08 and 0.1 a full
-// screw shot came back the width of three balls, which is not a screw shot.
-export const FOLLOW_IMPULSE = 0.2
-export const DRAW_IMPULSE = 0.26
+/**
+ * How much rotation a full top or bottom tip offset puts on the cue ball, as the speed
+ * its surface turns at over the speed its centre leaves at.
+ *
+ * Struck dead centre the cue ball leaves with no rotation at all and skids; struck at
+ * the highest (or lowest) offset a tip can hold, about half a radius from centre, it
+ * leaves turning at 5/2 x 0.5 = 1.25 times its own pace. That is why a top-spin
+ * ball pushes on a touch faster once it grips, and why a screw shot keeps its back spin
+ * for a while before the cloth wears it off. Follow and screw are not added at the
+ * contact as a kick: they are what the ball's rotation does once the object ball has
+ * taken its pace.
+ */
+export const TIP_SPIN_RATIO = 1.25
 // Spin-induced throw, in degrees of object-ball deflection at full side spin.
 // A bounded rotation, so it cannot add energy to the collision.
 export const SIDE_SPIN_THROW_DEG = 3
@@ -98,8 +94,18 @@ export const SIDE_SPIN_THROW_DEG = 3
 export const SPIN_TRANSFER = 0.18
 // Tangential rebound nudge from sidespin as a fraction of post-bounce normal speed.
 export const CUSHION_SIDESPIN_KICK = 0.04
-// How fast angularVel catches natural roll (v/R) while still sliding, in 1/s.
-export const SLIDE_ROLL_CATCHUP = 6
+/**
+ * How a cushion's rebound changes with the pace a ball arrives at, per m/s of normal speed.
+ *
+ * A rubber cushion gives back more of a gentle touch than of a hard hit, because a hard
+ * hit drives the ball into the rubber and the cloth beneath it. The listed restitution
+ * is the figure at a medium pace of 2 m/s; the rebound is scaled by
+ * 1 + falloff x (2 - v) and held within the bounds below, so a ball rolled softly into a
+ * cushion comes back a little livelier and a hard one a little deader.
+ */
+export const CUSHION_SPEED_FALLOFF = 0.04
+export const CUSHION_SPEED_SCALE_MIN = 0.86
+export const CUSHION_SPEED_SCALE_MAX = 1.07
 
 export const TICK_RATE = 120
 export const TICK_DT = 1 / TICK_RATE

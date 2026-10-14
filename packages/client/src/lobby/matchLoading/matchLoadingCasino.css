@@ -1,0 +1,184 @@
+/*
+ * The loading screen, dressed for the hall: the same table animation, under spotlights,
+ * with a gold glow and coins coming down, a gold title, and a progress bar that fills like
+ * a jackpot meter. Only appearance: the progress, the timing and the tips are unchanged.
+ */
+
+.ml-bg {
+  background:
+    radial-gradient(70% 60% at 50% 45%, rgba(6, 11, 26, 0.8), rgba(4, 6, 14, 0.96) 75%),
+    url('/lobby/hero.webp') center / cover no-repeat;
+  filter: blur(8px);
+}
+
+.ml-hall {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ml-hall-glow {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  width: min(900px, 120vw);
+  height: min(560px, 80vh);
+  transform: translate(-50%, -50%);
+  background: radial-gradient(closest-side, rgba(245, 197, 66, 0.22), rgba(34, 197, 94, 0.08) 55%, transparent);
+  animation: ml-hall-breathe 4.2s ease-in-out infinite;
+}
+
+.ml-hall-beam {
+  position: absolute;
+  top: -30%;
+  left: 18%;
+  width: 22vw;
+  height: 150%;
+  transform-origin: 50% 0;
+  transform: rotate(18deg);
+  background: linear-gradient(180deg, rgba(255, 236, 170, 0.18), rgba(255, 236, 170, 0) 75%);
+  filter: blur(6px);
+  animation: ml-hall-sweep 7s ease-in-out infinite alternate;
+}
+
+.ml-hall-beam--b {
+  left: 62%;
+  transform: rotate(-18deg);
+  background: linear-gradient(180deg, rgba(140, 200, 255, 0.16), rgba(140, 200, 255, 0) 75%);
+  animation-duration: 8.5s;
+  animation-direction: alternate-reverse;
+}
+
+.ml-coin {
+  position: absolute;
+  top: -60px;
+  left: var(--x);
+  width: var(--size);
+  height: var(--size);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  font-weight: 900;
+  font-size: calc(var(--size) * 0.55);
+  color: #7a4d06;
+  background: radial-gradient(circle at 35% 30%, #fff3b8, #f5c542 45%, #b8820f 100%);
+  box-shadow:
+    inset 0 -2px 0 rgba(0, 0, 0, 0.25),
+    0 0 14px rgba(245, 197, 66, 0.45);
+  opacity: 0.5;
+  animation: ml-coin-fall var(--dur) linear var(--delay) infinite;
+  will-change: transform;
+}
+
+.ml-coin--green {
+  color: #e9fff3;
+  background: radial-gradient(circle at 35% 30%, #a8f5c8, #26a17b 50%, #0e5e45 100%);
+  box-shadow:
+    inset 0 -2px 0 rgba(0, 0, 0, 0.25),
+    0 0 14px rgba(38, 161, 123, 0.5);
+}
+
+@keyframes ml-coin-fall {
+  to {
+    transform: translate3d(var(--drift), 115vh, 0) rotateY(720deg) rotate(140deg);
+  }
+}
+
+@keyframes ml-hall-sweep {
+  from {
+    transform: rotate(24deg);
+  }
+  to {
+    transform: rotate(6deg);
+  }
+}
+
+@keyframes ml-hall-breathe {
+  0%,
+  100% {
+    opacity: 0.75;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* The table on a lit plinth, with a gold edge. */
+.ml-table {
+  box-shadow:
+    0 0 0 2px rgba(245, 197, 66, 0.55),
+    0 0 40px rgba(245, 197, 66, 0.22),
+    0 24px 50px rgba(0, 0, 0, 0.6);
+}
+
+.ml-mode {
+  display: inline-block;
+  padding: 6px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(245, 197, 66, 0.45);
+  background: rgba(10, 16, 32, 0.7);
+  color: #ffe08a;
+  letter-spacing: 0.22em;
+}
+
+.ml-title {
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 0.03em;
+  text-shadow: 0 3px 0 rgba(0, 0, 0, 0.5);
+}
+
+.ml-title-amber {
+  background: linear-gradient(180deg, #fff1b0, #f5c542 45%, #c8901c);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 14px rgba(245, 197, 66, 0.45));
+}
+
+.ml-status {
+  color: #9fe8b9;
+}
+
+/* The bar: thicker, in a dark track with a gold rim, filling green to gold. */
+.ml-bar {
+  height: calc(var(--u) * 12);
+  border-radius: 999px;
+  background: rgba(6, 10, 22, 0.85);
+  box-shadow:
+    inset 0 1px 3px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(245, 197, 66, 0.45);
+}
+
+.ml-bar-fill {
+  background: linear-gradient(90deg, #15803d, #34d36f 55%, #f5c542);
+  box-shadow: 0 0 14px rgba(52, 211, 111, 0.55);
+}
+
+.ml-bar-sheen {
+  opacity: 0.85;
+}
+
+.ml-pct {
+  min-width: calc(var(--u) * 64);
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  font-weight: 900;
+  color: #f5c542;
+  text-shadow: 0 0 12px rgba(245, 197, 66, 0.45);
+}
+
+.ml-ready {
+  color: #4ade80;
+  text-shadow: 0 0 18px rgba(74, 222, 128, 0.6);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ml-hall-glow,
+  .ml-hall-beam {
+    animation: none;
+  }
+}

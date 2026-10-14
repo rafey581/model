@@ -309,15 +309,33 @@ export const POT_CAM = {
   heightMm: 400,
   lookAheadMm: 950,
   fovDeg: 46,
-  /** Simulated seconds of the shot it is up for, before the ball drops and after. */
-  leadSeconds: 1.5,
+  /**
+   * The cut waits until the ball that drops is already close to its pocket, this many mm
+   * from it, and is heading in: that is the moment anyone watching can see it is going in.
+   * Cutting any earlier — the instant the cue ball touched it — made the camera look as if
+   * it had known the result before the shot was played.
+   */
+  approachMm: 900,
+  /** Simulated seconds of the shot it is up for, at most, before the ball drops and after. */
+  leadSeconds: 0.9,
   tailSeconds: 1.35,
+  /** The ball that drops is watched moving for at least this long from the table view first. */
+  watchFirstSeconds: 0.4,
+  /** A cut that would be up for less than this before the drop is not made at all. */
+  minShowSeconds: 0.2,
   /**
    * A ball that drops sooner than this after the strike is not cut to. The picture has
    * only just cut to the whole table; cutting again a third of a second later, and back
    * again after that, is three pictures in the time it takes to read one.
    */
-  earliestPotSeconds: 0.75
+  earliestPotSeconds: 0.75,
+  /**
+   * The cut never comes before this much of the shot has been seen from the table view.
+   * The replay clock sits at 0 through the opponent's wind-up, and a ball that dropped
+   * within `leadSeconds` of the strike opened the window at 0 — the camera went to the
+   * pocket before the cue had touched the ball, giving the shot away.
+   */
+  afterStrikeSeconds: 0.45
 } as const
 
 /**

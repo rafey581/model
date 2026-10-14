@@ -1259,7 +1259,11 @@ export class Scene3D implements VenueHost {
   /** What the balls reflect. Their own, so the table's reflections can be tuned for wood and brass. */
   private ballEnv: THREE.Texture | null = null
   /** When, in the shot being replayed, a ball drops, and into which pocket. Empty when none does. */
-  private shotPots: Array<{ at: number; pocket: { x: number; y: number } }> = []
+  /**
+   * The balls the shot on screen pots: when each drops, into which pocket, when it was set
+   * moving, and when it came within the pot camera's approach distance of that pocket.
+   */
+  private shotPots: Array<{ at: number; pocket: { x: number; y: number }; moving: number; near: number }> = []
   /** How far into its replay the shot on screen is, in simulated seconds, or null with none on screen. */
   private shotTime: number | null = null
   /** The timed move into or out of the spectator view. Never blocks input. */
@@ -4427,11 +4431,13 @@ const outerL = APRON_OUTER_L
     this.shotTime = null
     if (!playback) return
     for (const [id, at] of playback.pots ?? []) {
-      // The last place the recording has the ball is the pocket it went into.
-      let last: { x: number; y: number } | null = null
+      // The ball's run as the recording has it: only moving balls are sampled, so its first
+      // sample is when it was set moving, and its last is the pocket it went into.
+      const run: Array<{ t: number; x: number; y: number }> = []
       for (const frame of playback.keyframes) {
-        for (const sample of frame.balls) if (sample[0] === id) last = { x: sample[1], y: sample[2] }
+        for (const sample of frame.balls) if (sample[0] === id) run.push({ t: frame.t, x: sample[1], y: sample[2] })
       }
+      const last = run[run.length - 1]
       if (!last) continue
       let best: { x: number; y: number } | null = null
       let bestD = Infinity
@@ -4442,7 +4448,18 @@ const outerL = APRON_OUTER_L
           best = { x: p.x, y: p.y }
         }
       }
-      if (best) this.shotPots.push({ at, pocket: best })
+      if (!best) continue
+      // When it got close and stayed close: walked back from the drop to the last sample
+      // that was still outside the approach distance.
+      let near = run[0]!.t
+      for (let i = run.length - 1; i >= 0; i--) {
+        const s = run[i]!
+        if (Math.hypot(best.x - s.x, best.y - s.y) > POT_CAM.approachMm) {
+          near = s.t
+          break
+        }
+      }
+      this.shotPots.push({ at, pocket: best, moving: run[0]!.t, near })
     }
   }
 
@@ -4458,12 +4475,22 @@ const outerL = APRON_OUTER_L
     if (t === null) return null
     // One pocket a shot, the first ball to go: a shot that pots two is not chased from
     // pocket to pocket.
-    let first: { at: number; pocket: { x: number; y: number } } | null = null
+    let first: (typeof this.shotPots)[number] | null = null
     for (const pot of this.shotPots) {
       if (pot.at >= POT_CAM.earliestPotSeconds && (!first || pot.at < first.at)) first = pot
     }
     if (!first) return null
-    return t >= first.at - POT_CAM.leadSeconds && t <= first.at + POT_CAM.tailSeconds ? potCameraPose(first.pocket) : null
+    // Only once the ball is seen to be going in: moving for a moment, close to the pocket,
+    // and never long before the drop. A cut that would barely be up before it drops is not
+    // made; the table view shows that pot well enough.
+    const from = Math.max(
+      first.near,
+      first.moving + POT_CAM.watchFirstSeconds,
+      first.at - POT_CAM.leadSeconds,
+      POT_CAM.afterStrikeSeconds
+    )
+    if (first.at - from < POT_CAM.minShowSeconds) return null
+    return t >= from && t <= first.at + POT_CAM.tailSeconds ? potCameraPose(first.pocket) : null
   }
 
   /** The spectator pose for the canvas as it is now, refitted only when its shape changes. */

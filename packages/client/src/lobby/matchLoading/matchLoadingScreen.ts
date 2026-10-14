@@ -1,4 +1,5 @@
 import './matchLoading.css'
+import './matchLoadingCasino.css'
 import {
   createProgressController,
   STATUS_FOR_PHASE,
@@ -104,7 +105,7 @@ export function showMatchLoading(opts: MatchLoadingShowOpts): MatchLoadingHandle
   longer.textContent = 'Taking a little longer than usual, thanks for your patience.'
 
   center.append(mode, stage, title, status, tip, progressRow, readyLabel, longer)
-  root.append(bg, center)
+  root.append(bg, buildHallLights(reduced), center)
   document.body.appendChild(root)
 
   let tipIndex = 0
@@ -218,6 +219,38 @@ export function ensureLobbyBgReady(): Promise<void> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * The hall around the loading table: two slow sweeping spotlights, a gold glow behind the
+ * table, and coins drifting down. All of it decoration under the content, moved only by
+ * transforms; with motion turned down, the lights stand still and the coins stay away.
+ */
+function buildHallLights(reduced: boolean): HTMLElement {
+  const hall = document.createElement('div')
+  hall.className = 'ml-hall'
+  hall.setAttribute('aria-hidden', 'true')
+  const glow = document.createElement('div')
+  glow.className = 'ml-hall-glow'
+  const beamA = document.createElement('div')
+  beamA.className = 'ml-hall-beam'
+  const beamB = document.createElement('div')
+  beamB.className = 'ml-hall-beam ml-hall-beam--b'
+  hall.append(glow, beamA, beamB)
+  if (!reduced) {
+    for (let i = 0; i < 14; i++) {
+      const coin = document.createElement('span')
+      coin.className = i % 3 === 0 ? 'ml-coin ml-coin--green' : 'ml-coin'
+      coin.textContent = i % 3 === 0 ? '₮' : '$'
+      coin.style.setProperty('--x', `${(i * 41) % 100}%`)
+      coin.style.setProperty('--size', `${20 + ((i * 7) % 20)}px`)
+      coin.style.setProperty('--dur', `${7 + ((i * 3) % 6)}s`)
+      coin.style.setProperty('--delay', `${-((i * 1.3) % 9)}s`)
+      coin.style.setProperty('--drift', `${(i % 2 ? 1 : -1) * (24 + ((i * 13) % 40))}px`)
+      hall.appendChild(coin)
+    }
+  }
+  return hall
 }
 
 /** Snooker-club vignette: felt table, cue stroke, orbit, chalk — CSS-only motion. */

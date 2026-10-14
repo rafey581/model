@@ -3,23 +3,20 @@ import {
   BALL_RESTITUTION,
   CUSHION_TANGENTIAL_DAMP,
   CUSHION_SIDESPIN_KICK,
+  CUSHION_SPEED_FALLOFF,
+  CUSHION_SPEED_SCALE_MIN,
+  CUSHION_SPEED_SCALE_MAX,
   ROLL_FRICTION,
   SLIDE_FRICTION,
-  SLIDE_SPEED_THRESHOLD,
-  SLIDE_ROLL_CATCHUP,
-  SPIN_FRICTION,
   SIDE_SPIN_FRICTION,
   SPIN_TRANSFER,
   MIN_SPEED,
   MAX_SIM_TICKS,
   TICK_DT,
-  FOLLOW_IMPULSE,
-  DRAW_IMPULSE,
   SIDE_SPIN_THROW_DEG
 } from '../constants.js'
 import type { BallState } from '../state.js'
 import type { SimEvent, SimShot, SimResult, SimKeyframe, SimContact } from '../events.js'
-import type { Vec2 } from '../vec.js'
 import { sub, length, normalize, vec, clamp } from '../vec.js'
 import { reflectCushionX, reflectCushionY } from './collision.js'
 import { CUSHION_FACES, CUSHION_JAWS, resolveJawContact } from './cushions.js'
@@ -66,9 +63,14 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
   const cue = balls.find((b) => b.isCue)
   if (!cue) throw new Error('cue ball missing')
   applyShot(cue, shot)
+  // Each ball's rolling velocity: how fast, and which way, its surface is turning over
+  // the cloth. It is what tells a skidding ball from a rolling one, and it carries a cue
+  // ball's top or back spin through the contact. Kept here, beside the balls rather than
+  // on them, because nothing outside a single stroke needs it.
+  const roll = new Map<BallState, Roll>()
+  for (const ball of balls) roll.set(ball, initialRoll(ball))
 
   let firstContactId: number | null = null
-  let cueFirstContact = false
   let cuePotted = false
   const pockets = pocketPositions()
   let ticksUsed = 0
@@ -100,7 +102,7 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
       if (ball.potted) continue
       const speed = length(ball.vel)
       if (speed > maxSpeed) maxSpeed = speed
-      if (speed > 0) anyMoving = true
+      if (speed > 0 || isTurning(roll.get(ball)!)) anyMoving = true
     }
     if (!anyMoving) {
       settled = true
@@ -123,8 +125,10 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
     const subDt = TICK_DT / substeps
     for (let step = 0; step < substeps; step++) {
       for (const ball of balls) {
-        if (ball.potted || ball.vel.x === 0 && ball.vel.y === 0) continue
-        integrate(ball, subDt)
+        if (ball.potted) continue
+        const turning = roll.get(ball)!
+        if (ball.vel.x === 0 && ball.vel.y === 0 && !isTurning(turning)) continue
+        integrate(ball, turning, subDt)
       }
 
       for (let i = 0; i < balls.length; i++) {
@@ -166,8 +170,7 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
             if (firstContactId === null && cueVelBefore.x * cueVelBefore.x + cueVelBefore.y * cueVelBefore.y > 0) {
               firstContactId = other.id
             }
-            applySpinEffects(cue, other, !cueFirstContact, cueVelBefore)
-            cueFirstContact = true
+            applySpinEffects(cue, other)
           }
         }
       }
@@ -178,9 +181,10 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
       // snapped back, which cost a fast ball most of a ball's width of travel.
       for (const ball of balls) {
         if (ball.potted) continue
-        reflectOffCushions(ball, events, tick, contacts, simTime + subDt * (step + 1))
+        reflectOffCushions(ball, roll.get(ball)!, events, tick, contacts, simTime + subDt * (step + 1))
         const pocket = checkPockets(ball, pockets, events, tick)
         if (pocket) {
+          stopRoll(roll.get(ball)!)
           if (pots) pots.push([ball.id, round(simTime + TICK_DT, 3)])
           justPotted.push([ball.id, [pocket.x, pocket.y]])
         }
@@ -281,59 +285,148 @@ function round(value: number, places = 0): number {
   return Math.round(value * f) / f
 }
 
-function integrate(ball: BallState, dt: number): void {
-  const vx = ball.vel.x
-  const vy = ball.vel.y
-  const speed = Math.sqrt(vx * vx + vy * vy)
-  if (speed > 0) {
-    // Two-phase cloth model. Real snooker cloth resists a ball two ways: a hard
-    // drag while the ball is skidding just after the strike, and a light rolling
-    // resistance once it has settled into natural roll. One constant across both
-    // regimes over-brakes one of them whichever value it takes — at the rolling
-    // figure hard shots start heavy, at the sliding figure every pot dies short
-    // of the pocket with an abrupt stop.
-    //
-    // The deceleration is applied along the direction of travel (a fixed slice
-    // of speed per second, whichever way the ball is heading), so the stop is a
-    // smooth exponential run-out rather than a linear drop to a cliff edge.
-    const sliding = speed > SLIDE_SPEED_THRESHOLD
-    const deceleration = sliding ? SLIDE_FRICTION : ROLL_FRICTION
-    const nextSpeed = speed - deceleration * dt
-    if (nextSpeed <= MIN_SPEED) {
-      ball.vel.x = 0
-      ball.vel.y = 0
-      ball.angularVel = 0
+/** A ball's rolling velocity in mm/s: the speed and direction its surface turns at. */
+interface Roll {
+  x: number
+  y: number
+}
+
+/**
+ * Below this mismatch, in mm/s, between a ball's centre and its surface the ball is
+ * rolling. Gripping is resolved exactly (see `integrate`), so a rolling ball sits at a
+ * mismatch of zero; the margin only keeps rounding from reopening a skid.
+ */
+const ROLL_MATCH = 0.5
+
+/**
+ * The rotation a ball starts the stroke with, laid along the way it is travelling.
+ *
+ * Only the cue ball is moving at the start, and `applyShot` has set its rotation from
+ * the tip offset; every other ball is at rest and is not turning.
+ */
+function initialRoll(ball: BallState): Roll {
+  const speed = Math.hypot(ball.vel.x, ball.vel.y)
+  if (ball.potted || speed === 0) return { x: 0, y: 0 }
+  const surface = (ball.angularVel ?? 0) * BALL_RADIUS
+  return { x: (ball.vel.x / speed) * surface, y: (ball.vel.y / speed) * surface }
+}
+
+function isTurning(roll: Roll): boolean {
+  return roll.x !== 0 || roll.y !== 0
+}
+
+function stopRoll(roll: Roll): void {
+  roll.x = 0
+  roll.y = 0
+}
+
+function integrate(ball: BallState, roll: Roll, dt: number): void {
+  // Slide, then roll — the way a ball actually behaves on cloth.
+  //
+  // A ball whose surface is not keeping pace with its centre is skidding, and the cloth
+  // pulls on its contact point against the skid. That one force does two things: it
+  // slows (or speeds) the centre at mu_s*g, and it turns the ball the other way at
+  // 5/2 of that, since a solid ball's moment of inertia is 2/5 m R^2. Between them the
+  // mismatch closes at 7/2 mu_s*g until surface and centre agree, and the ball rolls on
+  // at 5/7 of a stun ball's pace — or faster, or slower, or back the way it came,
+  // depending on the spin it had. From then on only rolling resistance acts.
+  //
+  // This is what makes a centre-ball stun lose its edge in the first few inches, a
+  // struck object ball skid before it rolls, a rolling cue ball follow through after a
+  // full contact, and a screw shot come back — none of which is scripted; each is the
+  // same skid closing from a different start.
+  let vx = ball.vel.x
+  let vy = ball.vel.y
+  const sx = vx - roll.x
+  const sy = vy - roll.y
+  const slip = Math.sqrt(sx * sx + sy * sy)
+  if (slip > ROLL_MATCH) {
+    const closes = 3.5 * SLIDE_FRICTION * dt
+    if (closes >= slip) {
+      // Grips within this step: centre and surface meet at the analytic natural-roll
+      // velocity, v - 2/7 of the slip, and the ball rolls from here.
+      vx -= (2 / 7) * sx
+      vy -= (2 / 7) * sy
+      roll.x = vx
+      roll.y = vy
     } else {
-      const f = nextSpeed / speed
-      ball.vel.x = vx * f
-      ball.vel.y = vy * f
-      // Natural roll: ω → v/R. Catch up while sliding; lock once rolling.
-      const natural = nextSpeed / BALL_RADIUS
-      if (sliding) {
-        const t = Math.min(1, SLIDE_ROLL_CATCHUP * dt)
-        ball.angularVel += (natural - ball.angularVel) * t
-      } else {
-        ball.angularVel = natural
-      }
+      const k = (SLIDE_FRICTION * dt) / slip
+      vx -= sx * k
+      vy -= sy * k
+      roll.x += 2.5 * sx * k
+      roll.y += 2.5 * sy * k
+    }
+    if (Math.sqrt(vx * vx + vy * vy) <= MIN_SPEED && Math.sqrt(roll.x * roll.x + roll.y * roll.y) <= MIN_SPEED) {
+      vx = 0
+      vy = 0
+      stopRoll(roll)
     }
   } else {
-    ball.angularVel = 0
+    // Rolling. The deceleration is applied along the direction of travel, a fixed
+    // slice of speed per second, so the run-out is smooth rather than a drop to a cliff.
+    const speed = Math.sqrt(vx * vx + vy * vy)
+    const nextSpeed = speed - ROLL_FRICTION * dt
+    if (nextSpeed <= MIN_SPEED) {
+      vx = 0
+      vy = 0
+    } else {
+      const f = nextSpeed / speed
+      vx *= f
+      vy *= f
+    }
+    roll.x = vx
+    roll.y = vy
   }
-  const sx = ball.spin.x
-  const sy = ball.spin.y
-  if (sx !== 0 || sy !== 0) {
-    // Sidespin and topspin/backspin decay at different rates on cloth.
-    const sideRetain = Math.max(0, 1 - SIDE_SPIN_FRICTION * dt)
-    const vertRetain = Math.max(0, 1 - SPIN_FRICTION * dt)
-    ball.spin.x = sx * sideRetain
-    ball.spin.y = sy * vertRetain
+  ball.vel.x = vx
+  ball.vel.y = vy
+  // Kept on the ball for anything reading it: the turn rate, signed against the way
+  // the ball is going (negative is back spin).
+  const turn = Math.sqrt(roll.x * roll.x + roll.y * roll.y) / BALL_RADIUS
+  ball.angularVel = roll.x * vx + roll.y * vy < 0 ? -turn : turn
+
+  const spinX = ball.spin.x
+  if (spinX !== 0) {
+    // Side spin wears off on the cloth on its own clock: it turns about the vertical,
+    // so it is not part of the skid above.
+    ball.spin.x = spinX * Math.max(0, 1 - SIDE_SPIN_FRICTION * dt)
   }
   ball.pos.x += ball.vel.x * dt
   ball.pos.y += ball.vel.y * dt
 }
 
+/**
+ * How a cushion's rebound scales with the pace the ball meets it at: a little livelier
+ * for a soft touch, a little deader for a hard hit, exactly the listed figure at 2 m/s.
+ */
+function cushionPaceScale(normalSpeed: number): number {
+  return clamp(
+    1 + CUSHION_SPEED_FALLOFF * (2 - normalSpeed / 1000),
+    CUSHION_SPEED_SCALE_MIN,
+    CUSHION_SPEED_SCALE_MAX
+  )
+}
+
+/**
+ * What a cushion does to a ball's rotation.
+ *
+ * The rubber meets a snooker ball above its equator and grips it, so the part of the
+ * roll that was carrying the ball into the cushion is taken out: the ball leaves the
+ * cushion skidding back out and has to grip again, which is why a rolling ball comes
+ * off a cushion slower and on a slightly shorter angle than it went in. The roll along
+ * the cushion is damped exactly as the pace along it is, so a ball running along the
+ * rail does not suddenly skid.
+ */
+function cushionRoll(roll: Roll, nx: number, ny: number): void {
+  const along = roll.x * nx + roll.y * ny
+  const tx = roll.x - along * nx
+  const ty = roll.y - along * ny
+  roll.x = tx * CUSHION_TANGENTIAL_DAMP
+  roll.y = ty * CUSHION_TANGENTIAL_DAMP
+}
+
 function reflectOffCushions(
   ball: BallState,
+  roll: Roll,
   events: SimEvent[],
   tick: number,
   contacts: SimContact[] | null = null,
@@ -357,15 +450,17 @@ function reflectOffCushions(
     if (contacts && Math.abs(perpVel) >= CONTACT_MIN_CUSHION_SPEED) {
       contacts.push([1, round(time, 3), ball.id, faceIndex, round(Math.abs(perpVel)), round(ball.pos.x), round(ball.pos.y)])
     }
-    const rest = face.restitution * damping
+    const rest = face.restitution * damping * cushionPaceScale(Math.abs(perpVel))
     if (face.along === 'x') {
       ball.vel = reflectCushionY(ball.vel, rest)
       ball.vel.x += face.kick * side * Math.abs(ball.vel.y) * CUSHION_SIDESPIN_KICK
       ball.pos.y = face.limit
+      cushionRoll(roll, 0, 1)
     } else {
       ball.vel = reflectCushionX(ball.vel, rest)
       ball.vel.y += face.kick * side * Math.abs(ball.vel.x) * CUSHION_SIDESPIN_KICK
       ball.pos.x = face.limit
+      cushionRoll(roll, 1, 0)
     }
     events.push({ type: 'CUSHION', tick, ballId: ball.id })
   }
@@ -375,13 +470,19 @@ function reflectOffCushions(
   for (let jawIndex = 0; jawIndex < CUSHION_JAWS.length; jawIndex++) {
     const jaw = CUSHION_JAWS[jawIndex]!
     const jawSpeed = contacts ? Math.sqrt(ball.vel.x * ball.vel.x + ball.vel.y * ball.vel.y) : 0
+    // The pace into the knuckle, along the line from its centre, sets the rebound
+    // exactly as the pace into a straight face does.
+    const jx = ball.pos.x - jaw.cx
+    const jy = ball.pos.y - jaw.cy
+    const jd = Math.sqrt(jx * jx + jy * jy)
+    const intoJaw = jd > 0 ? Math.max(0, -(ball.vel.x * jx + ball.vel.y * jy) / jd) : 0
     const contact = resolveJawContact(
       ball.pos.x,
       ball.pos.y,
       ball.vel.x,
       ball.vel.y,
       jaw,
-      jaw.restitution * damping,
+      jaw.restitution * damping * cushionPaceScale(intoJaw),
       CUSHION_TANGENTIAL_DAMP
     )
     if (!contact) continue
@@ -395,6 +496,7 @@ function reflectOffCushions(
     }
     ball.vel.x = contact.vx
     ball.vel.y = contact.vy
+    if (jd > 0) cushionRoll(roll, jx / jd, jy / jd)
     events.push({ type: 'CUSHION', tick, ballId: ball.id })
   }
 }
@@ -493,15 +595,13 @@ function resolveCollisionPair(a: BallState, b: BallState, stepDt = 0): boolean {
   a.vel.y -= iy
   b.vel.x += ix
   b.vel.y += iy
-  // Sidespin + angularVel transfer only — vertical tip spin is spent by follow/draw.
+  // Side spin rubs a little onto the other ball. Top and back spin are left where they
+  // are: two polished balls barely grip each other, so each keeps its own rotation
+  // through the contact, and that kept rotation is what follows through or screws back.
   const asx = a.spin.x
   const bsx = b.spin.x
   a.spin.x += (bsx - asx) * SPIN_TRANSFER
   b.spin.x += (asx - bsx) * SPIN_TRANSFER
-  const aw = a.angularVel
-  const bw = b.angularVel
-  a.angularVel += (bw - aw) * SPIN_TRANSFER
-  b.angularVel += (aw - bw) * SPIN_TRANSFER
   if (rewind > 0) {
     // The rest of the substep, on the way out.
     a.pos.x += a.vel.x * rewind
@@ -521,33 +621,13 @@ function resolveCollisionPair(a: BallState, b: BallState, stepDt = 0): boolean {
 }
 
 /**
- * Spin is only meaningful for the cue ball, so this is driven exclusively by
- * collisions the cue ball takes part in.
+ * Side spin's throw on the object ball, for contacts the cue ball takes part in.
  *
- * `cueVelBefore` is the cue ball's velocity immediately prior to the impulse,
- * which is what follow and draw must scale against: after a full-ball hit the
- * residual speed is a few percent of the launch speed, so scaling by it makes
- * both effects unnoticeable. The kick is also applied along the *incoming* line
- * of travel, because a stun shot leaves the cue ball with almost no direction
- * of its own.
- *
- * `firstContact` gates the follow/draw kick: that vertical spin is transferred
- * to the cloth at the moment of first contact and is spent, so it must not be
- * re-applied on every later collision. Side spin (english) is a persistent
- * property of the ball, so it keeps applying until it decays away.
+ * Follow and screw are not applied here: the cue ball keeps its rotation through the
+ * contact (see `integrate`), and that rotation carries it through or pulls it back as
+ * the cloth takes hold, by however much spin it still had when it arrived.
  */
-function applySpinEffects(cue: BallState, object: BallState, firstContact: boolean, cueVelBefore: Vec2): void {
-  const launchSpeed = length(cueVelBefore)
-
-  if (firstContact && Math.abs(cue.spin.y) > 0.01 && launchSpeed > 0) {
-    const direction = normalize(cueVelBefore)
-    const kick = cue.spin.y > 0
-      ? launchSpeed * cue.spin.y * FOLLOW_IMPULSE
-      : launchSpeed * cue.spin.y * DRAW_IMPULSE
-    cue.vel = vec(cue.vel.x + direction.x * kick, cue.vel.y + direction.y * kick)
-    cue.spin = vec(cue.spin.x, 0)
-  }
-
+function applySpinEffects(cue: BallState, object: BallState): void {
   if (Math.abs(cue.spin.x) > 0.01) {
     const contactNormal = normalize(sub(object.pos, cue.pos))
     if (contactNormal.x === 0 && contactNormal.y === 0) return

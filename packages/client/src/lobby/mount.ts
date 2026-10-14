@@ -11,6 +11,7 @@ import { renderInvite } from './invite.js'
 import { api } from '../game/network.js'
 import { emitSfx } from '../sfx/sfxEvents.js'
 import { createShell, syncTabIndicator, tabToView, viewToTab } from './shell.js'
+import { createCasinoShell, renderCasinoHome, wantsCasinoLobby, type CasinoDestination } from './casino.js'
 import { defaultSetupState, renderSetup } from './setup.js'
 import { renderStatistics } from './stats.js'
 import type {
@@ -88,8 +89,78 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
   }
   host.addEventListener('click', onLobbyClick)
 
+  /** Which lobby is up: the desktop hall, or the compact one for phones and narrow windows. */
+  let casino = wantsCasinoLobby()
+
+  /** Where the desktop lobby's sidebar and top bar send the player. */
+  const goCasino = (where: CasinoDestination): void => {
+    switch (where) {
+      case 'home':
+        state.view = 'home'
+        paint()
+        return
+      case 'play':
+        openSetup(null)
+        return
+      case 'tournaments':
+        bridge.openTournaments()
+        return
+      case 'games':
+        state.view = 'statistics'
+        void loadStats().then(paint)
+        paint()
+        return
+      case 'wallet':
+        state.view = 'deposit'
+        state.deposit = null
+        void loadDepositView().then(paint)
+        paint()
+        return
+      case 'leaderboard':
+        bridge.toast('The leaderboard is coming soon.', 'info')
+        return
+      case 'friends':
+        state.view = 'friends'
+        paint()
+        return
+      case 'invite':
+        state.view = 'invite'
+        paint()
+        return
+      case 'rules':
+        state.infoSection = 'rules'
+        state.view = 'info'
+        paint()
+        return
+      case 'settings':
+        state.view = 'settings'
+        paint()
+        return
+    }
+  }
+
   const paint = (): void => {
     clear(host)
+    casino = wantsCasinoLobby()
+    if (casino) {
+      const shell = createCasinoShell(bridge, state.view, {
+        go: goCasino,
+        onSoundToggle: () => {
+          bridge.setSoundMuted(!bridge.getSoundMuted())
+          paint()
+        },
+        onFullscreen: toggleFullscreen,
+        onProfile: () => {
+          bridge.onProfileActivate()
+          state.view = 'settings'
+          paint()
+        }
+      })
+      root = shell.root
+      host.appendChild(root)
+      shell.main.appendChild(buildScreen())
+      return
+    }
     const shell = createShell(bridge, state.view, {
       onTab: (tab) => goTab(tab),
       onSoundToggle: () => {
@@ -116,6 +187,21 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
   }
 
   const buildScreen = (): HTMLElement => {
+    if (state.view === 'home' && casino) {
+      return renderCasinoHome(bridge, {
+        playNow: () => openSetup(null),
+        quickPlay: () => openSetup('online'),
+        practice: () => openSetup('ai'),
+        // A private room is a table for a friend, which is what the friends screen opens.
+        createRoom: () => {
+          state.view = 'friends'
+          paint()
+        },
+        tournaments: () => bridge.openTournaments(),
+        history: state.history,
+        userId: bridge.userId
+      })
+    }
     if (state.view === 'home') {
       return renderHome(bridge, {
         openSetup: (mode) => openSetup(mode),
@@ -381,6 +467,11 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
 
   // The indicator is measured, not derived: re-measure when the bar changes size.
   resizeHandler = (): void => {
+    // Crossing between the desktop lobby and the compact one rebuilds the page.
+    if (wantsCasinoLobby() !== casino) {
+      if (host.contains(root)) paint()
+      return
+    }
     if (root) syncTabIndicator(root)
   }
   window.addEventListener('resize', resizeHandler)

@@ -1,0 +1,1516 @@
+/*
+ * The desktop lobby (`casino.ts`): a games-hall front page.
+ *
+ * Night-blue panels on a near-black hall, green for "play", gold for money and winning,
+ * purple for tournaments. Everything here is scoped under `.cx-root`, so the compact lobby
+ * phones use is untouched by it.
+ */
+
+.cx-root {
+  --cx-bg: #060912;
+  --cx-panel: rgba(16, 25, 46, 0.88);
+  --cx-panel-2: rgba(22, 33, 60, 0.92);
+  --cx-line: rgba(255, 255, 255, 0.08);
+  --cx-text: #eef3ff;
+  --cx-dim: rgba(220, 230, 250, 0.62);
+  --cx-green: #22c55e;
+  --cx-green-2: #15803d;
+  --cx-gold: #f5c542;
+  --cx-gold-2: #c8901c;
+  --cx-purple: #8b5cf6;
+  --cx-blue: #3b82f6;
+  --cx-red: #ef4444;
+  --cx-radius: 14px;
+  background: var(--cx-bg);
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  color: var(--cx-text);
+}
+
+/* The hall behind everything: deep blue light from above, green glow from below. */
+.cx-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(60% 50% at 70% -10%, rgba(59, 130, 246, 0.22), transparent 70%),
+    radial-gradient(50% 45% at 10% 110%, rgba(34, 197, 94, 0.14), transparent 70%),
+    radial-gradient(40% 40% at 100% 100%, rgba(245, 197, 66, 0.08), transparent 70%),
+    linear-gradient(180deg, #070b16, #05070d);
+}
+
+/* ------------------------------------------------------------------ the coins */
+.cx-coins {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.cx-coin {
+  position: absolute;
+  top: -60px;
+  left: var(--x);
+  width: var(--size);
+  height: var(--size);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 900;
+  font-size: calc(var(--size) * 0.55);
+  color: #7a4d06;
+  background: radial-gradient(circle at 35% 30%, #fff3b8, #f5c542 45%, #b8820f 100%);
+  box-shadow:
+    inset 0 -2px 0 rgba(0, 0, 0, 0.25),
+    0 0 12px rgba(245, 197, 66, 0.35);
+  opacity: 0.32;
+  animation: cx-coin-fall var(--dur) linear var(--delay) infinite;
+  will-change: transform;
+}
+
+.cx-coin--green {
+  color: #e9fff3;
+  background: radial-gradient(circle at 35% 30%, #a8f5c8, #26a17b 50%, #0e5e45 100%);
+  box-shadow:
+    inset 0 -2px 0 rgba(0, 0, 0, 0.25),
+    0 0 12px rgba(38, 161, 123, 0.4);
+}
+
+@keyframes cx-coin-fall {
+  0% {
+    transform: translate3d(0, 0, 0) rotateY(0deg) rotate(0deg);
+  }
+  100% {
+    transform: translate3d(var(--drift), 112vh, 0) rotateY(720deg) rotate(160deg);
+  }
+}
+
+/* ------------------------------------------------------------------ the frame */
+.cx-frame {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  height: 100%;
+}
+
+.cx-page {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 14px 22px 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+.cx-main {
+  flex: 1 0 auto;
+  min-width: 0;
+}
+
+/* ------------------------------------------------------------------ the sidebar */
+.cx-side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 14px;
+  background: linear-gradient(180deg, rgba(10, 15, 28, 0.94), rgba(6, 9, 18, 0.96));
+  border-right: 1px solid var(--cx-line);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+/* Nothing in the sidebar is squeezed to fit: on a short window the sidebar scrolls instead. */
+.cx-side > * {
+  flex-shrink: 0;
+}
+
+.cx-side__brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0 8px;
+}
+
+.cx-side__tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.32em;
+  color: var(--cx-dim);
+}
+
+.cx-wordmark {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1;
+}
+
+.cx-wordmark__crown {
+  width: 26px;
+  height: 18px;
+  margin-bottom: -2px;
+  color: var(--cx-gold);
+  filter: drop-shadow(0 0 6px rgba(245, 197, 66, 0.6));
+}
+
+.cx-wordmark__crown svg {
+  width: 100%;
+  height: 100%;
+}
+
+.cx-wordmark__word {
+  font-size: 26px;
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 0.01em;
+  color: #ffffff;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.5);
+}
+
+.cx-wordmark__x {
+  color: var(--cx-red);
+  text-shadow:
+    0 0 14px rgba(239, 68, 68, 0.55),
+    0 2px 0 rgba(0, 0, 0, 0.5);
+}
+
+.cx-wordmark--big .cx-wordmark__crown {
+  width: 52px;
+  height: 36px;
+}
+
+.cx-wordmark--big .cx-wordmark__word {
+  font-size: clamp(52px, 5.6vw, 84px);
+  text-shadow:
+    0 4px 0 rgba(0, 0, 0, 0.45),
+    0 0 30px rgba(59, 130, 246, 0.35);
+}
+
+.cx-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cx-nav__item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: none;
+  color: var(--cx-dim);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    border-color 160ms ease;
+}
+
+.cx-nav__item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--cx-text);
+}
+
+.cx-nav__item.is-active {
+  color: #ffffff;
+  background: linear-gradient(90deg, rgba(34, 197, 94, 0.32), rgba(34, 197, 94, 0.08));
+  border-color: rgba(34, 197, 94, 0.55);
+  box-shadow: 0 0 18px rgba(34, 197, 94, 0.18);
+}
+
+.cx-nav__icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+}
+
+.cx-nav__icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.cx-nav__item.is-active .cx-nav__icon {
+  color: var(--cx-green);
+}
+
+.cx-promo {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 14px;
+  border: 1px solid rgba(245, 197, 66, 0.35);
+  border-radius: var(--cx-radius);
+  background:
+    radial-gradient(90% 80% at 100% 100%, rgba(34, 197, 94, 0.28), transparent 70%),
+    linear-gradient(160deg, #18213d, #0c1224);
+  color: var(--cx-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 160ms ease;
+}
+
+.cx-promo:hover {
+  transform: translateY(-2px);
+}
+
+.cx-promo__title {
+  display: flex;
+  flex-direction: column;
+  font-size: 17px;
+  font-weight: 900;
+  font-style: italic;
+  line-height: 1.1;
+}
+
+.cx-promo__title .is-gold {
+  color: var(--cx-gold);
+}
+
+.cx-promo__sub {
+  font-size: 12px;
+  color: var(--cx-dim);
+}
+
+.cx-promo__cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, var(--cx-green), var(--cx-green-2));
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.cx-promo__cta svg {
+  width: 16px;
+  height: 16px;
+}
+
+.cx-trust {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--cx-line);
+  border-radius: var(--cx-radius);
+  background: var(--cx-panel);
+}
+
+.cx-trust__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cx-trust__icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(34, 197, 94, 0.12);
+  color: var(--cx-green);
+}
+
+.cx-trust__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.cx-trust__text {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  color: var(--cx-dim);
+}
+
+.cx-trust__text strong {
+  font-size: 12px;
+  color: var(--cx-text);
+}
+
+/* ------------------------------------------------------------------ the top bar */
+.cx-top {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.cx-top__tools {
+  display: flex;
+  gap: 8px;
+  margin-right: auto;
+}
+
+.cx-icon-btn {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 50%;
+  background: linear-gradient(180deg, rgba(34, 48, 84, 0.95), rgba(14, 21, 40, 0.95));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 4px 12px rgba(0, 0, 0, 0.35);
+  color: #e6ecff;
+  cursor: pointer;
+  transition:
+    color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.cx-icon-btn:hover {
+  color: var(--cx-gold);
+  border-color: rgba(245, 197, 66, 0.55);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 0 14px rgba(245, 197, 66, 0.25);
+}
+
+.cx-icon-btn svg {
+  display: block;
+  width: 22px;
+  height: 22px;
+}
+
+.cx-profile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 14px 5px 5px;
+  border: 1px solid var(--cx-line);
+  border-radius: 999px;
+  background: var(--cx-panel);
+  color: var(--cx-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.cx-profile__avatar {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  overflow: hidden;
+  box-shadow: 0 0 0 2px var(--cx-gold);
+}
+
+.cx-profile__avatar > * {
+  width: 100%;
+  height: 100%;
+}
+
+.cx-profile__meta {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  line-height: 1.15;
+}
+
+.cx-profile__name {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.cx-profile__level {
+  font-size: 11px;
+  color: var(--cx-gold);
+}
+
+.cx-wallet {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 6px 5px 6px;
+  border: 1px solid rgba(38, 161, 123, 0.5);
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(38, 161, 123, 0.2), var(--cx-panel));
+}
+
+.cx-wallet__coin {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  font-weight: 900;
+  color: #ffffff;
+  background: radial-gradient(circle at 35% 30%, #6ee7b7, #26a17b 55%, #0e5e45);
+}
+
+.cx-wallet__amount {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+
+.cx-wallet__label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--cx-dim);
+}
+
+.cx-wallet__value {
+  font-size: 15px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.cx-wallet__add {
+  display: grid;
+  place-items: center;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 50%;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 0 12px rgba(34, 197, 94, 0.4);
+  background: linear-gradient(180deg, var(--cx-green), var(--cx-green-2));
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.cx-wallet__add svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.cx-wallet__add:hover {
+  filter: brightness(1.12);
+}
+
+/* ------------------------------------------------------------------ buttons */
+.cx-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border: none;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  color: #ffffff;
+  cursor: pointer;
+  transition:
+    transform 140ms ease,
+    filter 140ms ease;
+}
+
+.cx-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+}
+
+.cx-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.cx-btn--play {
+  background: linear-gradient(180deg, #34d36f, var(--cx-green-2));
+  box-shadow:
+    0 6px 18px rgba(34, 197, 94, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.cx-btn--gold {
+  color: #2a1a00;
+  background: linear-gradient(180deg, #ffd96a, var(--cx-gold-2));
+  box-shadow: 0 6px 18px rgba(245, 197, 66, 0.25);
+}
+
+.cx-link {
+  border: none;
+  background: none;
+  color: var(--cx-green);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------ the home page */
+.cx-home__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 290px;
+  gap: 18px;
+  align-items: start;
+}
+
+.cx-home__col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.cx-home__aside {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  position: sticky;
+  top: 0;
+}
+
+.cx-hero {
+  position: relative;
+  min-height: 330px;
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+
+.cx-hero__img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* The player is on the right of the picture and the words go on the left: keep him in view. */
+  object-position: 78% 42%;
+}
+
+.cx-hero__shade {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(5, 8, 16, 0.9) 0%, rgba(5, 8, 16, 0.55) 40%, rgba(5, 8, 16, 0) 72%),
+    linear-gradient(0deg, rgba(5, 8, 16, 0.55), transparent 40%);
+}
+
+.cx-hero__body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 28px 34px;
+}
+
+.cx-hero__ribbon {
+  display: inline-flex;
+  flex-direction: column;
+  padding: 6px 16px;
+  transform: skewX(-10deg) rotate(-3deg);
+  background: linear-gradient(90deg, #b91c1c, #ef4444);
+  box-shadow: 0 6px 18px rgba(239, 68, 68, 0.35);
+  font-size: 12px;
+  font-weight: 800;
+  font-style: italic;
+  line-height: 1.15;
+}
+
+.cx-hero__ribbon strong {
+  font-size: 17px;
+  color: #ffe08a;
+}
+
+.cx-hero__tagline {
+  margin: -4px 0 6px;
+  font-size: clamp(18px, 1.8vw, 26px);
+  font-weight: 800;
+  font-style: italic;
+  color: var(--cx-gold);
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.5);
+}
+
+.cx-hero__cta {
+  padding: 15px 34px;
+  font-size: 20px;
+  border-radius: 999px;
+}
+
+.cx-hero__cta .cx-btn__icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.cx-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--cx-line);
+  border-radius: var(--cx-radius);
+  background: var(--cx-panel);
+}
+
+.cx-strip__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cx-strip__icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(245, 197, 66, 0.4);
+  color: var(--cx-gold);
+}
+
+.cx-strip__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.cx-strip__text {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  color: var(--cx-dim);
+}
+
+.cx-strip__text strong {
+  font-size: 13px;
+  color: var(--cx-text);
+}
+
+.cx-modes {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.cx-mode {
+  --mode: var(--cx-green);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--cx-radius);
+  border: 1px solid color-mix(in srgb, var(--mode) 45%, transparent);
+  background: var(--cx-panel-2);
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.cx-mode:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 14px 34px color-mix(in srgb, var(--mode) 25%, transparent);
+}
+
+.cx-mode--purple {
+  --mode: var(--cx-purple);
+}
+
+.cx-mode--blue {
+  --mode: var(--cx-blue);
+}
+
+.cx-mode--gold {
+  --mode: var(--cx-gold);
+}
+
+.cx-mode__pic {
+  height: 128px;
+  background-size: cover;
+  background-repeat: no-repeat;
+  background-position: center;
+  box-shadow: inset 0 -30px 30px -14px var(--cx-panel-2);
+  filter: saturate(1.15) brightness(1.08);
+}
+
+.cx-mode__info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px 14px;
+}
+
+.cx-mode__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.cx-mode__text {
+  margin: 0;
+  min-height: 34px;
+  font-size: 12px;
+  color: var(--cx-dim);
+}
+
+.cx-mode__btn {
+  margin-top: 4px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--mode) 85%, white), var(--mode));
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--mode) 30%, transparent);
+}
+
+.cx-mode--gold .cx-mode__btn {
+  color: #2a1a00;
+}
+
+.cx-panel {
+  padding: 14px 16px 16px;
+  border: 1px solid var(--cx-line);
+  border-radius: var(--cx-radius);
+  background: var(--cx-panel);
+}
+
+.cx-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.cx-panel__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.cx-panel__icon {
+  color: var(--cx-gold);
+}
+
+.cx-panel__icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.cx-featured__row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.cx-tour {
+  --tone: var(--cx-red);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 12px 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--tone) 40%, transparent);
+  background:
+    radial-gradient(90% 60% at 100% 0%, color-mix(in srgb, var(--tone) 22%, transparent), transparent 70%),
+    var(--cx-panel-2);
+}
+
+.cx-tour--blue {
+  --tone: var(--cx-blue);
+}
+
+.cx-tour--gold {
+  --tone: var(--cx-gold);
+}
+
+.cx-tour--purple {
+  --tone: var(--cx-purple);
+}
+
+.cx-tour__badge {
+  align-self: flex-start;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--tone);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.cx-tour--gold .cx-tour__badge {
+  color: #2a1a00;
+}
+
+.cx-tour__emblem {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 38px;
+  height: 38px;
+  color: var(--tone);
+  opacity: 0.85;
+}
+
+.cx-tour__emblem svg {
+  width: 100%;
+  height: 100%;
+}
+
+.cx-tour__facts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cx-tour__name {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.cx-tour__line,
+.cx-tour__time {
+  font-size: 11px;
+  color: var(--cx-dim);
+}
+
+.cx-tour__prize {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--cx-gold);
+}
+
+.cx-tour__join {
+  margin-top: 4px;
+  padding: 8px 10px;
+}
+
+.cx-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cx-green);
+  box-shadow: 0 0 10px var(--cx-green);
+}
+
+.cx-recent__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cx-recent__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.cx-recent__avatar {
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  height: 32px;
+  border-radius: 50%;
+  overflow: hidden;
+}
+
+.cx-recent__avatar > * {
+  width: 100%;
+  height: 100%;
+}
+
+.cx-recent__text {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--cx-dim);
+}
+
+.cx-recent__text strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--cx-text);
+}
+
+.cx-recent__empty {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--cx-dim);
+}
+
+.cx-result {
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.cx-result.is-won {
+  background: rgba(34, 197, 94, 0.18);
+  color: #4ade80;
+}
+
+.cx-result.is-lost {
+  background: rgba(239, 68, 68, 0.16);
+  color: #f87171;
+}
+
+.cx-practice-card .cx-btn {
+  width: 100%;
+}
+
+/* ------------------------------------------------------------------ footer */
+.cx-footer {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-top: 22px;
+  padding: 16px 0 18px;
+  border-top: 1px solid var(--cx-line);
+}
+
+.cx-footer .cx-wordmark__crown {
+  display: none;
+}
+
+.cx-footer .cx-wordmark__word {
+  font-size: 20px;
+}
+
+.cx-footer__links {
+  display: flex;
+  gap: 18px;
+  font-size: 12px;
+  color: var(--cx-dim);
+}
+
+.cx-footer__social {
+  display: flex;
+  gap: 12px;
+  margin-left: auto;
+  color: var(--cx-dim);
+}
+
+.cx-footer__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* The other lobby screens (setup, wallet, friends…) inside the desktop frame. */
+.cx-root .cx-main > .gl-screen:not(.cx-home) {
+  min-height: 100%;
+}
+
+@media (max-width: 1320px) {
+  .cx-home__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cx-home__aside {
+    position: static;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cx-coin {
+    animation: none;
+    display: none;
+  }
+
+  .cx-mode,
+  .cx-btn,
+  .cx-promo {
+    transition: none;
+  }
+}
+
+/* ==================================================================
+ * The other lobby screens inside the desktop frame.
+ *
+ * Match setup, statistics, rules, settings, the wallet, friends and invites keep their own
+ * markup and every bit of their behaviour; only their dress changes here. The lobby's
+ * shared colour tokens are re-pointed at the hall's palette, and the handful of building
+ * blocks every one of those screens is made from — panels, chips, option cards, buttons,
+ * inputs, headings — are restyled once, so all of them come out of the same casino.
+ * ================================================================== */
+.cx-root {
+  --u: max(min(calc(100dvh / 980), calc((100vw - 236px) / 1260)), 0.62px);
+  --panel-bg: linear-gradient(180deg, rgba(22, 33, 62, 0.92), rgba(11, 17, 33, 0.94));
+  --panel-border: rgba(245, 197, 66, 0.22);
+  --navy-700: rgba(26, 38, 70, 0.95);
+  --amber-400: #f5c542;
+  --primary-action: linear-gradient(180deg, #34d36f, #15803d);
+  --radius-panel: 16px;
+}
+
+.cx-root .cx-main > .gl-screen {
+  padding-bottom: 8px;
+}
+
+.cx-root .gl-panel {
+  position: relative;
+  box-shadow:
+    0 18px 50px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* A thin gold rule along the top of every panel: the trim on a card table. */
+.cx-root .gl-panel::before {
+  content: '';
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  top: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, rgba(245, 197, 66, 0.7), transparent);
+  pointer-events: none;
+}
+
+.cx-root .gl-headline {
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 0.01em;
+  text-shadow: 0 3px 0 rgba(0, 0, 0, 0.45);
+}
+
+.cx-root .gl-accent {
+  background: linear-gradient(180deg, #fff1b0, #f5c542 45%, #c8901c);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 12px rgba(245, 197, 66, 0.35));
+}
+
+.cx-root .gl-label {
+  color: rgba(245, 197, 66, 0.85);
+}
+
+.cx-root .gl-link-back {
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(16, 25, 46, 0.85);
+  color: #e6ecff;
+}
+
+.cx-root .gl-link-back:hover {
+  border-color: rgba(245, 197, 66, 0.55);
+  color: #f5c542;
+}
+
+.cx-root .gl-chip,
+.cx-root .gl-option {
+  background: linear-gradient(180deg, rgba(30, 44, 80, 0.95), rgba(16, 24, 46, 0.95));
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.cx-root .gl-chip:hover,
+.cx-root .gl-option:hover {
+  border-color: rgba(245, 197, 66, 0.55);
+}
+
+.cx-root .gl-chip[aria-pressed='true'],
+.cx-root .gl-option[aria-pressed='true'] {
+  background:
+    radial-gradient(120% 120% at 0% 0%, rgba(74, 222, 128, 0.28), transparent 60%),
+    linear-gradient(180deg, rgba(22, 101, 52, 0.95), rgba(12, 56, 32, 0.95));
+  border-color: rgba(74, 222, 128, 0.8);
+  box-shadow:
+    0 0 0 1px rgba(74, 222, 128, 0.35),
+    0 0 22px rgba(34, 197, 94, 0.3);
+  color: #ffffff;
+}
+
+.cx-root .gl-btn {
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  border-radius: 999px;
+}
+
+.cx-root .gl-btn--primary {
+  position: relative;
+  overflow: hidden;
+  color: #ffffff;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  box-shadow:
+    0 8px 24px rgba(34, 197, 94, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.cx-root .gl-btn--primary::after,
+.cx-btn--play::after,
+.cx-btn--gold::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.38) 50%, transparent 65%);
+  transform: translateX(-120%);
+  animation: cx-shine 3.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.cx-root .gl-badge {
+  color: #2a1a00;
+  background: linear-gradient(180deg, #ffe08a, #f5c542);
+  border-color: transparent;
+}
+
+.cx-root .gl-switch {
+  background: rgba(10, 16, 32, 0.8);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.cx-root .gl-deposit-input {
+  background: rgba(8, 13, 26, 0.75);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.cx-root .gl-deposit-input:focus {
+  outline: none;
+  border-color: rgba(245, 197, 66, 0.7);
+  box-shadow: 0 0 0 3px rgba(245, 197, 66, 0.18);
+}
+
+.cx-root .gl-fact {
+  border-color: rgba(245, 197, 66, 0.3);
+  color: rgba(245, 225, 160, 0.85);
+}
+
+.cx-root .gl-stat-row strong,
+.cx-root .gl-stat-row b {
+  color: #f5c542;
+}
+
+/* The picture panels beside setup and the rules: the practice room, under a green-gold wash. */
+.cx-root .gl-setup__right-img,
+.cx-root .gl-info__right-img {
+  content: url('/lobby/practice.webp');
+  object-fit: cover;
+  object-position: 60% 60%;
+}
+
+.cx-root .gl-setup__right-shade,
+.cx-root .gl-info__right-shade {
+  background:
+    linear-gradient(0deg, rgba(5, 8, 16, 0.92) 8%, rgba(5, 8, 16, 0.35) 55%, rgba(5, 8, 16, 0.15)),
+    radial-gradient(80% 60% at 80% 0%, rgba(245, 197, 66, 0.18), transparent 70%);
+}
+
+/* ------------------------------------------------------------------ a little more life on the home page */
+.cx-btn--play,
+.cx-btn--gold {
+  position: relative;
+  overflow: hidden;
+}
+
+@keyframes cx-shine {
+  0%,
+  60% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(120%);
+  }
+}
+
+/* The hero's frame breathes a slow gold glow, and its ribbon sways. */
+.cx-hero {
+  animation: cx-glow 5s ease-in-out infinite;
+}
+
+@keyframes cx-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 20px 60px rgba(0, 0, 0, 0.45),
+      0 0 0 1px rgba(245, 197, 66, 0.15);
+  }
+  50% {
+    box-shadow:
+      0 20px 60px rgba(0, 0, 0, 0.45),
+      0 0 0 1px rgba(245, 197, 66, 0.45),
+      0 0 34px rgba(245, 197, 66, 0.18);
+  }
+}
+
+.cx-hero__ribbon {
+  animation: cx-sway 4s ease-in-out infinite;
+}
+
+@keyframes cx-sway {
+  0%,
+  100% {
+    transform: skewX(-10deg) rotate(-3deg);
+  }
+  50% {
+    transform: skewX(-10deg) rotate(-1.5deg) translateY(-2px);
+  }
+}
+
+/* The crown over the wordmark glints now and then. */
+.cx-wordmark__crown {
+  animation: cx-glint 3.8s ease-in-out infinite;
+}
+
+@keyframes cx-glint {
+  0%,
+  70%,
+  100% {
+    filter: drop-shadow(0 0 6px rgba(245, 197, 66, 0.5));
+  }
+  80% {
+    filter: drop-shadow(0 0 14px rgba(255, 236, 160, 1)) brightness(1.4);
+  }
+}
+
+/* Prizes in the tournament cards shimmer like a jackpot counter. */
+.cx-tour__prize {
+  background: linear-gradient(90deg, #f5c542, #fff3c4, #f5c542);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: cx-prize 2.6s linear infinite;
+}
+
+@keyframes cx-prize {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cx-hero,
+  .cx-hero__ribbon,
+  .cx-wordmark__crown,
+  .cx-tour__prize,
+  .cx-root .gl-btn--primary::after,
+  .cx-btn--play::after,
+  .cx-btn--gold::after {
+    animation: none;
+  }
+}
+
+/* Statistics carries its own wordmark for the old lobby; the desktop frame already has one. */
+.cx-root .gl-stats-brand {
+  display: none;
+}
+
+/* ==================================================================
+ * Layout of the other lobby screens inside the desktop frame: full width.
+ *
+ * Those screens were laid out for a page of their own, centred in two thirds of the
+ * window with their title pushed to the far right. Inside the frame they use the whole
+ * page: title on the left with the way back beside it, and their panels across the
+ * width.
+ * ================================================================== */
+.cx-root .gl-setup,
+.cx-root .gl-info,
+.cx-root .gl-friends,
+.cx-root .gl-invite,
+.cx-root .gl-deposit,
+.cx-root .gl-home-head {
+  width: 100%;
+  max-height: none;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.cx-root .gl-setup,
+.cx-root .gl-info,
+.cx-root .gl-invite {
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 18px;
+  min-height: min(620px, calc(100dvh - 210px));
+}
+
+.cx-root .gl-friends,
+.cx-root .gl-deposit {
+  gap: 18px;
+  min-height: min(620px, calc(100dvh - 210px));
+}
+
+.cx-root .gl-settings {
+  width: min(760px, 100%);
+  margin: 0;
+}
+
+.cx-root .gl-deposit-loading {
+  width: 100%;
+}
+
+/* The title row: the heading first, at the left, large; the way back beside it. */
+.cx-root .gl-setup-top,
+.cx-root .gl-info-top,
+.cx-root .gl-stats-head,
+.cx-root .gl-home-head {
+  flex-direction: row-reverse;
+  justify-content: flex-end;
+  align-items: flex-end;
+  gap: 22px;
+  margin-bottom: 18px;
+}
+
+.cx-root .gl-setup-top__right,
+.cx-root .gl-home-head > div,
+.cx-root .gl-stats-head > div {
+  text-align: left;
+}
+
+.cx-root .gl-headline {
+  font-size: clamp(30px, 3.2vw, 46px);
+}
+
+.cx-root .gl-link-back {
+  margin-bottom: 6px;
+}
+
+/* The setup screen's choices, a touch larger now they have the room. */
+.cx-root .gl-option {
+  min-height: 118px;
+}
+
+.cx-root .gl-chip {
+  min-height: 52px;
+}
+
+/* ==================================================================
+ * Hover: everything that can be pressed answers the pointer the same way — it lifts a
+ * little, catches the light, and settles back down when pressed.
+ * ================================================================== */
+.cx-root .gl-chip,
+.cx-root .gl-option,
+.cx-root .gl-btn,
+.cx-root .gl-link-back,
+.cx-mode,
+.cx-tour,
+.cx-btn,
+.cx-promo,
+.cx-icon-btn,
+.cx-profile,
+.cx-wallet__add {
+  transition:
+    transform 180ms cubic-bezier(0.2, 0.9, 0.3, 1.3),
+    box-shadow 180ms ease,
+    border-color 180ms ease,
+    filter 180ms ease,
+    background-color 180ms ease;
+}
+
+.cx-root .gl-chip:hover,
+.cx-root .gl-option:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 10px 24px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(245, 197, 66, 0.35),
+    0 0 18px rgba(245, 197, 66, 0.15);
+}
+
+.cx-root .gl-btn:hover:not(:disabled),
+.cx-btn:hover {
+  transform: translateY(-2px) scale(1.02);
+  filter: brightness(1.1);
+}
+
+.cx-root .gl-btn--primary:hover:not(:disabled),
+.cx-btn--play:hover {
+  box-shadow:
+    0 14px 32px rgba(34, 197, 94, 0.5),
+    0 0 0 2px rgba(134, 239, 172, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+.cx-btn--gold:hover {
+  box-shadow:
+    0 14px 32px rgba(245, 197, 66, 0.45),
+    0 0 0 2px rgba(255, 230, 150, 0.4);
+}
+
+.cx-root .gl-chip:active,
+.cx-root .gl-option:active,
+.cx-root .gl-btn:active:not(:disabled),
+.cx-btn:active {
+  transform: translateY(0) scale(0.97);
+}
+
+.cx-tour:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 14px 30px color-mix(in srgb, var(--tone) 28%, transparent);
+}
+
+.cx-profile:hover {
+  border-color: rgba(245, 197, 66, 0.5);
+  box-shadow: 0 0 16px rgba(245, 197, 66, 0.18);
+}
+
+.cx-nav__item {
+  position: relative;
+}
+
+.cx-nav__item:hover {
+  transform: translateX(4px);
+}
+
+.cx-nav__item:hover .cx-nav__icon {
+  color: var(--cx-gold);
+}
+
+/* ==================================================================
+ * A little more light in the hall: the darkest tones lifted a step, no more.
+ * ================================================================== */
+.cx-root {
+  --cx-bg: #0a0f1d;
+  --cx-panel: rgba(22, 32, 58, 0.88);
+  --cx-panel-2: rgba(28, 40, 72, 0.92);
+}
+
+.cx-backdrop {
+  background:
+    radial-gradient(60% 50% at 70% -10%, rgba(59, 130, 246, 0.3), transparent 70%),
+    radial-gradient(50% 45% at 10% 110%, rgba(34, 197, 94, 0.18), transparent 70%),
+    radial-gradient(40% 40% at 100% 100%, rgba(245, 197, 66, 0.1), transparent 70%),
+    linear-gradient(180deg, #0c1222, #080b15);
+}
+
+.cx-side {
+  background: linear-gradient(180deg, rgba(14, 20, 38, 0.94), rgba(9, 13, 25, 0.96));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cx-nav__item:hover,
+  .cx-root .gl-chip:hover,
+  .cx-root .gl-option:hover {
+    transform: none;
+  }
+}
