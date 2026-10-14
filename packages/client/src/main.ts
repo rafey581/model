@@ -43,7 +43,6 @@ import { installHudMenu, type HudMenu } from './game/hudMenu.js'
 import { ShotPlayer } from './game/playback.js'
 import type { PlaybackBall } from './game/playback.js'
 import { renderAuthScreen } from './auth.js'
-import { startAdminApp } from './adminLogin.js'
 import {
   confirmPlacement,
   initialPlacementFlow,
@@ -514,15 +513,6 @@ function header(_options: { home?: boolean } = {}): HTMLElement {
     dropdown.setAttribute('role', 'menu')
     dropdown.hidden = true
 
-    if (currentUser.role === 'ADMIN' || currentUser.role === 'SUPERADMIN') {
-      const adminBtn = el('button', 'profile-menu-item', 'Admin') as HTMLButtonElement
-      adminBtn.type = 'button'
-      adminBtn.setAttribute('role', 'menuitem')
-      adminBtn.onclick = () => {
-        window.location.href = '/admin'
-      }
-      dropdown.appendChild(adminBtn)
-    }
     const logout = el('button', 'profile-menu-item', 'Logout') as HTMLButtonElement
     logout.type = 'button'
     logout.setAttribute('role', 'menuitem')
@@ -4293,31 +4283,14 @@ function renderMaintenance(): void {
   el.className = isAdmin ? 'maintenance-banner' : 'maintenance-overlay'
   const p = document.createElement('p')
   p.textContent = isAdmin
-    ? 'Maintenance mode is ON - players are blocked. Turn it off in Admin -> Settings.'
+    ? 'Maintenance mode is ON - players are blocked. Turn it off in the admin app (Settings).'
     : 'The platform is briefly under maintenance. Please check back soon.'
   el.appendChild(p)
   document.body.appendChild(el)
   maintenanceEl = el
 }
 
-/**
- * The staff entry point, at /admin.
- *
- * Checked before anything else in boot and deliberately short-circuits the rest of
- * the app: no game loop, no socket, no player token, no header. Loading the full
- * player bundle to show a login form would mean the admin surface is reachable from
- * the same runtime as the public one, which is the opposite of the separation the
- * server now enforces.
- */
-function isAdminRoute(): boolean {
-  return window.location.pathname.replace(/\/+$/, '') === '/admin'
-}
-
 async function init(): Promise<void> {
-  if (isAdminRoute()) {
-    startAdminApp(app)
-    return
-  }
   // Start the table model download now, in parallel with the auth/lobby boot. The
   // online path has no loading screen to await it in, so `tableModelIfReady()` has
   // to be able to answer by the time a scene is built; a cached, warmed download is

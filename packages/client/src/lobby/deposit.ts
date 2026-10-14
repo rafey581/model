@@ -10,7 +10,7 @@ import { api } from '../game/network.js'
  * This is a manual, admin-verified flow. No crypto moves through the game server:
  * the player sends USDT to the operator's external wallet, then posts a
  * transaction id and a screenshot. The form here only creates the request; the
- * credit is applied when an admin approves it in the admin panel.
+ * credit is applied when an admin approves it in the admin app.
  */
 
 export interface DepositInfo {

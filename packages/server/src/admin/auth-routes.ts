@@ -81,7 +81,13 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
     if (result.ok && result.user) {
       const session = await createAdminSession(result.user.id, request.ip, request.headers['user-agent'])
       setAdminCookie(reply, session.token)
-      return reply.send({ ok: true, data: { user: result.user, expiresAt: session.expiresAt } })
+      // `token` is returned alongside the cookie so a native client (the mobile admin
+      // app), which has no cookie jar, can present the session as `Authorization:
+      // Bearer`. The web panel is gone; the only caller of this route is the app.
+      return reply.send({
+        ok: true,
+        data: { user: result.user, expiresAt: session.expiresAt, token: session.token }
+      })
     }
 
     if (result.requiresTotp) {
@@ -163,7 +169,11 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
     setAdminCookie(reply, session.token)
     return reply.send({
       ok: true,
-      data: { user: { id: user.id, username: user.username, role: user.role, status: user.status } }
+      data: {
+        user: { id: user.id, username: user.username, role: user.role, status: user.status },
+        expiresAt: session.expiresAt,
+        token: session.token
+      }
     })
   })
 
@@ -178,7 +188,10 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
 
   /** POST /api/admin/auth/logout - ends this session only. */
   app.post('/api/admin/auth/logout', { config: { public: true } }, async (request, reply) => {
-    const token = request.cookies[ADMIN_COOKIE]
+    const bearer = (request.headers.authorization ?? '').startsWith('Bearer ')
+      ? (request.headers.authorization ?? '').slice(7)
+      : undefined
+    const token = request.cookies[ADMIN_COOKIE] ?? bearer
     if (token) await revokeAdminSession(token)
     reply.clearCookie(ADMIN_COOKIE, { path: '/api/admin' })
     return reply.send({ ok: true })

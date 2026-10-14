@@ -1,0 +1,155 @@
+/**
+ * The shapes the admin API returns.
+ *
+ * Copied from the server's responses (and the panel that used to consume them) so
+ * the app and the server cannot drift silently: a field rename breaks `tsc` here
+ * rather than surfacing as `undefined` on a screen at 3am.
+ */
+
+export interface AdminIdentity {
+  id: string
+  username: string
+  role: string
+  status?: string
+}
+
+export interface DashboardStats {
+  users: number
+  activeMatches: number
+  completedMatches: number
+  deposits: number
+  withdrawals: number
+  pendingDeposits: number
+  pendingWithdrawals: number
+  platformRevenue: number
+}
+
+export interface AdminUser {
+  id: string
+  username: string
+  email: string | null
+  role: string
+  status: string
+  createdAt: string
+  wallet: { available: string | number; locked?: string | number } | null | undefined
+}
+
+export interface AdminMatchPlayer {
+  seat: number
+  userId: string
+  user: { id: string; username: string }
+}
+
+export interface AdminMatch {
+  id: string
+  matchType: string
+  stakePerPlayer: string | number
+  format: string
+  status: string
+  winnerId: string | null
+  createdAt: string
+  startedAt: string | null
+  finishedAt: string | null
+  resultJson: string | null
+  players: AdminMatchPlayer[]
+}
+
+export interface AdminGameEvent {
+  seq: number
+  type: string
+  data: unknown
+}
+
+export interface FraudFlagRow {
+  id: string
+  userId: string
+  username: string | null
+  kind: string
+  confidence: number
+  reason: string | null
+  createdAt: string
+}
+
+export interface LedgerInvariance {
+  ok: boolean
+  checked: number
+  violations: Array<{ userId: string; expected: number; actual: number; delta: number }>
+}
+
+export interface AdminActionRow {
+  id: string
+  adminId: string
+  adminUsername: string | null
+  action: string
+  targetType: string
+  targetId: string | null
+  meta: unknown
+  createdAt: string
+}
+
+export interface AdminDeposit {
+  id: string
+  userId: string
+  network: string
+  address: string
+  amount: string | number
+  currency: string
+  status: string
+  txHash: string | null
+  screenshot: string | null
+  creditedAmount: string | number | null
+  rejectReason: string | null
+  createdAt: string
+  reviewedAt: string | null
+  user: { id: string; username: string; email: string | null }
+  reviewedBy: { id: string; username: string } | null
+}
+
+export interface AdminDepositsPayload {
+  items: AdminDeposit[]
+  pending: number
+}
+
+export interface AdminWithdrawalMatch {
+  matchId: string
+  mode: string
+  format: string
+  stake: number
+  status: string
+  finishedAt: string | null
+  result: 'WIN' | 'LOSS' | 'UNKNOWN'
+  opponent: string | null
+}
+
+export interface AdminWithdrawal {
+  id: string
+  userId: string
+  network: string
+  address: string
+  amount: string | number
+  currency: string
+  status: string
+  deducted: string | number | null
+  matchHistory: AdminWithdrawalMatch[] | null
+  rejectReason: string | null
+  createdAt: string
+  reviewedAt: string | null
+  user: { id: string; username: string; email: string | null }
+  reviewedBy: { id: string; username: string } | null
+}
+
+export interface AdminWithdrawalsPayload {
+  items: AdminWithdrawal[]
+  pending: number
+}
+
+export type SettingsMap = Record<string, unknown>
+
+export type ReviewStatus = 'PENDING' | 'APPROVED' | 'REJECTED'
+export const REVIEW_STATUSES: ReviewStatus[] = ['PENDING', 'APPROVED', 'REJECTED']
+
+export type UserStatus = 'ACTIVE' | 'SUSPENDED' | 'BANNED'
+export const USER_STATUSES: UserStatus[] = ['ACTIVE', 'SUSPENDED', 'BANNED']
+
+export type UserRole = 'PLAYER' | 'ADMIN'
+export const USER_ROLES: UserRole[] = ['PLAYER', 'ADMIN']

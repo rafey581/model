@@ -18,9 +18,10 @@ See also:
 
 ```
 packages/
-  shared/   deterministic physics + snooker rules engine (shared by server & client)
-  server/   Node.js API, Socket.IO game server, wallet/settlement, admin
-  client/   Vite browser app (game renderer + UI)
+  shared/     deterministic physics + snooker rules engine (shared by server & client)
+  server/     Node.js API, Socket.IO game server, wallet/settlement, admin
+  client/     Vite browser app (game renderer + UI)
+  admin-app/  Expo (React Native) staff app - the only admin surface
 ```
 
 ## 1v1 matchmaking
@@ -70,6 +71,51 @@ pnpm dev                  # runs server + client in watch mode
 
 - Client: http://localhost:5173
 - Server: http://localhost:4000 (health: `/api/health`, readiness: `/api/ready`)
+
+## Admin app
+
+Staff do their work from `packages/admin-app`, an Expo (React Native) app — the
+web client is player-only and exposes no admin surface. It covers the dashboard,
+deposit and withdrawal review, users (role, status, balance adjustments),
+matches with a stroke-by-stroke replay, settings, fraud/ledger checks and the
+audit log.
+
+```bash
+pnpm --filter @snooker/admin-app start   # then press i / a, or scan with Expo Go
+```
+
+The app signs in with the admin email + password (and an authenticator code once
+enrolled; the first sign-in walks through enrollment). It talks to the server on
+port 4000: by default it reuses the Expo dev server's host, so a phone on the same
+network needs nothing configured. Point it elsewhere with
+`EXPO_PUBLIC_API_URL=http://host:4000/api` in `packages/admin-app/.env`. The
+seeded admin account is created by `pnpm db:seed`.
+
+### Installable Android build (APK)
+
+`packages/admin-app/eas.json` defines a `preview` profile that produces a
+directly installable `.apk`. EAS builds in the cloud, so no Android SDK or Java
+is needed locally:
+
+```bash
+cd packages/admin-app
+npx eas-cli@latest login                      # once, with your Expo account
+npx eas-cli@latest init                       # once, links the project
+npx eas-cli@latest build -p android --profile preview
+```
+
+When the build finishes, scan the QR code on the build page or download the
+`.apk` and install it (Android may ask you to allow "install unknown apps").
+
+A standalone build cannot guess the server address the way Expo Go does (there
+is no Metro dev server to read), so the URL is baked in at build time from
+`EXPO_PUBLIC_API_URL` in `eas.json` — currently `http://13.204.251.122:4000/api`.
+Change it there and rebuild if the server moves. The phone must be able to reach
+that host, so the server has to be running and the port reachable.
+
+The server speaks plain HTTP, so the Android build turns on cleartext traffic
+(the `expo-build-properties` plugin in `app.json`); without it a release APK
+fails to reach the API with no visible error.
 
 ## Useful Scripts
 

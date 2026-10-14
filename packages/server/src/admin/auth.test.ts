@@ -79,7 +79,8 @@ afterAll(async () => {
 })
 
 /**
- * Obtains an admin session cookie, whichever state the account is in.
+ * Obtains an admin session, whichever state the account is in, returning both the
+ * cookie and the bearer token the response carries.
  *
  * The account is unenrolled to begin with, so the first call walks the enrollment
  * bootstrap. Once a test has activated TOTP, the account is enrolled and a
@@ -87,30 +88,51 @@ afterAll(async () => {
  * password + TOTP login. Encoding both paths here is what keeps the session tests
  * independent of the order the login tests happened to run in.
  */
-async function enrollAndLogin(email = ADMIN_EMAIL, password = ADMIN_PASSWORD): Promise<string | null> {
+async function loginForSession(
+  email = ADMIN_EMAIL,
+  password = ADMIN_PASSWORD
+): Promise<{ cookie: string | null; token: string | null }> {
   const start = await app.inject({ method: 'POST', url: '/api/admin/auth/login', payload: { email, password } })
   if (start.statusCode === 200) {
-    const body = start.json() as { data?: { requiresTotp?: boolean; enrollToken?: string; secret?: string } }
-    if (!body.data?.requiresTotp || !body.data.enrollToken || !body.data.secret) return null
+    const body = start.json() as {
+      data?: { requiresTotp?: boolean; enrollToken?: string; secret?: string; token?: string }
+    }
+    if (!body.data?.requiresTotp || !body.data.enrollToken || !body.data.secret) {
+      return { cookie: cookieFrom(start, 'admin_session'), token: body.data?.token ?? null }
+    }
     const activate = await app.inject({
       method: 'POST',
       url: '/api/admin/auth/totp/activate',
       payload: { enrollToken: body.data.enrollToken, totp: currentCode(body.data.secret) }
     })
-    if (activate.statusCode !== 200) return null
-    return cookieFrom(activate, 'admin_session')
+    if (activate.statusCode !== 200) return { cookie: null, token: null }
+    return {
+      cookie: cookieFrom(activate, 'admin_session'),
+      token: (activate.json() as { data: { token?: string } }).data.token ?? null
+    }
   }
 
   // Already enrolled: log in with a live code.
   const row = await prisma.user.findUnique({ where: { id: adminId }, select: { totpSecret: true } })
-  if (!row?.totpSecret) return null
+  if (!row?.totpSecret) return { cookie: null, token: null }
   const full = await app.inject({
     method: 'POST',
     url: '/api/admin/auth/login',
     payload: { email, password, totp: currentCode(row.totpSecret) }
   })
-  if (full.statusCode !== 200) return null
-  return cookieFrom(full, 'admin_session')
+  if (full.statusCode !== 200) return { cookie: null, token: null }
+  return {
+    cookie: cookieFrom(full, 'admin_session'),
+    token: (full.json() as { data: { token?: string } }).data.token ?? null
+  }
+}
+
+async function enrollAndLogin(email = ADMIN_EMAIL, password = ADMIN_PASSWORD): Promise<string | null> {
+  return (await loginForSession(email, password)).cookie
+}
+
+async function enrollAndLoginToken(): Promise<string | null> {
+  return (await loginForSession()).token
 }
 
 describe('admin login', () => {
@@ -317,5 +339,47 @@ describe('session enforcement', () => {
     const suspended = await app.inject({ method: 'GET', url: '/api/admin/stats', headers: { cookie: cookie! } })
     expect(suspended.statusCode).toBe(401)
     await prisma.user.update({ where: { id: adminId }, data: { status: 'ACTIVE' } })
+  })
+})
+
+describe('mobile admin app bearer auth', () => {
+  // The mobile app has no cookie jar, so it stores the session token from the login
+  // body and sends it as `Authorization: Bearer`. The guard already accepted a
+  // bearer token; these tests pin the two halves the app depends on: the token is
+  // issued, and it is the same revocable session the cookie would have carried.
+  it('issues a bearer token that the admin API accepts', async () => {
+    const token = await enrollAndLoginToken()
+    expect(token).toBeTruthy()
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/admin/stats',
+      headers: { authorization: `Bearer ${token}` }
+    })
+    expect(res.statusCode).toBe(200)
+  })
+
+  it('revokes the session when logout is called with the bearer token', async () => {
+    const token = await enrollAndLoginToken()
+    expect(token).toBeTruthy()
+    const before = await app.inject({
+      method: 'GET',
+      url: '/api/admin/stats',
+      headers: { authorization: `Bearer ${token}` }
+    })
+    expect(before.statusCode).toBe(200)
+
+    const out = await app.inject({
+      method: 'POST',
+      url: '/api/admin/auth/logout',
+      headers: { authorization: `Bearer ${token}` }
+    })
+    expect(out.statusCode).toBe(200)
+
+    const after = await app.inject({
+      method: 'GET',
+      url: '/api/admin/stats',
+      headers: { authorization: `Bearer ${token}` }
+    })
+    expect(after.statusCode).toBe(401)
   })
 })
