@@ -91,6 +91,32 @@ network needs nothing configured. Point it elsewhere with
 `EXPO_PUBLIC_API_URL=http://host:4000/api` in `packages/admin-app/.env`. The
 seeded admin account is created by `pnpm db:seed`.
 
+### Installable Android build (APK)
+
+`packages/admin-app/eas.json` defines a `preview` profile that produces a
+directly installable `.apk`. EAS builds in the cloud, so no Android SDK or Java
+is needed locally:
+
+```bash
+cd packages/admin-app
+npx eas-cli@latest login                      # once, with your Expo account
+npx eas-cli@latest init                       # once, links the project
+npx eas-cli@latest build -p android --profile preview
+```
+
+When the build finishes, scan the QR code on the build page or download the
+`.apk` and install it (Android may ask you to allow "install unknown apps").
+
+A standalone build cannot guess the server address the way Expo Go does (there
+is no Metro dev server to read), so the URL is baked in at build time from
+`EXPO_PUBLIC_API_URL` in `eas.json` — currently `http://13.204.251.122:4000/api`.
+Change it there and rebuild if the server moves. The phone must be able to reach
+that host, so the server has to be running and the port reachable.
+
+The server speaks plain HTTP, so the Android build turns on cleartext traffic
+(the `expo-build-properties` plugin in `app.json`); without it a release APK
+fails to reach the API with no visible error.
+
 ## Useful Scripts
 
 ```bash
