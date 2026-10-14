@@ -2,7 +2,7 @@ import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import cookie from '@fastify/cookie'
 import { createRequire } from 'node:module'
-import { config } from './config.js'
+import { config, adminAppOrigins } from './config.js'
 import { prisma } from './db/index.js'
 import { registerAuthHooks } from './auth/guards.js'
 import { registerAuthRoutes } from './auth/routes.js'
@@ -40,8 +40,14 @@ export async function buildApp() {
     }
   })
 
+  // The player site is the default caller. The mobile admin app is a separate
+  // origin (only its Expo web dev server is subject to CORS; a native build sends
+  // no Origin), so its origins are merged in without widening the player's list.
+  const allowedOrigins = [...config.CLIENT_ORIGIN.split(','), ...adminAppOrigins()]
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
   await app.register(cors, {
-    origin: config.CLIENT_ORIGIN.split(','),
+    origin: allowedOrigins,
     credentials: true
   })
   await app.register(cookie)

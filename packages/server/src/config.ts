@@ -118,6 +118,11 @@ const envSchema = z.object({
   ADMIN_SESSION_TTL_MIN: z.coerce.number().default(30),
   ADMIN_MAX_FAILED_ATTEMPTS: z.coerce.number().default(5),
   ADMIN_LOCKOUT_MIN: z.coerce.number().default(15),
+  // Browser origins the mobile admin app is served from. Only the Expo web dev
+  // server needs these: a native build sends no Origin header and is not subject
+  // to CORS. Kept apart from CLIENT_ORIGIN so allowing admin tooling never widens
+  // the player site's list.
+  ADMIN_APP_ORIGINS: z.string().default('http://localhost:8081,http://localhost:19006'),
 
   // The internal direct-registration path, used by tests, e2e and the seed. It creates
   // an account with no OTP step, so it is off in any real deployment; players are
@@ -168,6 +173,13 @@ export const config = loadConfig()
 /** IP prefixes allowed to reach the admin login. Empty list = no restriction. */
 export function adminAllowedIps(): string[] {
   return config.ADMIN_ALLOWED_IPS.split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+}
+
+/** Browser origins allowed for the mobile admin app (Expo web dev). Empty = none. */
+export function adminAppOrigins(): string[] {
+  return config.ADMIN_APP_ORIGINS.split(',')
     .map((s) => s.trim())
     .filter((s) => s.length > 0)
 }

@@ -68,7 +68,7 @@ export interface LobbyBridge {
    */
   startOnlineChallenge: (opts: { stakeTier: string; format: MatchFormat; targetUsername?: string }) => Promise<void>
   toast: (message: string, kind?: 'error' | 'info') => void
-  /** Existing profile menu actions (logout / admin) — optional. */
+  /** Existing profile menu actions (logout) — optional. */
   onProfileActivate: () => void
   /** Hands back to main.ts for the existing tournaments screen (create / join / bracket). */
   openTournaments: () => void
