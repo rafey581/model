@@ -1543,9 +1543,9 @@ function applyRenderSettings(scene: THREE.Scene, renderer: THREE.WebGLRenderer |
 export const STUDIO_ROOM = true
 
 /** The room, in millimetres from the table's centre: how far each wall stands, and how tall. */
-const STUDIO_HALF_LENGTH = 5900
-const STUDIO_HALF_WIDTH = 4400
-const STUDIO_WALL_HEIGHT = 3200
+const STUDIO_HALF_LENGTH = 7000
+const STUDIO_HALF_WIDTH = 5400
+const STUDIO_WALL_HEIGHT = 2400
 /**
  * The sponsors' band: how tall it is, and how high its foot is off the floor. Low, just
  * above the height of the table, so from behind the cue ball it runs along the far end of
@@ -1553,13 +1553,16 @@ const STUDIO_WALL_HEIGHT = 3200
  */
 const STUDIO_BAND_HEIGHT = 440
 const STUDIO_BAND_FOOT = 900
-/** One repeat of the wall picture, square, and one repeat of the sponsors' band. */
-const STUDIO_WALL_TILE_MM = 3600
+/** One repeat of the wall picture, square (as tall as the wall), and one repeat of the sponsors' band. */
+const STUDIO_WALL_TILE_MM = STUDIO_WALL_HEIGHT
 const STUDIO_BAND_TILE_MM = 6400
-/** The branded board on the right-hand wall: its size, and the height of its middle above the floor. */
-const STUDIO_BOARD_WIDTH = 2100
-const STUDIO_BOARD_HEIGHT = 900
-const STUDIO_BOARD_MID = 2150
+/**
+ * The branded board on the right-hand wall: its size, and the height of its middle above the
+ * floor — above the sponsors' band and clear of the top of the wall.
+ */
+const STUDIO_BOARD_WIDTH = 1800
+const STUDIO_BOARD_HEIGHT = 760
+const STUDIO_BOARD_MID = 1860
 const STUDIO_SPONSORS = ['SNOOKERX', 'WORLD SNOOKER', 'LIVE ON STREAM', 'CHAMPIONSHIP']
 
 function studioTexture(ctx: CanvasRenderingContext2D, repeatX: boolean, name: string): THREE.CanvasTexture {
