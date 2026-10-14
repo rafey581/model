@@ -18,9 +18,10 @@ See also:
 
 ```
 packages/
-  shared/   deterministic physics + snooker rules engine (shared by server & client)
-  server/   Node.js API, Socket.IO game server, wallet/settlement, admin
-  client/   Vite browser app (game renderer + UI)
+  shared/     deterministic physics + snooker rules engine (shared by server & client)
+  server/     Node.js API, Socket.IO game server, wallet/settlement, admin
+  client/     Vite browser app (game renderer + UI)
+  admin-app/  Expo (React Native) staff app - the only admin surface
 ```
 
 ## 1v1 matchmaking
@@ -70,6 +71,25 @@ pnpm dev                  # runs server + client in watch mode
 
 - Client: http://localhost:5173
 - Server: http://localhost:4000 (health: `/api/health`, readiness: `/api/ready`)
+
+## Admin app
+
+Staff do their work from `packages/admin-app`, an Expo (React Native) app — the
+web client is player-only and exposes no admin surface. It covers the dashboard,
+deposit and withdrawal review, users (role, status, balance adjustments),
+matches with a stroke-by-stroke replay, settings, fraud/ledger checks and the
+audit log.
+
+```bash
+pnpm --filter @snooker/admin-app start   # then press i / a, or scan with Expo Go
+```
+
+The app signs in with the admin email + password (and an authenticator code once
+enrolled; the first sign-in walks through enrollment). It talks to the server on
+port 4000: by default it reuses the Expo dev server's host, so a phone on the same
+network needs nothing configured. Point it elsewhere with
+`EXPO_PUBLIC_API_URL=http://host:4000/api` in `packages/admin-app/.env`. The
+seeded admin account is created by `pnpm db:seed`.
 
 ## Useful Scripts
 
