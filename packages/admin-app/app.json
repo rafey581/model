@@ -39,6 +39,13 @@
       "bundler": "metro",
       "output": "single",
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "e48b7ba9-e448-4ef9-a806-3773fef5a15f"
+      }
+    },
+    "owner": "xast"
   }
 }
