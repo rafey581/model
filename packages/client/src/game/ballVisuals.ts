@@ -6,7 +6,7 @@ import { qualityConfig } from './qualityConfig.js'
  * Kept under pure white so the lamp's warm light is what lifts it, the way a
  * real cue ball reads under tournament lighting.
  */
-export const CUE_BALL_COLOR = 0xf4f0e4
+export const CUE_BALL_COLOR = 0xece2cc
 /** Base lacquer roughness under the clearcoat: glossy resin, not rubber. */
 export const CUE_BALL_ROUGHNESS = 0.36
 /** Phenolic resin is a dielectric: no metalness anywhere on this ball. */
@@ -44,7 +44,9 @@ export function ballGlossScale(): { clearcoat: number; env: number } {
   // completely at the edge of the ball, where the surface is seen at a glance, and what it
   // shows there is the dark of the room: a hard dark line round every ball.
   if (tier === 'low') return { clearcoat: 0.45, env: 0.45 }
-  if (tier === 'medium') return { clearcoat: 0.7, env: 0.85 }
+  // Medium is the phone's tier, and the balls are what a phone player looks at: the same
+  // finish as High.
+  if (tier === 'medium') return { clearcoat: 0.75, env: 1 }
   return { clearcoat: 0.75, env: 1 }
 }
 
@@ -54,12 +56,15 @@ export function ballGlossScale(): { clearcoat: number; env: number } {
  */
 export function cueBallAlbedoPixels(size = 256): Uint8Array {
   const data = new Uint8Array(size * size * 4)
-  // Warm cream resin base (#f4f0e4).
+  // Warm ivory resin base: an aged cue ball's skin tone, not paper white.
+  const baseR = (CUE_BALL_COLOR >> 16) & 0xff
+  const baseG = (CUE_BALL_COLOR >> 8) & 0xff
+  const baseB = CUE_BALL_COLOR & 0xff
   for (let i = 0; i < size * size; i++) {
     const o = i * 4
-    data[o] = 0xf4
-    data[o + 1] = 0xf0
-    data[o + 2] = 0xe4
+    data[o] = baseR
+    data[o + 1] = baseG
+    data[o + 2] = baseB
     data[o + 3] = 255
   }
   const dots: Array<{ u: number; v: number; r: number }> = [

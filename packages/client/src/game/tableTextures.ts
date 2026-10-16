@@ -301,7 +301,57 @@ const CLOTH_MIPMAPS = true
  * and the spots are geometry (`tableMarkings.ts`).
  */
 export function feltTexture(): THREE.CanvasTexture {
-  let tex = tableCache.get('felt')
+  return paintFelt('felt', FELT_CLASSIC)
+}
+
+/**
+ * The bed for the textured table: the same cloth under a broadcast canopy.
+ *
+ * A tournament table is lit by a canopy the size of the bed, so the cloth is close to even
+ * from end to end, the shade under a cushion is a thin soft line rather than a band, and a
+ * pocket is a clean hole in a lit sheet. The textured table's own pockets and leathers
+ * frame the holes, so nothing dark is painted round them.
+ */
+export function studioFeltTexture(): THREE.CanvasTexture {
+  return paintFelt('felt-studio', FELT_STUDIO)
+}
+
+interface FeltLook {
+  /** The pool of light: the green at the middle, two thirds out and at the very edge. */
+  outer: string
+  edge: string
+  /** How much darker the two ends are than the middle, at the cushion. */
+  ends: number
+  /** The shade under each cushion: how far it reaches and how dark it starts. */
+  cushionMm: number
+  cushion: number
+  /** The dark round each pocket: how far it reaches and how dark it starts. */
+  pocketMm: number
+  pocket: number
+}
+
+const FELT_CLASSIC: FeltLook = {
+  outer: '#1c9426',
+  edge: CLOTH_COLOR_EDGE,
+  ends: 0.2,
+  cushionMm: CUSHION_SHADE_MM,
+  cushion: CUSHION_SHADE_STRENGTH,
+  pocketMm: POCKET_SHADE_MM,
+  pocket: POCKET_SHADE_STRENGTH
+}
+
+const FELT_STUDIO: FeltLook = {
+  outer: '#28a632',
+  edge: '#209a2a',
+  ends: 0.06,
+  cushionMm: 55,
+  cushion: 0.2,
+  pocketMm: 0,
+  pocket: 0
+}
+
+function paintFelt(key: string, look: FeltLook): THREE.CanvasTexture {
+  let tex = tableCache.get(key)
   if (tex) return tex
   // 1024 across the table: the shade under a cushion is a few centimetres deep, and at
   // half this size it was three pixels of gradient, which is a smear and not a shadow.
@@ -310,8 +360,8 @@ export function feltTexture(): THREE.CanvasTexture {
   const g = ctx.createRadialGradient(size * 0.5, size * 0.5, size * 0.06, size * 0.5, size * 0.5, size * 0.78)
   g.addColorStop(0, CLOTH_COLOR_CENTER)
   g.addColorStop(0.45, CLOTH_COLOR_MID)
-  g.addColorStop(0.75, '#1c9426')
-  g.addColorStop(1, CLOTH_COLOR_EDGE)
+  g.addColorStop(0.75, look.outer)
+  g.addColorStop(1, look.edge)
   ctx.fillStyle = g
   ctx.fillRect(0, 0, size, size)
 
@@ -319,10 +369,10 @@ export function feltTexture(): THREE.CanvasTexture {
   // from it and catch its light at a slant. That falloff is painted here, because below
   // the high quality level the bed is drawn unlit and this texture is all the light it has.
   const ends = ctx.createLinearGradient(0, 0, size, 0)
-  ends.addColorStop(0, 'rgba(0,0,0,0.2)')
+  ends.addColorStop(0, `rgba(0,0,0,${look.ends})`)
   ends.addColorStop(0.3, 'rgba(0,0,0,0)')
   ends.addColorStop(0.7, 'rgba(0,0,0,0)')
-  ends.addColorStop(1, 'rgba(0,0,0,0.2)')
+  ends.addColorStop(1, `rgba(0,0,0,${look.ends})`)
   ctx.fillStyle = ends
   ctx.fillRect(0, 0, size, size)
 
@@ -334,15 +384,15 @@ export function feltTexture(): THREE.CanvasTexture {
     const edge = ctx.createLinearGradient(x0, y0, x1, y1)
     // Darkest right under the nose of the cushion, where no light gets in at all, then a
     // long soft tail: a contact shadow and the penumbra beyond it.
-    edge.addColorStop(0, `rgba(0,0,0,${CUSHION_SHADE_STRENGTH})`)
-    edge.addColorStop(0.1, `rgba(0,0,0,${CUSHION_SHADE_STRENGTH * 0.72})`)
-    edge.addColorStop(0.4, `rgba(0,0,0,${CUSHION_SHADE_STRENGTH * 0.28})`)
+    edge.addColorStop(0, `rgba(0,0,0,${look.cushion})`)
+    edge.addColorStop(0.1, `rgba(0,0,0,${look.cushion * 0.72})`)
+    edge.addColorStop(0.4, `rgba(0,0,0,${look.cushion * 0.28})`)
     edge.addColorStop(1, 'rgba(0,0,0,0)')
     ctx.fillStyle = edge
     ctx.fillRect(x, y, w, h)
   }
-  const alongLength = (CUSHION_SHADE_MM / TABLE_LENGTH) * size
-  const alongWidth = (CUSHION_SHADE_MM / TABLE_WIDTH) * size
+  const alongLength = (look.cushionMm / TABLE_LENGTH) * size
+  const alongWidth = (look.cushionMm / TABLE_WIDTH) * size
   shade(0, 0, alongLength, 0, alongLength, size, 0, 0)
   shade(size, 0, size - alongLength, 0, alongLength, size, size - alongLength, 0)
   shade(0, 0, 0, alongWidth, size, alongWidth, 0, 0)
@@ -362,12 +412,13 @@ export function feltTexture(): THREE.CanvasTexture {
     [TABLE_LENGTH / 2, 0],
     [TABLE_LENGTH / 2, TABLE_WIDTH]
   ] as const) {
-    const dark = ctx.createRadialGradient(px, py, 20, px, py, POCKET_SHADE_MM)
-    dark.addColorStop(0, `rgba(0,0,0,${POCKET_SHADE_STRENGTH})`)
-    dark.addColorStop(0.45, `rgba(0,0,0,${POCKET_SHADE_STRENGTH * 0.4})`)
+    if (look.pocketMm <= 0) break
+    const dark = ctx.createRadialGradient(px, py, 20, px, py, look.pocketMm)
+    dark.addColorStop(0, `rgba(0,0,0,${look.pocket})`)
+    dark.addColorStop(0.45, `rgba(0,0,0,${look.pocket * 0.4})`)
     dark.addColorStop(1, 'rgba(0,0,0,0)')
     ctx.fillStyle = dark
-    ctx.fillRect(px - POCKET_SHADE_MM, py - POCKET_SHADE_MM, POCKET_SHADE_MM * 2, POCKET_SHADE_MM * 2)
+    ctx.fillRect(px - look.pocketMm, py - look.pocketMm, look.pocketMm * 2, look.pocketMm * 2)
   }
   ctx.restore()
 
@@ -401,13 +452,13 @@ export function feltTexture(): THREE.CanvasTexture {
   tex.wrapS = THREE.ClampToEdgeWrapping
   tex.wrapT = THREE.ClampToEdgeWrapping
   tex.anisotropy = tableAniso
-  tableCache.set('felt', tex)
+  tableCache.set(key, tex)
   return tex
 }
 
-/** How many times the fibre tile repeats along the table and across it: one tile is about 130mm of cloth. */
-export const CLOTH_DETAIL_REPEAT_U = 27
-export const CLOTH_DETAIL_REPEAT_V = 14
+/** How many times the fibre tile repeats along the table and across it: one tile is about 270mm of cloth, so the grain reads from the playing view. */
+export const CLOTH_DETAIL_REPEAT_U = 13
+export const CLOTH_DETAIL_REPEAT_V = 7
 
 /**
  * The fibre of the cloth: a small grey tile, repeated, that the bed's colour is multiplied by.
@@ -479,6 +530,24 @@ export function clothDetailTexture(): THREE.CanvasTexture {
         ctx.stroke()
       })
     }
+    // The grain: every pixel a little lighter or darker than its neighbour, in two sizes, the
+    // speckled fleck a real napped wool cloth shows up close. Noise per pixel and per 2x2
+    // block wraps by construction, so the tile has no seam.
+    const img = ctx.getImageData(0, 0, size, size)
+    const px = img.data
+    const coarse = new Float32Array((size / 2) * (size / 2))
+    for (let i = 0; i < coarse.length; i++) coarse[i] = rand() - 0.5
+    const clump = new Float32Array((size / 4) * (size / 4))
+    for (let i = 0; i < clump.length; i++) clump[i] = rand() - 0.5
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const o = (y * size + x) * 4
+        const fleck =
+          (rand() - 0.5) * 46 + coarse[(y >> 1) * (size / 2) + (x >> 1)]! * 30 + clump[(y >> 2) * (size / 4) + (x >> 2)]! * 26
+        for (let c = 0; c < 3; c++) px[o + c] = Math.max(0, Math.min(255, px[o + c]! + fleck))
+      }
+    }
+    ctx.putImageData(img, 0, 0)
     return { canvas }
   })
   return tex
@@ -535,7 +604,7 @@ export function feltNormalTexture(): THREE.CanvasTexture {
  * neutral is what guarantees the cushion and the bed share one hue exactly.
  */
 export function cushionFeltTexture(): THREE.CanvasTexture {
-  const sizeByName: Record<string, number> = { low: 256, medium: 512, high: 1024 }
+  const sizeByName: Record<string, number> = { low: 256, medium: 1024, high: 1024 }
   const size = sizeByName[qualityConfig().name] ?? 512
   return canvasTexture(`cushion-felt-${size}`, () => {
     const { canvas, ctx } = newScratchCanvas(size)
@@ -664,7 +733,7 @@ function worley(pu: number, pv: number, cells: number, seed: number): { f1: numb
 }
 
 export function leatherNormalTexture(): THREE.CanvasTexture {
-  const sizeByName: Record<string, number> = { low: 0, medium: 256, high: 512 }
+  const sizeByName: Record<string, number> = { low: 0, medium: 512, high: 512 }
   const size = sizeByName[qualityConfig().name] ?? 256
   return canvasTexture('leather-normal', () => {
     if (!size) return { canvas: newScratchCanvas(4).canvas }

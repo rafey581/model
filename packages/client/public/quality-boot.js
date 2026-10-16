@@ -6,8 +6,11 @@
  * The detection ladder below is mirrored verbatim in src/game/qualityConfig.ts
  * (detectQualityTier) — keep the two comment blocks identical when either changes:
  *
- *   - mobile user agent .................... low
- *   - phone-sized screen with dpr >= 2 ..... low   (webviews and small windows)
+ *   - mobile user agent on <= 4 cores or
+ *     <= 3GB ............................... low
+ *   - mobile user agent .................... medium (the table's light is baked, so a
+ *                                                      phone GPU can afford 60fps)
+ *   - phone-sized screen with dpr >= 2 ..... medium (webviews and small windows)
  *   - hardwareConcurrency <= 4 or
  *     deviceMemory <= 4 .................... medium
  *   - integrated or software GPU ........... medium  (cores say nothing about fill rate)
@@ -50,8 +53,9 @@
       var mem = navigator.deviceMemory || 8
       var dpr = window.devicePixelRatio || 1
       var smallScreen = window.screen ? Math.min(window.screen.width, window.screen.height) < 760 : false
-      if (mobileUA) tier = 'low'
-      else if (smallScreen && dpr >= 2) tier = 'low'
+      if (mobileUA && (cores <= 4 || mem <= 3)) tier = 'low'
+      else if (mobileUA) tier = 'medium'
+      else if (smallScreen && dpr >= 2) tier = 'medium'
       else if (cores <= 4 || mem <= 4) tier = 'medium'
       else if (weakGpu()) tier = 'medium'
       else if (dpr >= 2.5 && (cores <= 6 || mem <= 6)) tier = 'medium'

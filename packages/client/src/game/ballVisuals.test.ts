@@ -41,7 +41,7 @@ describe('cue ball material', () => {
   it('carries the specified lacquer values', () => {
     const material = createCueBallMaterial()
     // Albedo lives in the spin-dot map; material.color stays white as the map multiplier.
-    expect(CUE_BALL_COLOR).toBe(0xf4f0e4)
+    expect(CUE_BALL_COLOR).toBe(0xece2cc)
     expect(material.color.getHex()).toBe(0xffffff)
     expect(material.map).toBeTruthy()
     expect(material.roughness).toBe(CUE_BALL_ROUGHNESS)

@@ -23,7 +23,7 @@ const CUE_SLIDER_TRAVEL = 0.8
 /** How long the cue on the slider takes to spring back up after a shot, in milliseconds. Matches the stylesheet. */
 const RAIL_STRIKE_MS = 380
 import {
-  pointerToSpin,
+  clampToDial,
   snapToCentre,
   spinAdjust as spinAdjustLocal,
   spinToPixels,
@@ -404,6 +404,11 @@ export interface Hud {
    * the widget and the arrow keys in step without either knowing the other.
    */
   setSpinSink: (sink: (spin: SpinPoint) => void) => void
+  /**
+   * Told when the spin control is pressed and let go, so the table can lean in on the
+   * cue ball and show the strike point on it for as long as the control is held.
+   */
+  setSpinHoldListener: (listener: ((held: boolean) => void) | null) => void
   /**
    * The avatar frame of whoever is at the table, or null when nobody is. Phase H2's
    * turn timer hangs off this rather than re-finding it in the document.
@@ -823,30 +828,42 @@ export function createHud(): Hud {
     dialShown = { x: spin.x, y: spin.y }
   }
 
+  /** Told when the control is pressed and let go (see `setSpinHoldListener`). */
+  let spinHoldListener: ((held: boolean) => void) | null = null
+  /** Where the press started, and the spin it started from: the drag moves the dot from there. */
+  let dragFrom = { x: 0, y: 0 }
+  let dragSpin: SpinPoint = spinCentre()
+  /**
+   * How far a finger travels for the dot to cross from the centre to the rim, as a share
+   * of the drawn ball's radius. More than the ball itself, so a thumb sets spin finely and
+   * is not hidden by the very dot it is moving.
+   */
+  const DRAG_TRAVEL = 1.7
+
+  const setHeld = (held: boolean): void => {
+    setFlag(spinDial, 'is-held', held)
+    spinHoldListener?.(held)
+  }
+
   const onDialPointerDown = (event: PointerEvent): void => {
     event.preventDefault()
     dialDriving = true
     spinDial.setPointerCapture(event.pointerId)
-    const rect = dialBall.getBoundingClientRect()
-    const next = snapToCentre(
-      pointerToSpin(event.clientX, event.clientY, rect.left + rect.width / 2, rect.top + rect.height / 2, dialRadius())
-    )
-    if (spinChanged(dialShown, next)) {
-      renderDial(next)
-      spinSink(next)
-    }
+    // A press holds the view on the cue ball and does not move the dot; dragging moves it
+    // from wherever it already was, so holding the control to look is never a change of
+    // spin by accident.
+    dragFrom = { x: event.clientX, y: event.clientY }
+    dragSpin = { x: dialShown.x, y: dialShown.y }
+    setHeld(true)
   }
   const onDialPointerMove = (event: PointerEvent): void => {
     if (!dialDriving) return
     event.preventDefault()
-    const rect = dialBall.getBoundingClientRect()
-    const next = pointerToSpin(
-      event.clientX,
-      event.clientY,
-      rect.left + rect.width / 2,
-      rect.top + rect.height / 2,
-      dialRadius()
-    )
+    const travel = Math.max(1, dialRadius() * DRAG_TRAVEL)
+    const next = clampToDial({
+      x: dragSpin.x + (event.clientX - dragFrom.x) / travel,
+      y: dragSpin.y - (event.clientY - dragFrom.y) / travel
+    })
     if (spinChanged(dialShown, next)) {
       renderDial(next)
       spinSink(next)
@@ -856,11 +873,26 @@ export function createHud(): Hud {
     if (!dialDriving) return
     dialDriving = false
     if (spinDial.hasPointerCapture(event.pointerId)) spinDial.releasePointerCapture(event.pointerId)
+    // A drag that ends within a hair of the middle is "no spin", not a dot a pixel off.
+    const settled = snapToCentre(dialShown)
+    if (spinChanged(dialShown, settled)) {
+      renderDial(settled)
+      spinSink(settled)
+    }
+    setHeld(false)
   }
+  // A double tap puts the strike back in the centre, the touch twin of the Home key.
+  spinDial.addEventListener('dblclick', (event) => {
+    event.preventDefault()
+    const centre = spinCentre()
+    renderDial(centre)
+    spinSink(centre)
+  })
   spinDial.addEventListener('pointerdown', onDialPointerDown)
   spinDial.addEventListener('pointermove', onDialPointerMove)
   spinDial.addEventListener('pointerup', endDialDrag)
   spinDial.addEventListener('pointercancel', endDialDrag)
+  spinDial.addEventListener('lostpointercapture', endDialDrag)
   // Keyboard nudges on the same axes the arrow keys use one level up, for a
   // dial that has focus: W/S vertical, left/right side, Home back to centre.
   const onDialKeyDown = (event: KeyboardEvent): void => {
@@ -1046,6 +1078,9 @@ export function createHud(): Hud {
     setSpinSink: (sink) => {
       spinSink = sink
     },
+    setSpinHoldListener: (listener) => {
+      spinHoldListener = listener
+    },
     /**
      * Raises a centre-screen banner for a key event and retires it itself.
      *
@@ -1082,7 +1117,8 @@ export function createHud(): Hud {
             banner.classList.add('is-out')
             window.setTimeout(() => banner.remove(), 450)
           },
-          detail ? 2200 : 1600
+          // A foul carries a reason to read as well as a headline, so it stays up longer.
+          tone === 'bad' ? 3200 : detail ? 2200 : 1600
         )
       })
     },

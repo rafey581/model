@@ -272,7 +272,7 @@ export function computeAimGuide(
  * instead — a broadcast shot line is about five pixels of solid colour, crisp
  * rather than glowing or feathered.
  */
-export const AIM_LINE_TARGET_PX = 5.6
+export const AIM_LINE_TARGET_PX = 5
 
 /** The thinnest a line is ever drawn, in millimetres: below this it aliases. */
 export const AIM_LINE_MIN_MM = 2.2

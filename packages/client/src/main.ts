@@ -39,9 +39,10 @@ import { USE_NEW_SFX } from './lobby/flag.js'
 import { emitSfx } from './sfx/sfxEvents.js'
 import { replaySfx } from './sfx/replayAdapter.js'
 import { SHOT_PLAYBACK_SPEED } from './game/playback.js'
-import { installHudMenu, type HudMenu } from './game/hudMenu.js'
+import { installHudMenu, releaseLandscape, requestLandscape, type HudMenu } from './game/hudMenu.js'
 import { ShotPlayer } from './game/playback.js'
 import type { PlaybackBall } from './game/playback.js'
+import { rateShot, type Highlight } from './game/highlight.js'
 import { renderAuthScreen } from './auth.js'
 import {
   confirmPlacement,
@@ -214,6 +215,17 @@ let recapStart: PlaybackBall[] = []
 let recapHold = 0
 let recapDone: (() => void) | null = null
 const FINAL_SHOT_HOLD_SECONDS = 1.1
+/**
+ * A hard shot just potted, waiting for its own replay to finish before it is shown again
+ * (see `highlight.ts`). Picture only, like the final-shot recap it shares a player with.
+ */
+let pendingHighlight: { highlight: Highlight; playback: ShotPlayback; start: PlaybackBall[] } | null = null
+/** How long a highlight stands still before and after it plays: shorter than the final shot's. */
+const HIGHLIGHT_HOLD_SECONDS = 0.5
+/** The longest a highlight may hold the table, however long the shot itself was. */
+const HIGHLIGHT_MAX_MS = 9000
+/** Ends the highlight on screen and reports its shot done; null when none is playing. */
+let skipHighlight: (() => void) | null = null
 /** The recap runs slower than the shot did, so it can be read. */
 const FINAL_SHOT_SPEED = 0.6
 /** The emblem on the result screen. */
@@ -249,6 +261,8 @@ let queuedUpdate: GameUpdatePayload | null = null
 let shotInFlight = false
 /** Pots whose sound was deferred until the replay reached the drop. */
 let deferredPots: number[] = []
+/** Whether the held pots came from a foul stroke, which scores them for nobody. */
+let deferredPotsFoul = false
 /**
  * The shot's verdict (foul or frame win) held back until the replay reaches the end of
  * the shot. A verdict describes what the cue ball did, so announcing it while the balls
@@ -319,7 +333,7 @@ let matchPrizeCredits = 0
  * quality tier's own `renderScale` is the top of its range.
  */
 const DPR_CAP_DESKTOP = 2
-const DPR_CAP_MOBILE = 1.5
+const DPR_CAP_MOBILE = 2
 /**
  * The same ceiling on the High level, for a phone.
  *
@@ -974,6 +988,33 @@ function ballName(id: number): string {
   return BALL_NAMES[id] ?? `ball ${id}`
 }
 
+/**
+ * The foul's headline names who the points go to. A foul never costs the striker
+ * anything: its value is added to the other player's score, so "-4" read as points
+ * lost by the player who fouled, which is not what happens.
+ */
+function foulHeadline(penalty: number, bySeat: number | undefined): string {
+  const receiver = bySeat === undefined ? 'opponent' : seatName(1 - bySeat)
+  return `FOUL \u2022 +${penalty} TO ${receiver.toUpperCase()}`
+}
+
+/** The rules engine's short reason, said the way a referee would say it. */
+const FOUL_REASON_TEXT: Record<string, string> = {
+  'cue ball potted': 'Cue ball went into a pocket',
+  'no legal contact': 'Cue ball missed every ball',
+  'wrong ball first': 'Hit the wrong ball first',
+  'wrong ball potted': 'Potted a ball that was not on',
+  'turn timeout': 'Shot clock ran out',
+  foul: 'Foul stroke'
+}
+
+/** Why it was a foul, and why it is worth what it is: 4 at least, more for a higher ball. */
+function foulDetail(reason: string | undefined): string {
+  const known = reason ? FOUL_REASON_TEXT[reason] : undefined
+  const text = known ?? (reason ? reason.charAt(0).toUpperCase() + reason.slice(1) : 'Foul stroke')
+  return `${text} \u00b7 penalty is 4, or the highest ball involved`
+}
+
 function seatName(seat: number | undefined): string {
   if (seat === undefined) return 'A player'
   return seat === mySeat ? 'You' : opponentName()
@@ -1179,7 +1220,10 @@ function challengePopup(challenge: ChallengeDto): HTMLElement {
   const accept = el('button', 'challenge-btn challenge-btn--primary', 'Accept') as HTMLButtonElement
   accept.type = 'button'
   accept.disabled = challengeBusy
-  accept.onclick = () => void acceptChallenge(challenge)
+  accept.onclick = () => {
+    requestLandscape()
+    void acceptChallenge(challenge)
+  }
   row.append(decline, accept)
   card.appendChild(row)
   overlay.appendChild(card)
@@ -1543,6 +1587,8 @@ function tableSettled(): Promise<void> {
  * result is already known by the time this starts.
  */
 function playFinalShotRecap(): Promise<void> {
+  // A highlight still on the table gives way to the match's last shot.
+  recapDone?.()
   const recap = lastShotRecap
   if (!recap || !scene3d || !frame) return Promise.resolve()
   return new Promise((resolve) => {
@@ -1564,6 +1610,53 @@ function playFinalShotRecap(): Promise<void> {
     // Whatever happens to the picture, the result is never held up for long.
     window.setTimeout(done, FINAL_SHOT_WAIT_MS)
   })
+}
+
+/**
+ * Shows a hard pot once more, slowed down, the moment its replay has finished.
+ *
+ * The same picture-only player the final-shot recap uses: the recording is played back
+ * from the positions it started from, the table goes back to where the shot left it,
+ * and only then is the shot reported done, which is what starts the next turn's clock.
+ * A tap anywhere skips it, and it never holds the table for long.
+ */
+function playHighlight(entry: { highlight: Highlight; playback: ShotPlayback; start: PlaybackBall[] }): void {
+  if (!scene3d || !frame) {
+    finishShot()
+    return
+  }
+  let finished = false
+  const matchAtStart = activeMatchId
+  const skip = (event: Event): void => {
+    // The tap that skips is not also the start of an aim. Off the table (the player has
+    // left the match) the tap is left alone and only clears the highlight away.
+    if (activeMatchId === matchAtStart) {
+      event.preventDefault()
+      event.stopPropagation()
+    }
+    done()
+  }
+  const done = (): void => {
+    if (finished) return
+    finished = true
+    window.clearTimeout(backstop)
+    document.removeEventListener('pointerdown', skip, true)
+    skipHighlight = null
+    recapPlayer = null
+    recapDone = null
+    scene3d?.planShotCamera(null)
+    // Reported only to the match it belongs to.
+    if (activeMatchId === matchAtStart) finishShot()
+  }
+  recapStart = entry.start.map((ball) => ({ ...ball }))
+  recapPlayer = new ShotPlayer(entry.playback, entry.start.map((ball) => ({ ...ball })))
+  recapHold = HIGHLIGHT_HOLD_SECONDS
+  recapDone = done
+  skipHighlight = done
+  scene3d.planShotCamera(entry.playback)
+  hud?.flashEvent(`GREAT SHOT \u2022 ${entry.highlight.label}`, 'good', 'Replay \u00b7 tap to skip')
+  document.addEventListener('pointerdown', skip, true)
+  const backstop = window.setTimeout(done, HIGHLIGHT_MAX_MS)
 }
 
 async function finishMatch(winnerSeat: number, reason?: string): Promise<void> {
@@ -1668,6 +1761,8 @@ function render(): void {
   app.innerHTML = ''
   hud = null
   document.body.classList.remove('game-mode', 'home-mode', 'practice-mode', 'tour-mode')
+  // Out of a match the phone may be held upright again: the lobby is laid out for it.
+  if (!activeMatchId) releaseLandscape()
   // The tournaments list and a tournament's bracket are dressed as the tournament hall.
   // A class on the page and nothing else: the screens and what they do are unchanged.
   if (!activeMatchId && (activeTournamentId || activeScreen === 'tournaments')) document.body.classList.add('tour-mode')
@@ -2822,6 +2917,9 @@ function enterMatch(matchId: string, isPractice = false): void {
   activeMatchId = matchId
   // A new match has no last shot yet, and no recap left over from the one before.
   lastShotRecap = null
+  pendingHighlight = null
+  // A highlight left over from the last match is cleared away without reporting anything.
+  skipHighlight?.()
   recapPlayer = null
   recapDone = null
   activeMatchIsPractice = isPractice
@@ -3254,6 +3352,7 @@ function renderGame(): void {
     // middle-button drag. Hovering the pointer over the table never rotates anything —
     // it aims the cue, and the camera stands exactly where the last shot left it.
     onOrbit: (pixels) => scene3d?.orbitBy(pixels * CAMERA_ORBIT_PER_PIXEL),
+    onPull: (pixels) => scene3d?.pullViewBy(pixels),
     // The visit is only playable when the table has settled, which is the same
     // condition that draws the cue. Firing while a shot is still animating used to
     // be accepted by the server and cut the animation dead.
@@ -3309,6 +3408,9 @@ function renderGame(): void {
     hud?.setSpin({ x: spin.x, y: spin.y })
     spinLabel.textContent = `Spin: ${spin.x.toFixed(1)} / ${spin.y.toFixed(1)}`
   })
+  // Holding the spin control leans the camera in on the cue ball and draws the strike
+  // point on it, for as long as it is held. The picture only: spin is set as above.
+  hud?.setSpinHoldListener((held) => scene3d?.setSpinFocus(held))
   hud?.setPower(0)
 }
 
@@ -3346,6 +3448,9 @@ function handleGameUpdate(data: GameUpdatePayload): void {
   // `shotInFlight` is the single "unfinished shot" flag: it stays set from the
   // moment playback starts until the server has been told the shot finished, and
   // it is also set when there is no pre-shot snapshot to animate.
+  // A highlight gives way at once to the next shot: the replay it is showing has already
+  // been watched once, and the new one has not.
+  if (shotInFlight && skipHighlight) skipHighlight()
   if (shotInFlight) {
     queuedUpdate = data
     return
@@ -3472,12 +3577,15 @@ function applyGameUpdate(data: GameUpdatePayload): void {
   const verdictDeferred = shotPlayer !== null
 
   const potted: number[] = []
+  // A ball potted in a foul stroke scores nothing for the striker, so its banner must
+  // not read as points: the foul banner that follows is the whole verdict.
+  const strokeFoul = (data.events ?? []).some((ev) => ev.type === 'FOUL')
   for (const ev of data.events ?? []) {
     if (ev.type === 'BALL_POTTED') {
       const d = ev.data as { ballId: number }
       potted.push(d.ballId)
     } else if (ev.type === 'FOUL') {
-      const d = ev.data as { penalty: number; reason?: string }
+      const d = ev.data as { penalty: number; reason?: string; bySeat?: number }
       // The buzzer waits with the message. Hearing a foul announced over the sound of
       // balls still rolling tells the striker the outcome before they have watched the
       // shot that caused it.
@@ -3486,7 +3594,7 @@ function applyGameUpdate(data: GameUpdatePayload): void {
         else playFoul()
         // Announced once, centre-screen: the penalty is the headline and the reason sits
         // under it. It used to be said twice, here and again as a toast in the corner.
-        hud?.flashEvent(`FOUL  \u2212${d.penalty}`, 'bad', d.reason)
+        hud?.flashEvent(foulHeadline(d.penalty, d.bySeat), 'bad', foulDetail(d.reason))
       }
       if (verdictDeferred) deferredVerdict.push(show)
       else show()
@@ -3511,12 +3619,21 @@ function applyGameUpdate(data: GameUpdatePayload): void {
   if (!verdictDeferred && heldVerdict.length) {
     for (const show of heldVerdict) show()
   }
+  // A hard pot is shown again once its replay is over. Only a legal stroke that scored,
+  // and never the one that ends the frame: that has a recap of its own at the end.
+  pendingHighlight = null
+  const frameEnded = (data.events ?? []).some((ev) => ev.type === 'FRAME_END')
+  if (shotPlayer && lastShotRecap && !strokeFoul && !frameEnded && potted.length) {
+    const highlight = rateShot(lastShotRecap.start, lastShotRecap.playback, potted)
+    if (highlight) pendingHighlight = { highlight, playback: lastShotRecap.playback, start: lastShotRecap.start }
+  }
   if (potted.length) {
     if (shotPlayer) {
       // Hold the pot feedback until the replay actually drops the ball.
       deferredPots = potted
+      deferredPotsFoul = strokeFoul
     } else {
-      announcePot(potted)
+      announcePot(potted, strokeFoul)
     }
   }
   updateHud()
@@ -3529,7 +3646,7 @@ function applyGameUpdate(data: GameUpdatePayload): void {
  * sounds like, so hearing them before the ball reaches the pocket gives the
  * result away ahead of the animation that explains it.
  */
-function announcePot(ids: number[]): void {
+function announcePot(ids: number[], foul = false): void {
   if (ids.length === 0) return
   // The procedural effects play the pocket themselves, from the replay, so the old blips
   // stand down rather than sound on top of them. Off, they play exactly as they did.
@@ -3538,6 +3655,7 @@ function announcePot(ids: number[]): void {
     playPot(ids.length)
   }
   toast(`Potted: ${ids.map(ballName).join(', ')}`)
+  if (foul) return
   // The centre-screen banner carries the score the pot is worth, so the moment
   // lands as a number as well as a sound: reds one each, colours their own value.
   const points = ids.reduce((sum, id) => sum + (id >= 1 && id <= 15 ? 1 : (COLOR_VALUES[id] ?? 0)), 0)
@@ -3681,8 +3799,8 @@ function handleSocketEvents(socket: Socket): void {
           const d = ev.data as { ballId: number }
           toast(`Missed: potted ${ballName(d.ballId)}`)
         } else if (ev.type === 'FOUL') {
-          const d = ev.data as { penalty: number; reason?: string }
-          toast(d.reason ? `Missed: foul — ${d.reason} (-${d.penalty})` : `Missed: foul (-${d.penalty})`, 'error')
+          const d = ev.data as { penalty: number; reason?: string; bySeat?: number }
+          toast(`Missed: ${foulHeadline(d.penalty, d.bySeat).toLowerCase()} — ${foulDetail(d.reason)}`, 'error')
         } else if (ev.type === 'FRAME_END') {
           const d = ev.data as { winnerSeat: number }
           toast(`Missed: frame won by ${seatName(d.winnerSeat)}`)
@@ -4207,7 +4325,7 @@ function stepShotPlayback(target: FrameSnapshotData, dtSeconds: number): FrameSn
       const due = shotPlayer.takeDuePots()
       if (due.length) {
         const ids = deferredPots.filter((id) => due.includes(id))
-        announcePot(ids)
+        announcePot(ids, deferredPotsFoul)
         deferredPots = deferredPots.filter((id) => !due.includes(id))
       }
     }
@@ -4216,7 +4334,7 @@ function stepShotPlayback(target: FrameSnapshotData, dtSeconds: number): FrameSn
     }
     // A pot whose timestamp never arrived would otherwise be silently dropped.
     if (deferredPots.length) {
-      announcePot(deferredPots)
+      announcePot(deferredPots, deferredPotsFoul)
     }
     // The balls have stopped moving, so the shot's verdict can be reported now.
     if (deferredVerdict.length) {
@@ -4227,7 +4345,12 @@ function stepShotPlayback(target: FrameSnapshotData, dtSeconds: number): FrameSn
     shotPlayer = null
     deferredPots = []
     replaySfx?.shotEnded()
-    finishShot()
+    // A highlight plays before the shot is reported done, so the room holds the next
+    // turn's clock while it is on screen. Not when another shot is already waiting.
+    const highlight = pendingHighlight
+    pendingHighlight = null
+    if (highlight && !queuedUpdate) playHighlight(highlight)
+    else finishShot()
   }
 
   // This shot is done, so the table shows its settled state and any shot that was

@@ -10,6 +10,7 @@ import { renderFriends } from './friends.js'
 import { renderInvite } from './invite.js'
 import { api } from '../game/network.js'
 import { emitSfx } from '../sfx/sfxEvents.js'
+import { requestLandscape } from '../game/hudMenu.js'
 import { createShell, syncTabIndicator, tabToView, viewToTab } from './shell.js'
 import { createCasinoShell, renderCasinoHome, wantsCasinoLobby, type CasinoDestination } from './casino.js'
 import { defaultSetupState, renderSetup } from './setup.js'
@@ -186,6 +187,43 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
     scheduleIndicator()
   }
 
+  /**
+   * The wallet's two screens share one switch, so a deposit and a withdrawal are each one
+   * tap from the other in either lobby. The screens themselves, and what they send, are
+   * exactly the existing deposit and withdraw views.
+   */
+  const withWalletTabs = (active: 'deposit' | 'withdraw', screen: HTMLElement): HTMLElement => {
+    const tabs = document.createElement('div')
+    tabs.className = 'gl-wallet-tabs'
+    tabs.setAttribute('role', 'tablist')
+    const tab = (view: 'deposit' | 'withdraw', label: string): HTMLButtonElement => {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'gl-wallet-tab'
+      button.setAttribute('role', 'tab')
+      button.setAttribute('aria-selected', String(view === active))
+      button.textContent = label
+      button.onclick = () => {
+        if (state.view === view) return
+        state.view = view
+        if (view === 'deposit') {
+          state.deposit = null
+          void loadDepositView().then(paint)
+        } else {
+          state.withdraw = null
+          void loadWithdrawView().then(paint)
+        }
+        paint()
+      }
+      return button
+    }
+    tabs.append(tab('deposit', 'Deposit'), tab('withdraw', 'Withdraw'))
+    const head = screen.firstElementChild
+    if (head) head.after(tabs)
+    else screen.prepend(tabs)
+    return screen
+  }
+
   const buildScreen = (): HTMLElement => {
     if (state.view === 'home' && casino) {
       return renderCasinoHome(bridge, {
@@ -198,6 +236,7 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
           paint()
         },
         tournaments: () => bridge.openTournaments(),
+        openGames: () => goCasino('games'),
         history: state.history,
         userId: bridge.userId
       })
@@ -279,7 +318,7 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
       })
     }
     if (state.view === 'deposit') {
-      return renderDeposit(state.deposit, {
+      return withWalletTabs('deposit', renderDeposit(state.deposit, {
         onBack: () => {
           state.view = 'home'
           paint()
@@ -289,10 +328,10 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
           void loadDepositView().then(paint)
         },
         toast: (message, kind) => bridge.toast(message, kind)
-      })
+      }))
     }
     if (state.view === 'withdraw') {
-      return renderWithdraw(state.withdraw, {
+      return withWalletTabs('withdraw', renderWithdraw(state.withdraw, {
         walletBalance: bridge.walletBalance,
         onBack: () => {
           state.view = 'home'
@@ -303,7 +342,7 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
           void loadWithdrawView().then(paint)
         },
         toast: (message, kind) => bridge.toast(message, kind)
-      })
+      }))
     }
     if (state.view === 'friends') {
       return renderFriends({
@@ -370,6 +409,9 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
   const startMatch = async (): Promise<void> => {
     const { mode, difficulty, format, stakeTierId, opponent, friendUsername } = state.setup
     if (!mode || state.starting) return
+    // Still inside the tap, before anything is awaited: the only moment a phone may be
+    // turned sideways for the table.
+    requestLandscape()
     state.starting = true
     paint()
     try {

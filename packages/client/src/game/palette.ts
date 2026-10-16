@@ -10,7 +10,7 @@ import { BALL_IDS } from '@snooker/shared'
  * `#171717` against `0x1a1a1e`) and there was no reason to keep both.
  */
 export const BALL_COLORS: Record<number, number> = {
-  [BALL_IDS.CUE]: 0xf5f3e4,
+  [BALL_IDS.CUE]: 0xece2cc,
   [BALL_IDS.YELLOW]: 0xf4c430,
   [BALL_IDS.GREEN]: 0x1b7f46,
   [BALL_IDS.BROWN]: 0x8a4b23,
@@ -20,7 +20,7 @@ export const BALL_COLORS: Record<number, number> = {
 }
 
 /** Every red is the same red; snooker has no ball numbering to keep straight. */
-export const RED_BALL_COLOR = 0xd0201c
+export const RED_BALL_COLOR = 0xb3121b
 
 export function ballColor(id: number): number {
   return BALL_COLORS[id] ?? RED_BALL_COLOR

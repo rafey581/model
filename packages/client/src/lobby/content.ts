@@ -205,7 +205,7 @@ export const INVITE_COPY = {
   share: 'share',
   copied: 'copied to clipboard',
   copyFailed: 'could not copy — select it and copy manually',
-  shareText: (bonus: number) => `Join me on Snooker Arena. Sign up and play — I earn ${bonus} USDT when you finish your first match.`,
+  shareText: (bonus: number) => `Join me on SnookerX. Sign up and play — I earn ${bonus} USDT when you finish your first match.`,
   statInvited: 'INVITED',
   statPlayed: 'PLAYED',
   statEarned: 'EARNED',

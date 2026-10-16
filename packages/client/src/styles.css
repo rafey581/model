@@ -1395,6 +1395,28 @@ th {
   --banner-tone: #e7c768;
 }
 
+/* Phones held sideways: a short screen, so a tighter plate that still reads at arm's length. */
+@media (max-height: 520px) {
+  .event-banner-layer {
+    top: 30%;
+  }
+
+  .event-banner {
+    padding: 9px 30px 10px;
+  }
+
+  .event-banner-text {
+    font-size: clamp(16px, 4.6vh, 22px);
+    letter-spacing: 0.08em;
+  }
+
+  .event-banner-detail {
+    font-size: 12.5px;
+    color: rgba(240, 244, 248, 0.88);
+    max-width: 46ch;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .event-banner,
   .event-banner.is-out {
@@ -2619,6 +2641,44 @@ th {
   transform: translate(-50%, -50%);
   transition: opacity 220ms ease;
   pointer-events: none;
+}
+
+/*
+ * Held: the control is setting spin while the table leans in on the cue ball. It grows a
+ * little and takes a gold ring, so the thumb on it can feel that it is the one in charge.
+ */
+.spin-dial {
+  transition:
+    opacity 220ms ease,
+    transform 180ms cubic-bezier(0.2, 1.2, 0.35, 1),
+    box-shadow 180ms ease;
+}
+
+.spin-dial.is-held {
+  opacity: 1;
+  transform: scale(1.12);
+  box-shadow:
+    0 0 0 2px rgba(231, 199, 104, 0.9),
+    0 0 22px rgba(231, 199, 104, 0.45),
+    0 12px 28px rgba(0, 0, 0, 0.35);
+}
+
+/* A thumb's control on a touch screen: bigger, and a bigger dot to see under it. */
+@media (pointer: coarse) {
+  .spin-dial {
+    width: 96px;
+    height: 96px;
+  }
+
+  .spin-dial-ball {
+    width: 74px;
+    height: 74px;
+  }
+
+  .spin-dial-dot {
+    width: 16px;
+    height: 16px;
+  }
 }
 
 /**

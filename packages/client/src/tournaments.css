@@ -325,6 +325,99 @@ body.tour-mode .champ-name {
   }
 }
 
+/* ------------------------------------------------------------------ the phone
+ * No app bar over the hall on a phone: the page has its own way back, and the bar's
+ * balance, bell and avatar crowded the title. Headings get room to breathe, so a title
+ * that wraps never runs into the line under it, and every row keeps its button whole.
+ */
+@media (max-width: 1023px) {
+  body.tour-mode .lobby-header {
+    display: none;
+  }
+
+  body.tour-mode .screen-page {
+    padding: calc(14px + env(safe-area-inset-top, 0px)) max(14px, env(safe-area-inset-right, 0px))
+      calc(24px + env(safe-area-inset-bottom, 0px)) max(14px, env(safe-area-inset-left, 0px));
+  }
+
+  body.tour-mode .screen-head {
+    margin-bottom: 14px;
+  }
+
+  body.tour-mode .screen-title {
+    font-size: clamp(26px, 8vw, 34px);
+    line-height: 1.1;
+  }
+
+  body.tour-mode .screen-head .muted,
+  body.tour-mode .screen-head p {
+    margin: 6px 0 10px;
+    line-height: 1.4;
+  }
+
+  body.tour-mode .card {
+    padding: 16px 14px;
+    border-radius: 16px;
+  }
+
+  body.tour-mode .card h3 {
+    margin: 0 0 8px;
+    font-size: 18px;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+
+  body.tour-mode .card .muted {
+    display: block;
+    margin: 0 0 14px;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  body.tour-mode .card > button {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  body.tour-mode .subhead {
+    margin: 16px 0 8px;
+    font-size: 11px;
+  }
+
+  body.tour-mode .table-row {
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  body.tour-mode .table-row > :first-child {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  body.tour-mode .table-row > :first-child * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  body.tour-mode .table-row button {
+    flex: 0 0 auto;
+    min-height: 40px;
+    padding: 8px 18px;
+  }
+
+  body.tour-mode .table-row:hover {
+    transform: none;
+  }
+
+  body.tour-mode .lobby-hero-content h2 {
+    line-height: 1.15;
+  }
+
+  body.tour-mode .lobby-hero-content p {
+    line-height: 1.4;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   body.tour-mode .screen-page,
   body.tour-mode .lobby-hero {

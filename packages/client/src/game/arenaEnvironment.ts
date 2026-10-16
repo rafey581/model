@@ -1545,7 +1545,11 @@ export const STUDIO_ROOM = true
 /** The room, in millimetres from the table's centre: how far each wall stands, and how tall. */
 const STUDIO_HALF_LENGTH = 7000
 const STUDIO_HALF_WIDTH = 5400
-const STUDIO_WALL_HEIGHT = 2400
+/**
+ * The wall is a barrier, not a room: low enough that the seating rising behind it is in
+ * the picture from the cue view, the way an arena's floor is walled off from its stands.
+ */
+const STUDIO_WALL_HEIGHT = 1500
 /**
  * The sponsors' band: how tall it is, and how high its foot is off the floor. Low, just
  * above the height of the table, so from behind the cue ball it runs along the far end of
@@ -1562,7 +1566,32 @@ const STUDIO_BAND_TILE_MM = 6400
  */
 const STUDIO_BOARD_WIDTH = 1800
 const STUDIO_BOARD_HEIGHT = 760
-const STUDIO_BOARD_MID = 1860
+/** Stood on top of the barrier, a screen at the front of the stand behind it. */
+const STUDIO_BOARD_MID = STUDIO_WALL_HEIGHT + STUDIO_BOARD_HEIGHT / 2 + 20
+
+/**
+ * The stands behind the barrier: rows of seats climbing away from the floor on all four
+ * sides, the tournament-hall look of a world final. Kept in the dark: the light is on the
+ * table, and the seats are there to be made out, not looked at.
+ */
+const STAND_ROWS = 14
+/** How far each row steps back and up, in millimetres. */
+const STAND_ROW_DEPTH = 820
+const STAND_ROW_RISE = 400
+/** The first row: its distance behind the barrier, and how far its floor is below the barrier's top. */
+const STAND_FIRST_GAP = 260
+const STAND_FIRST_BELOW_TOP = 420
+/** The seat pitch along a row, and every how many seats an aisle is left. */
+const STAND_SEAT_PITCH = 560
+const STAND_AISLE_EVERY = 14
+/** The two colours of the seat blocks, and the step concrete. */
+const STAND_SEAT_COLORS = ['#3c0d17', '#0f1d45']
+const STAND_STEP_COLOR = '#0a0d16'
+/** How much darker the top row is than the front one, as a share of its colour. */
+const STAND_TOP_DARKEN = 0.6
+/** The dark above the stands, and the haze that settles over the far rows. */
+const ARENA_VOID_COLOR = '#03050b'
+const ARENA_HAZE_COLOR = '#070a14'
 const STUDIO_SPONSORS = ['SNOOKERX', 'WORLD SNOOKER', 'LIVE ON STREAM', 'CHAMPIONSHIP']
 
 function studioTexture(ctx: CanvasRenderingContext2D, repeatX: boolean, name: string): THREE.CanvasTexture {
@@ -1843,6 +1872,19 @@ function buildStudio(cfg: ArenaConfig, budget: ArenaBudget): THREE.Group {
   board.name = 'studio-board'
   group.add(board)
 
+  // A lit edge along the top of every wall, the strip that marks an arena's barrier.
+  const edgeMat = new THREE.MeshBasicMaterial({ color: '#4f86ff', transparent: true, opacity: 0.55 })
+  for (const [x, z, length, turn] of walls) {
+    const strip = new THREE.Mesh(new THREE.PlaneGeometry(length, 22), edgeMat)
+    const inward = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), turn)
+    strip.position.set(x + inward.x * 4, floor + STUDIO_WALL_HEIGHT - 11, z + inward.z * 4)
+    strip.rotation.y = turn
+    strip.name = 'studio-wall-edge'
+    group.add(strip)
+  }
+
+  group.add(buildStudioStands(floor))
+
   // The table's shadow on the carpet, just above it.
   const shadow = new THREE.Mesh(
     new THREE.PlaneGeometry(5400, 3400),
@@ -1858,6 +1900,120 @@ function buildStudio(cfg: ArenaConfig, budget: ArenaBudget): THREE.Group {
   shadow.renderOrder = -2
   shadow.name = 'studio-floor-shadow'
   group.add(shadow)
+  return group
+}
+
+/**
+ * One seat: a pan and a back, as one geometry, facing +z (towards the table once placed).
+ */
+function standSeatGeometry(): THREE.BufferGeometry {
+  const pan = new THREE.BoxGeometry(460, 70, 400)
+  pan.translate(0, 420, 0)
+  const back = new THREE.BoxGeometry(460, 460, 60)
+  back.translate(0, 640, -190)
+  const legs = new THREE.BoxGeometry(380, 380, 40)
+  legs.translate(0, 190, -60)
+  const merged = mergeGeometries([pan.toNonIndexed(), back.toNonIndexed(), legs.toNonIndexed()], false)
+  pan.dispose()
+  back.dispose()
+  legs.dispose()
+  return merged ?? new THREE.BoxGeometry(460, 600, 400)
+}
+
+/**
+ * The stands on all four sides: stepped concrete, and on every step a row of seats in
+ * blocks of two colours with an aisle every few seats. One merged mesh for the steps and
+ * one instanced mesh for every seat, both unlit and dark, so the whole bowl is two draw
+ * calls and no lighting cost. Each row is a little darker than the one in front of it, and
+ * the haze over the far rows (the scene's fog) finishes the fade into the dark above.
+ */
+function buildStudioStands(floor: number): THREE.Group {
+  const group = new THREE.Group()
+  group.name = 'studio-stands'
+  const top = floor + STUDIO_WALL_HEIGHT
+
+  // The four sides, each as: the wall's position along its normal, its half-length, and the
+  // turn that faces its seats at the table. The long sides run through the corners so the
+  // bowl has no gaps; the end stands fit between them.
+  type Side = { normal: THREE.Vector3; wall: number; half: (row: number) => number; turn: number }
+  const longHalf = (row: number): number => STUDIO_HALF_LENGTH + STAND_FIRST_GAP + (row + 1) * STAND_ROW_DEPTH
+  const sides: Side[] = [
+    { normal: new THREE.Vector3(0, 0, -1), wall: STUDIO_HALF_WIDTH, half: longHalf, turn: 0 },
+    { normal: new THREE.Vector3(0, 0, 1), wall: STUDIO_HALF_WIDTH, half: longHalf, turn: Math.PI },
+    { normal: new THREE.Vector3(-1, 0, 0), wall: STUDIO_HALF_LENGTH, half: () => STUDIO_HALF_WIDTH, turn: Math.PI / 2 },
+    { normal: new THREE.Vector3(1, 0, 0), wall: STUDIO_HALF_LENGTH, half: () => STUDIO_HALF_WIDTH, turn: -Math.PI / 2 }
+  ]
+
+  const stepMat = new THREE.MeshBasicMaterial({ color: STAND_STEP_COLOR })
+  stepMat.name = 'stand-step'
+  const steps = new THREE.Group()
+
+  interface SeatSpot {
+    x: number
+    y: number
+    z: number
+    turn: number
+    row: number
+    block: number
+  }
+  const spots: SeatSpot[] = []
+  for (const side of sides) {
+    for (let row = 0; row < STAND_ROWS; row++) {
+      const out = side.wall + STAND_FIRST_GAP + row * STAND_ROW_DEPTH
+      const stepTop = top - STAND_FIRST_BELOW_TOP + row * STAND_ROW_RISE
+      const half = side.half(row)
+      // The step: from the floor up to this row's tread, one row deep.
+      const height = stepTop - floor
+      const step = new THREE.Mesh(new THREE.BoxGeometry(half * 2, height, STAND_ROW_DEPTH), stepMat)
+      const centre = side.normal.clone().multiplyScalar(-(out + STAND_ROW_DEPTH / 2))
+      step.position.set(centre.x, floor + height / 2, centre.z)
+      step.rotation.y = side.turn
+      steps.add(step)
+      // The seats along it, set back from the step's front edge.
+      const count = Math.floor((half * 2) / STAND_SEAT_PITCH)
+      const start = -((count - 1) * STAND_SEAT_PITCH) / 2
+      const seatLine = side.normal.clone().multiplyScalar(-(out + STAND_ROW_DEPTH * 0.45))
+      const along = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), side.turn)
+      for (let i = 0; i < count; i++) {
+        if (i % STAND_AISLE_EVERY === STAND_AISLE_EVERY - 1) continue
+        const t = start + i * STAND_SEAT_PITCH
+        spots.push({
+          x: seatLine.x + along.x * t,
+          y: stepTop,
+          z: seatLine.z + along.z * t,
+          turn: side.turn,
+          row,
+          block: Math.floor(i / STAND_AISLE_EVERY)
+        })
+      }
+    }
+  }
+  group.add(mergeStaticMeshes(steps, 'stand-steps'))
+
+  const seatMat = new THREE.MeshBasicMaterial({ color: 0xffffff })
+  seatMat.name = 'stand-seat'
+  const seats = new THREE.InstancedMesh(standSeatGeometry(), seatMat, spots.length)
+  seats.name = 'stand-seats'
+  const matrix = new THREE.Matrix4()
+  const quat = new THREE.Quaternion()
+  const up = new THREE.Vector3(0, 1, 0)
+  const one = new THREE.Vector3(1, 1, 1)
+  const tint = new THREE.Color()
+  const rand = rng(0x5ea75)
+  spots.forEach((spot, k) => {
+    // Faces the table: the seat is built facing +z, and each side's turn faces +z inwards.
+    quat.setFromAxisAngle(up, spot.turn + Math.PI)
+    matrix.compose(new THREE.Vector3(spot.x, spot.y, spot.z), quat, one)
+    seats.setMatrixAt(k, matrix)
+    tint.set(STAND_SEAT_COLORS[spot.block % STAND_SEAT_COLORS.length]!)
+    const fade = 1 - STAND_TOP_DARKEN * (spot.row / Math.max(1, STAND_ROWS - 1))
+    tint.multiplyScalar(fade * (0.88 + rand() * 0.18))
+    seats.setColorAt(k, tint)
+  })
+  seats.instanceMatrix.needsUpdate = true
+  if (seats.instanceColor) seats.instanceColor.needsUpdate = true
+  seats.frustumCulled = false
+  group.add(seats)
   return group
 }
 
@@ -1903,6 +2059,9 @@ export function buildArenaEnvironment(
     // The studio stands in for the whole bowl: no stands, no seats, no stairs, no ring of
     // boards and no washes to light them. It has no seats to report either.
     arena.add(buildStudio(config, budget))
+    // Above the stands there is only the dark of the hall: no lid, no coloured sky.
+    scene.background = new THREE.Color(ARENA_VOID_COLOR)
+    if (scene.fog) scene.fog.color.set(ARENA_HAZE_COLOR)
     scene.add(arena)
     return { group: arena, seats: [], rows }
   }

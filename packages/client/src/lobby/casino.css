@@ -1514,3 +1514,1138 @@
     transform: none;
   }
 }
+
+/* ==================================================================
+ * Phone-only pieces, hidden on a desktop: the brand in the top bar, the tab bar, the
+ * Play Anywhere card, the words beside the hero's player and the closing promo strip.
+ * The menu button, the drawer's backdrop and its sound switch are kept in the markup
+ * but are not used by this layout.
+ * ================================================================== */
+.cx-top__menu,
+.cx-top__brand,
+.cx-side__sound,
+.cx-scrim,
+.cx-tabbar,
+.cx-anywhere,
+.cx-hero__side,
+.cx-footer__promo {
+  display: none;
+}
+
+/* ==================================================================
+ * The phone: the desktop hall, drawn small.
+ *
+ * The top bar runs the full width. Under it the sidebar stays open as a narrow column on
+ * the left — the menu, the promo card and the three promises — and the page fills the
+ * rest: the hero, the strip, the four modes and the four tournaments each in one row,
+ * then recent matches beside Play Anywhere. A promo strip closes the page, and a tab bar
+ * sits along the bottom clear of the home indicator. The whole page scrolls as one.
+ * ================================================================== */
+@media (max-width: 1023px) {
+  .cx-root {
+    --u: max(min(calc(100dvh / 1080), calc(100vw / 640)), 0.5px);
+    --cx-tabbar-h: calc(58px + env(safe-area-inset-bottom, 0px));
+    --cx-side-w: clamp(78px, 22.5vw, 124px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  .cx-backdrop,
+  .cx-coins {
+    position: fixed;
+  }
+
+  /* Coins are a desktop flourish: on a phone they are fill rate the page does not need. */
+  .cx-coins {
+    display: none;
+  }
+
+  .cx-frame {
+    grid-template-columns: var(--cx-side-w) minmax(0, 1fr);
+    grid-template-rows: auto 1fr auto;
+    grid-template-areas:
+      'top top'
+      'side main'
+      'foot foot';
+    column-gap: 6px;
+    height: auto;
+    min-height: 100%;
+    padding: calc(6px + env(safe-area-inset-top, 0px)) max(6px, env(safe-area-inset-right, 0px))
+      calc(var(--cx-tabbar-h) + 8px) max(6px, env(safe-area-inset-left, 0px));
+  }
+
+  /* The page's children join the frame's grid, so the top bar can span both columns. */
+  .cx-page {
+    display: contents;
+  }
+
+  .cx-top {
+    grid-area: top;
+  }
+
+  .cx-side {
+    grid-area: side;
+  }
+
+  .cx-main {
+    grid-area: main;
+  }
+
+  .cx-footer {
+    grid-area: foot;
+  }
+
+  /* -------------------------------------------------------------- the top bar */
+  .cx-top {
+    flex-wrap: nowrap;
+    gap: 5px;
+    margin: 0 0 8px;
+  }
+
+  .cx-top > * {
+    flex-shrink: 0;
+  }
+
+  .cx-top__menu,
+  .cx-top__tools {
+    display: none;
+  }
+
+  .cx-top__brand {
+    display: flex;
+    flex: 1 1 auto;
+    flex-shrink: 1;
+    align-items: center;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .cx-top__brand .cx-wordmark__crown svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .cx-top__brand .cx-wordmark__word {
+    font-size: 20px;
+  }
+
+  .cx-icon-btn {
+    width: 34px;
+    height: 34px;
+  }
+
+  .cx-icon-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .cx-profile {
+    gap: 5px;
+    padding: 2px 8px 2px 2px;
+  }
+
+  .cx-profile__avatar {
+    width: 28px;
+    height: 28px;
+  }
+
+  .cx-profile__name {
+    max-width: 62px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 10.5px;
+  }
+
+  .cx-profile__level {
+    font-size: 9px;
+  }
+
+  .cx-wallet {
+    gap: 4px;
+    padding: 2px 2px 2px 3px;
+  }
+
+  .cx-wallet__coin {
+    width: 24px;
+    height: 24px;
+    font-size: 12px;
+  }
+
+  .cx-wallet__label {
+    font-size: 8px;
+  }
+
+  .cx-wallet__value {
+    font-size: 12px;
+  }
+
+  .cx-wallet__add {
+    flex-basis: 26px;
+    width: 26px;
+    height: 26px;
+  }
+
+  .cx-wallet__add svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  /* -------------------------------------------------------------- the sidebar column */
+  .cx-side {
+    gap: 8px;
+    padding: 6px 4px;
+    border: 1px solid var(--cx-line);
+    border-radius: 12px;
+    overflow: visible;
+    align-self: start;
+  }
+
+  /* The brand is in the top bar on a phone. */
+  .cx-side__brand {
+    display: none;
+  }
+
+  .cx-nav {
+    gap: 2px;
+  }
+
+  .cx-nav__item {
+    gap: 6px;
+    min-height: 34px;
+    padding: 0 6px;
+    border-radius: 9px;
+    font-size: 10px;
+  }
+
+  .cx-nav__icon {
+    flex: 0 0 18px;
+    width: 18px;
+    height: 18px;
+  }
+
+  .cx-nav__icon svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .cx-nav__label {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .cx-promo {
+    gap: 4px;
+    padding: 8px 6px;
+    border-radius: 10px;
+  }
+
+  .cx-promo__title {
+    font-size: 10px;
+    line-height: 1.15;
+  }
+
+  .cx-promo__sub {
+    font-size: 8px;
+  }
+
+  .cx-promo__cta {
+    padding: 5px 6px;
+    font-size: 9px;
+  }
+
+  .cx-promo__cta svg {
+    width: 11px;
+    height: 11px;
+  }
+
+  .cx-trust {
+    gap: 6px;
+    padding: 6px 5px;
+  }
+
+  .cx-trust__row {
+    gap: 5px;
+  }
+
+  .cx-trust__icon {
+    flex: 0 0 20px;
+    width: 20px;
+    height: 20px;
+  }
+
+  .cx-trust__icon svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .cx-trust__text {
+    font-size: 7.5px;
+    line-height: 1.2;
+  }
+
+  .cx-trust__text strong {
+    font-size: 8.5px;
+  }
+
+  /* -------------------------------------------------------------- the home page */
+  .cx-home__grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+  }
+
+  .cx-home__col {
+    gap: 7px;
+  }
+
+  .cx-panel {
+    padding: 7px;
+    border-radius: 11px;
+  }
+
+  .cx-panel__head {
+    margin-bottom: 6px;
+  }
+
+  .cx-panel__title {
+    gap: 5px;
+    font-size: 11.5px;
+  }
+
+  .cx-panel__icon svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  .cx-link {
+    font-size: 9px;
+  }
+
+  /* The hero. */
+  .cx-hero {
+    min-height: 172px;
+    border-radius: 12px;
+  }
+
+  .cx-hero__img {
+    object-position: 70% 40%;
+  }
+
+  .cx-hero__shade {
+    background:
+      linear-gradient(90deg, rgba(5, 8, 16, 0.88) 0%, rgba(5, 8, 16, 0.45) 46%, rgba(5, 8, 16, 0.05) 70%, rgba(5, 8, 16, 0.55) 100%),
+      linear-gradient(0deg, rgba(5, 8, 16, 0.55), transparent 45%);
+  }
+
+  .cx-hero__body {
+    gap: 5px;
+    padding: 10px 10px 12px;
+  }
+
+  .cx-hero__ribbon {
+    padding: 3px 8px;
+    font-size: 7.5px;
+  }
+
+  .cx-hero__ribbon strong {
+    font-size: 10.5px;
+  }
+
+  .cx-hero .cx-wordmark--big .cx-wordmark__crown svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .cx-hero .cx-wordmark--big .cx-wordmark__word {
+    font-size: clamp(26px, 8.6vw, 40px);
+  }
+
+  .cx-hero__tagline {
+    margin: -2px 0 2px;
+    font-size: 11px;
+  }
+
+  .cx-hero__cta {
+    min-height: 32px;
+    padding: 7px 16px;
+    font-size: 12px;
+  }
+
+  .cx-hero__cta .cx-btn__icon svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .cx-hero__side {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    transform: translateY(-50%) rotate(-4deg);
+    font-size: 12px;
+    font-weight: 900;
+    font-style: italic;
+    line-height: 1.05;
+    text-transform: none;
+    color: #ffffff;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8);
+  }
+
+  .cx-hero__side strong {
+    color: var(--cx-gold);
+  }
+
+  /* The strip of four promises, in one row. */
+  .cx-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 3px;
+    padding: 6px 4px;
+    border-radius: 11px;
+  }
+
+  .cx-strip__item {
+    flex-direction: column;
+    gap: 3px;
+    text-align: center;
+  }
+
+  .cx-strip__icon {
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+  }
+
+  .cx-strip__icon svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  .cx-strip__text {
+    font-size: 7px;
+    line-height: 1.2;
+  }
+
+  .cx-strip__text strong {
+    font-size: 8.5px;
+  }
+
+  /* The four modes, in one row. */
+  .cx-modes {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .cx-mode {
+    border-radius: 10px;
+  }
+
+  .cx-mode:hover,
+  .cx-tour:hover {
+    transform: none;
+  }
+
+  .cx-mode__pic {
+    height: 58px;
+  }
+
+  .cx-mode__info {
+    flex: 1;
+    gap: 3px;
+    padding: 5px 5px 6px;
+  }
+
+  .cx-mode__title {
+    font-size: 10px;
+    line-height: 1.1;
+  }
+
+  .cx-mode__text {
+    flex: 1;
+    font-size: 7.5px;
+    line-height: 1.25;
+  }
+
+  .cx-mode__btn {
+    min-height: 24px;
+    padding: 0 4px;
+    margin-top: 2px;
+    font-size: 8.5px;
+    border-radius: 7px;
+  }
+
+  .cx-mode__btn svg {
+    width: 9px;
+    height: 9px;
+  }
+
+  /* The four featured tournaments, in one row. */
+  .cx-featured__row {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .cx-tour {
+    gap: 3px;
+    padding: 5px 5px 6px;
+    border-radius: 9px;
+  }
+
+  .cx-tour__badge {
+    padding: 1px 5px;
+    font-size: 6.5px;
+  }
+
+  .cx-tour__emblem {
+    width: 20px;
+    height: 20px;
+  }
+
+  .cx-tour__emblem svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .cx-tour__name {
+    font-size: 8.5px;
+  }
+
+  .cx-tour__line,
+  .cx-tour__time {
+    font-size: 7px;
+  }
+
+  .cx-tour__prize {
+    font-size: 8.5px;
+  }
+
+  .cx-tour__join {
+    min-height: 22px;
+    padding: 0 4px;
+    font-size: 9px;
+    border-radius: 7px;
+  }
+
+  /* Recent matches beside Play Anywhere. */
+  .cx-home__aside {
+    position: static;
+    display: grid;
+    grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+    gap: 5px;
+    align-items: stretch;
+  }
+
+  .cx-practice-card {
+    display: none;
+  }
+
+  .cx-recent__list {
+    gap: 4px;
+  }
+
+  .cx-recent__item {
+    gap: 5px;
+    padding: 4px 5px;
+  }
+
+  .cx-recent__avatar {
+    flex: 0 0 20px;
+    width: 20px;
+    height: 20px;
+  }
+
+  .cx-recent__text {
+    font-size: 7.5px;
+  }
+
+  .cx-recent__text strong {
+    font-size: 8.5px;
+  }
+
+  .cx-recent__empty {
+    font-size: 8.5px;
+    line-height: 1.35;
+  }
+
+  .cx-result {
+    padding: 2px 6px;
+    font-size: 8px;
+  }
+
+  .cx-anywhere {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+    background:
+      radial-gradient(90% 70% at 100% 0%, rgba(34, 197, 94, 0.22), transparent 70%),
+      var(--cx-panel);
+  }
+
+  .cx-anywhere__icon {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    border: 1px solid rgba(34, 197, 94, 0.45);
+    color: var(--cx-green);
+  }
+
+  .cx-anywhere__icon svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .cx-anywhere__title {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    font-size: 12px;
+    font-style: italic;
+    line-height: 1.05;
+  }
+
+  .cx-anywhere__title .is-gold {
+    color: var(--cx-green);
+  }
+
+  .cx-anywhere__text .cx-recent__empty {
+    margin: 2px 0 0;
+  }
+
+  .cx-anywhere .cx-btn {
+    align-self: stretch;
+    min-height: 26px;
+    margin-top: auto;
+    font-size: 9.5px;
+  }
+
+  /* -------------------------------------------------------------- the closing strip */
+  .cx-footer {
+    display: block;
+    margin-top: 8px;
+    padding: 0;
+    border-top: 0;
+  }
+
+  .cx-footer > :not(.cx-footer__promo) {
+    display: none;
+  }
+
+  .cx-footer__promo {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 8px 10px;
+    border: 1px solid rgba(245, 197, 66, 0.35);
+    border-radius: 12px;
+    background:
+      radial-gradient(60% 120% at 0% 50%, rgba(245, 197, 66, 0.16), transparent 70%),
+      linear-gradient(180deg, rgba(22, 33, 62, 0.95), rgba(11, 17, 33, 0.95));
+  }
+
+  .cx-footer__lead,
+  .cx-footer__pays {
+    display: flex;
+    flex-direction: column;
+    font-size: 10px;
+    font-weight: 900;
+    font-style: italic;
+    line-height: 1.05;
+    color: #ffffff;
+  }
+
+  .cx-footer__lead strong,
+  .cx-footer__pays strong {
+    color: var(--cx-gold);
+  }
+
+  .cx-footer__pays {
+    align-items: flex-end;
+    transform: rotate(-4deg);
+    font-size: 11px;
+  }
+
+  .cx-footer__perk {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .cx-footer__perk-icon {
+    display: grid;
+    place-items: center;
+    flex: 0 0 22px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 1px solid rgba(245, 197, 66, 0.45);
+    color: var(--cx-gold);
+  }
+
+  .cx-footer__perk-icon svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .cx-footer__perk-text {
+    display: flex;
+    flex-direction: column;
+    font-size: 7px;
+    line-height: 1.2;
+    color: var(--cx-dim);
+  }
+
+  .cx-footer__perk-text strong {
+    font-size: 8.5px;
+    color: var(--cx-text);
+  }
+
+  /* -------------------------------------------------------------- the other screens */
+  .cx-root .cx-main > .gl-screen:not(.cx-home) {
+    justify-content: flex-start;
+    min-height: 0;
+    padding-top: 2px;
+  }
+
+  .gl-wallet-tabs {
+    max-width: none;
+  }
+
+  /* -------------------------------------------------------------- the tab bar */
+  .cx-tabbar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    height: var(--cx-tabbar-h);
+    padding: 0 max(6px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(6px, env(safe-area-inset-left, 0px));
+    border-top: 1px solid rgba(245, 197, 66, 0.2);
+    background: linear-gradient(180deg, rgba(14, 20, 38, 0.97), rgba(7, 10, 20, 0.99));
+    box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.45);
+  }
+
+  .cx-tabbar__item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-width: 0;
+    min-height: 0;
+    padding: 6px 2px;
+    margin: 0;
+    border: 0;
+    background: none;
+    color: var(--cx-dim);
+    font: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .cx-tabbar__icon {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 26px;
+    border-radius: 9px;
+  }
+
+  .cx-tabbar__icon svg {
+    width: 21px;
+    height: 21px;
+  }
+
+  .cx-tabbar__label {
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .cx-tabbar__item.is-active {
+    color: var(--cx-green);
+  }
+
+  .cx-tabbar__item.is-active .cx-tabbar__icon {
+    color: #ffffff;
+    background: linear-gradient(180deg, var(--cx-green), var(--cx-green-2));
+    box-shadow: 0 0 14px rgba(34, 197, 94, 0.45);
+  }
+}
+
+/* A narrow phone: the profile chip keeps its picture and gives up the name. */
+@media (max-width: 360px) {
+  .cx-profile__meta {
+    display: none;
+  }
+
+  .cx-profile {
+    padding: 2px;
+  }
+
+  .cx-top__brand .cx-wordmark__word {
+    font-size: 17px;
+  }
+
+  .cx-tabbar__item {
+    font-size: 9.5px;
+  }
+}
+
+/* Phone fit: the sidebar's labels whole, buttons on one line, the trophy in the card's flow. */
+@media (max-width: 1023px) {
+  .cx-root {
+    --cx-side-w: clamp(88px, 24vw, 128px);
+  }
+
+  .cx-nav__item {
+    gap: 4px;
+    min-height: 28px;
+    padding: 0 4px;
+    font-size: 9px;
+    letter-spacing: -0.01em;
+  }
+
+  .cx-nav__icon {
+    flex-basis: 15px;
+    width: 15px;
+    height: 15px;
+  }
+
+  .cx-nav__icon svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .cx-mode__btn,
+  .cx-tour__join,
+  .cx-hero__cta,
+  .cx-promo__cta {
+    white-space: nowrap;
+  }
+
+  .cx-mode__btn {
+    gap: 2px;
+    font-size: 8px;
+  }
+
+  .cx-tour__badge {
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    letter-spacing: 0.02em;
+  }
+
+  .cx-tour__emblem {
+    position: static;
+    align-self: center;
+    width: 22px;
+    height: 22px;
+    margin: 1px 0;
+  }
+
+  .cx-tour__emblem svg {
+    width: 22px;
+    height: 22px;
+  }
+}
+
+@media (max-width: 400px) {
+  .cx-mode__btn svg,
+  .cx-promo__cta svg {
+    display: none;
+  }
+}
+
+@media (max-width: 1023px) {
+  .cx-nav__label {
+    font-size: 8.5px;
+  }
+
+  .cx-mode__title {
+    font-size: clamp(8px, 2.2vw, 13px);
+    letter-spacing: -0.02em;
+  }
+}
+
+@media (max-width: 1023px) {
+  .cx-mode__info {
+    padding: 5px 4px 6px;
+  }
+}
+
+/* The smallest phones still in use (320 wide): a step smaller, so nothing is cut. */
+@media (max-width: 340px) {
+  .cx-nav__label {
+    font-size: 7.5px;
+  }
+
+  .cx-mode__title {
+    font-size: 7.5px;
+  }
+
+  .cx-mode__btn {
+    padding: 0 2px;
+    font-size: 7px;
+  }
+}
+
+/* ==================================================================
+ * The sidebar's arrow: closes the sidebar to a strip of icons, and opens it again.
+ * Every screen size. The player's choice is remembered (casino.ts).
+ * ================================================================== */
+.cx-side__toggle {
+  display: grid;
+  place-items: center;
+  align-self: flex-end;
+  width: 30px;
+  height: 30px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  margin: 0 0 -4px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 50%;
+  background: linear-gradient(180deg, rgba(34, 48, 84, 0.95), rgba(14, 21, 40, 0.95));
+  color: #e6ecff;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.cx-side__toggle svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 200ms ease;
+}
+
+.cx-side__toggle:hover {
+  color: var(--cx-gold);
+  border-color: rgba(245, 197, 66, 0.55);
+}
+
+.cx-root.is-side-collapsed .cx-side__toggle {
+  align-self: center;
+}
+
+.cx-root.is-side-collapsed .cx-side__toggle svg {
+  transform: rotate(180deg);
+}
+
+.cx-root.is-side-collapsed .cx-frame {
+  grid-template-columns: 76px minmax(0, 1fr);
+}
+
+.cx-root.is-side-collapsed .cx-side {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.cx-root.is-side-collapsed .cx-side__brand,
+.cx-root.is-side-collapsed .cx-nav__label,
+.cx-root.is-side-collapsed .cx-promo,
+.cx-root.is-side-collapsed .cx-trust {
+  display: none;
+}
+
+.cx-root.is-side-collapsed .cx-nav__item {
+  justify-content: center;
+  padding: 0;
+}
+
+/* The balance under the name is the phone's; the desktop has its wallet pill. */
+.cx-profile__balance {
+  display: none;
+}
+
+/* ==================================================================
+ * The phone, continued: the balance under the name, the closed sidebar, and the
+ * other screens laid out for a narrow page — one column, nothing squeezed.
+ * ================================================================== */
+@media (max-width: 1023px) {
+  .cx-root.is-side-collapsed {
+    --cx-side-w: 46px;
+  }
+
+  .cx-root.is-side-collapsed .cx-frame {
+    grid-template-columns: var(--cx-side-w) minmax(0, 1fr);
+  }
+
+  .cx-root.is-side-collapsed .cx-side {
+    padding: 6px 3px;
+  }
+
+  .cx-root.is-side-collapsed .cx-nav__item {
+    min-height: 36px;
+  }
+
+  .cx-root.is-side-collapsed .cx-nav__icon,
+  .cx-root.is-side-collapsed .cx-nav__icon svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .cx-side__toggle {
+    width: 26px;
+    height: 26px;
+    margin: 0 0 -2px;
+  }
+
+  .cx-side__toggle svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  /* The wallet pill gives way to the balance under the player's name. */
+  .cx-wallet {
+    display: none;
+  }
+
+  .cx-profile__level {
+    display: none;
+  }
+
+  .cx-profile__balance {
+    display: block;
+    font-size: 10px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    color: #4ade80;
+    white-space: nowrap;
+  }
+
+  .cx-profile {
+    padding-right: 10px;
+  }
+
+  .cx-profile__name {
+    max-width: 96px;
+  }
+
+  /* -------------------------------------------------------------- the other screens */
+  .cx-root .gl-setup,
+  .cx-root .gl-info,
+  .cx-root .gl-invite,
+  .cx-root .gl-friends,
+  .cx-root .gl-deposit,
+  .cx-root .gl-stats-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    min-height: 0;
+    max-height: none;
+  }
+
+  .cx-root .gl-setup-top,
+  .cx-root .gl-info-top,
+  .cx-root .gl-stats-head,
+  .cx-root .gl-home-head {
+    flex-direction: row-reverse;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: nowrap;
+    gap: 10px;
+    width: 100%;
+    margin-bottom: 12px;
+  }
+
+  .cx-root .gl-setup-top > *,
+  .cx-root .gl-info-top > *,
+  .cx-root .gl-stats-head > *,
+  .cx-root .gl-home-head > * {
+    min-width: 0;
+  }
+
+  .cx-root .gl-headline {
+    font-size: clamp(20px, 6.6vw, 30px);
+    line-height: 1.05;
+  }
+
+  .cx-root .gl-link-back {
+    flex: 0 0 auto;
+    min-height: 36px;
+    margin: 0;
+    padding: 0 12px;
+    font-size: 11px;
+  }
+
+  .cx-root .gl-panel {
+    padding: 14px 12px;
+  }
+
+  .cx-root .gl-setup-title {
+    font-size: clamp(18px, 5.6vw, 24px);
+    line-height: 1.1;
+  }
+
+  .cx-root .gl-options {
+    gap: 8px;
+  }
+
+  .cx-root .gl-option {
+    min-height: 92px;
+    padding: 12px 10px;
+  }
+
+  .cx-root .gl-option__title {
+    font-size: 14px;
+  }
+
+  .cx-root .gl-option__desc {
+    font-size: 11.5px;
+    line-height: 1.35;
+  }
+
+  .cx-root .gl-chip-row {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .cx-root .gl-chip {
+    min-height: 40px;
+    font-size: 12px;
+  }
+
+  .cx-root .gl-facts {
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 12px;
+  }
+
+  .cx-root .gl-setup__right,
+  .cx-root .gl-info__right {
+    min-height: 230px;
+  }
+
+  .cx-root .gl-setup__right-title,
+  .cx-root .gl-info__right .gl-headline {
+    font-size: clamp(22px, 7vw, 30px);
+  }
+
+  .cx-root .gl-setup__right .gl-btn,
+  .cx-root .gl-btn {
+    min-height: 46px;
+  }
+
+  .cx-root .gl-settings {
+    width: 100%;
+  }
+
+  .cx-root .gl-deposit-input {
+    font-size: 16px;
+  }
+}

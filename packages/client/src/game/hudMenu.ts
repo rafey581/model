@@ -19,6 +19,8 @@
  * accident.
  */
 
+import { isPhoneScreen } from './qualityConfig.js'
+
 const STYLE_ID = 'hud-menu-styles'
 
 const CSS = `
@@ -144,14 +146,13 @@ const CSS = `
 .hud-pause-resume:active { transform: scale(0.97); }
 
 /*
- * "Play sideways": on a touch device held upright, over the whole site.
+ * "Play sideways": on a touch device held upright, during a match only.
  *
- * The lobby can be waved away and used upright; a match cannot, because the table needs
+ * The lobby is laid out for a phone held upright; a match is not, because the table needs
  * the long side of the screen.
  */
 .rotate-hint { display: none; }
 @media (pointer: coarse) and (orientation: portrait) {
-  body:not(.rotate-dismissed) .rotate-hint,
   body.game-mode .rotate-hint {
     position: fixed;
     inset: 0;
@@ -230,7 +231,6 @@ body.game-mode .rotate-hint-skip { display: none; }
   .spin-dial {
     left: auto;
     right: calc(env(safe-area-inset-right, 0px) + clamp(8px, 1.6vw, 20px));
-    transform: scale(0.86);
     transform-origin: bottom right;
   }
   .venue-opponent-power {
@@ -287,6 +287,32 @@ async function goLandscape(): Promise<void> {
     await orientation.lock?.('landscape')
   } catch {
     // Not allowed to turn the screen. The player turns the phone instead.
+  }
+}
+
+/**
+ * Turns a phone sideways for a match, from the tap that starts it.
+ *
+ * Fullscreen and the orientation lock are both only granted inside a tap, so this is
+ * called first thing in the handler of the button that starts a match, before anything is
+ * awaited. A desktop is left alone: it has no orientation to lock, and taking the whole
+ * screen there is the player's own choice from the fullscreen button.
+ */
+export function requestLandscape(): void {
+  if (!isPhoneScreen()) return
+  void goLandscape()
+}
+
+/**
+ * Lets the screen turn freely again, for the lobby, which is laid out upright. Fullscreen
+ * is kept: leaving it is the player's choice, and dropping it would flash the browser bar.
+ */
+export function releaseLandscape(): void {
+  try {
+    const orientation = screen.orientation as ScreenOrientation & { unlock?: () => void }
+    orientation.unlock?.()
+  } catch {
+    // Nothing was locked, or there is nothing to unlock here.
   }
 }
 

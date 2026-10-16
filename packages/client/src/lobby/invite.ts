@@ -1,3 +1,4 @@
+import { APP_TITLE } from '@snooker/shared'
 import { INVITE_COPY } from './content.js'
 import { accentHeadline, el } from './dom.js'
 import { ICONS } from './icons.js'
@@ -102,7 +103,7 @@ export function renderInvite(actions: InviteActions): HTMLElement {
         if (typeof navigator.share === 'function') {
           try {
             await navigator.share({
-              title: 'Snooker Arena',
+              title: APP_TITLE,
               text: INVITE_COPY.shareText(data.bonusUsdt),
               url: data.link
             })

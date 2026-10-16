@@ -11,8 +11,10 @@ import type { LobbyBridge, LobbyHistoryMatch, LobbyView } from './types.js'
  * file starts a match, moves money or talks to the server. Destinations that do not exist
  * yet (the leaderboard, private rooms) say so when pressed rather than pretending.
  *
- * Used where there is room for it: a window at least 1024 pixels wide. Phones and narrow
- * windows keep the existing lobby, which is built for them.
+ * The same lobby on every screen. On a desktop the sidebar stands beside the page; on a
+ * phone (casino.css, the phone section) it becomes a drawer behind a menu button, the
+ * top bar shrinks to the brand, the bell, the avatar and the balance, and a tab bar along
+ * the bottom carries the five places a thumb goes most.
  */
 
 /** Where the sidebar and the top bar can send the player. */
@@ -41,20 +43,21 @@ export interface CasinoHomeActions {
   practice: () => void
   createRoom: () => void
   tournaments: () => void
+  /** The player's own games and record. */
+  openGames: () => void
   history: LobbyHistoryMatch[]
   userId: string
 }
 
-/** Whether the casino lobby is the one to show in this window. */
+/**
+ * Whether the casino lobby is the one to show in this window.
+ *
+ * Every window now: the phone gets the same hall, laid out for a thumb by casino.css, so
+ * the pictures, the cards and the wallet are the same on both. The compact lobby is kept
+ * in the code (shell.ts) and comes back only where this answers false.
+ */
 export function wantsCasinoLobby(): boolean {
-  try {
-    // Width alone. A height or a pointer test turned it off on ordinary laptops: a touch
-    // screen reports a coarse pointer, and a page zoomed in for reading is a short page.
-    // The page scrolls, so a short window is no reason to fall back.
-    return window.matchMedia('(min-width: 1024px)').matches
-  } catch {
-    return false
-  }
+  return true
 }
 
 const ICON = {
@@ -71,6 +74,10 @@ const ICON = {
   room: svg('<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M8 18v2M16 18v2"/><circle cx="9" cy="12" r="1.2"/><circle cx="15" cy="12" r="1.2"/>'),
   crown: svg('<path d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 10H5z" fill="currentColor" fill-opacity="0.25"/>'),
   x: svg('<path d="M5 5l14 14M19 5 5 19"/>'),
+  chevronLeft: svg('<path d="m15 5-7 7 7 7"/>'),
+  menu: svg('<path d="M4 7h16M4 12h16M4 17h16"/>'),
+  user: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>'),
+  phone: svg('<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/>'),
   discord: svg('<path d="M8 8c2.6-1 5.4-1 8 0l1 1c1.2 2 1.8 4.2 1.8 6.5-1.3 1-2.7 1.6-4.1 2l-.8-1.3M8 8l-1 1c-1.2 2-1.8 4.2-1.8 6.5 1.3 1 2.7 1.6 4.1 2l.8-1.3"/><circle cx="9.8" cy="13" r="1"/><circle cx="14.2" cy="13" r="1"/>'),
   telegram: svg('<path d="M21 4 3 11l6 2 2 6 3-4 4 3z"/><path d="m9 13 8-6"/>'),
   youtube: svg('<rect x="3" y="6" width="18" height="12" rx="4"/><path d="M10 9.5v5l4.5-2.5z" fill="currentColor"/>')
@@ -138,6 +145,37 @@ const NAV: Array<{ id: CasinoDestination; label: string; icon: string }> = [
   { id: 'settings', label: 'Settings', icon: ICONS.gear }
 ]
 
+/** Where the player's choice of an open or closed sidebar is kept, per browser. */
+const SIDE_COLLAPSED_KEY = 'snookerx.sideCollapsed'
+
+/**
+ * Whether the sidebar starts closed. The player's own choice when they have made one;
+ * otherwise open on a desktop, and on a phone open on the home page and closed on the
+ * other screens, which need the width for their forms.
+ */
+function sideStartsCollapsed(view: LobbyView): boolean {
+  try {
+    const saved = window.localStorage.getItem(SIDE_COLLAPSED_KEY)
+    if (saved === '1') return true
+    if (saved === '0') return false
+  } catch {
+    // Storage refused: fall back to the default below.
+  }
+  try {
+    return view !== 'home' && window.matchMedia('(max-width: 1023px)').matches
+  } catch {
+    return false
+  }
+}
+
+function rememberSideCollapsed(collapsed: boolean): void {
+  try {
+    window.localStorage.setItem(SIDE_COLLAPSED_KEY, collapsed ? '1' : '0')
+  } catch {
+    // Not remembered; the sidebar still opens and closes for this visit.
+  }
+}
+
 function activeDestination(view: LobbyView): CasinoDestination {
   if (view === 'setup') return 'play'
   if (view === 'statistics') return 'games'
@@ -163,6 +201,11 @@ export function createCasinoShell(
 
   // ---------------------------------------------------------------- the sidebar
   const side = el('aside', 'cx-side')
+  // The arrow at the top of the sidebar closes it to a strip of icons and opens it again.
+  const sideToggle = el('button', 'cx-side__toggle') as HTMLButtonElement
+  sideToggle.type = 'button'
+  sideToggle.innerHTML = ICON.chevronLeft
+  side.appendChild(sideToggle)
   const brand = el('div', 'cx-side__brand')
   brand.append(wordmark(title), el('span', 'cx-side__tag', 'SKILL · PLAY · EARN'))
   side.appendChild(brand)
@@ -211,8 +254,27 @@ export function createCasinoShell(
   }
   side.appendChild(trust)
 
+  // A sound switch in the drawer, for the phone, whose top bar has no room for one.
+  const muted = bridge.getSoundMuted()
+  const sideSound = el('button', 'cx-side__sound') as HTMLButtonElement
+  sideSound.type = 'button'
+  const sideSoundIcon = el('span', 'cx-nav__icon')
+  sideSoundIcon.innerHTML = muted ? ICONS.speakerOff : ICONS.speaker
+  sideSound.append(sideSoundIcon, el('span', 'cx-nav__label', muted ? 'Sound off' : 'Sound on'))
+  sideSound.onclick = handlers.onSoundToggle
+  side.appendChild(sideSound)
+
   // ---------------------------------------------------------------- the top bar
   const top = el('header', 'cx-top')
+  // The phone's half of the bar: the drawer's button and the brand. Hidden on a desktop,
+  // where the sidebar is always open and carries the brand itself.
+  const menu = el('button', 'cx-top__menu') as HTMLButtonElement
+  menu.type = 'button'
+  menu.setAttribute('aria-label', 'Open menu')
+  menu.setAttribute('aria-expanded', 'false')
+  menu.innerHTML = ICON.menu
+  const topBrand = el('div', 'cx-top__brand')
+  topBrand.appendChild(wordmark(title))
   const tools = el('div', 'cx-top__tools')
   const iconBtn = (svgMarkup: string, label: string, onClick: () => void): HTMLButtonElement => {
     const b = el('button', 'cx-icon-btn') as HTMLButtonElement
@@ -223,7 +285,6 @@ export function createCasinoShell(
     b.onclick = onClick
     return b
   }
-  const muted = bridge.getSoundMuted()
   tools.append(
     iconBtn(muted ? ICONS.speakerOff : ICONS.speaker, muted ? 'Unmute table sounds' : 'Mute table sounds', handlers.onSoundToggle),
     iconBtn(document.fullscreenElement ? ICONS.fullscreenExit : ICONS.fullscreen, 'Fullscreen', handlers.onFullscreen)
@@ -235,7 +296,12 @@ export function createCasinoShell(
   const avatar = el('span', 'cx-profile__avatar')
   avatar.appendChild(bridge.createAvatar(bridge.username))
   const who = el('span', 'cx-profile__meta')
-  who.append(el('span', 'cx-profile__name', bridge.username), el('span', 'cx-profile__level', 'Player'))
+  // On a phone the balance sits under the name, in place of the separate wallet pill.
+  who.append(
+    el('span', 'cx-profile__name', bridge.username),
+    el('span', 'cx-profile__level', 'Player'),
+    el('span', 'cx-profile__balance', bridge.formatCash(bridge.walletBalance))
+  )
   profile.append(avatar, who)
   profile.onclick = handlers.onProfile
 
@@ -252,7 +318,14 @@ export function createCasinoShell(
   add.onclick = () => handlers.go('wallet')
   wallet.append(coin, amount, add)
 
-  top.append(tools, profile, wallet)
+  const bell = el('button', 'cx-icon-btn cx-top__bell') as HTMLButtonElement
+  bell.type = 'button'
+  bell.title = 'Challenges and friends'
+  bell.setAttribute('aria-label', 'Challenges and friends')
+  bell.innerHTML = ICON.bell
+  bell.onclick = () => handlers.go('friends')
+
+  top.append(menu, topBrand, tools, bell, profile, wallet)
 
   // ---------------------------------------------------------------- the page
   const main = el('main', 'cx-main')
@@ -261,13 +334,81 @@ export function createCasinoShell(
   page.append(top, main, footer(title))
 
   const frame = el('div', 'cx-frame')
-  frame.append(side, page)
+  // The drawer's dim backdrop on a phone: a tap on it closes the drawer.
+  const scrim = el('div', 'cx-scrim')
+  frame.append(side, scrim, page)
   root.appendChild(frame)
+
+  const setCollapsed = (collapsed: boolean): void => {
+    root.classList.toggle('is-side-collapsed', collapsed)
+    sideToggle.setAttribute('aria-expanded', String(!collapsed))
+    sideToggle.setAttribute('aria-label', collapsed ? 'Open the menu' : 'Close the menu')
+    sideToggle.title = collapsed ? 'Open the menu' : 'Close the menu'
+  }
+  setCollapsed(sideStartsCollapsed(view))
+  sideToggle.onclick = () => {
+    const collapsed = !root.classList.contains('is-side-collapsed')
+    setCollapsed(collapsed)
+    rememberSideCollapsed(collapsed)
+  }
+
+  const setDrawer = (open: boolean): void => {
+    root.classList.toggle('is-drawer-open', open)
+    menu.setAttribute('aria-expanded', String(open))
+  }
+  menu.onclick = () => setDrawer(!root.classList.contains('is-drawer-open'))
+  scrim.onclick = () => setDrawer(false)
+
+  // ---------------------------------------------------------------- the phone's tab bar
+  const tabbar = el('nav', 'cx-tabbar')
+  tabbar.setAttribute('aria-label', 'Main')
+  const tabs: Array<{ id: CasinoDestination | 'profile'; label: string; icon: string }> = [
+    { id: 'home', label: 'Home', icon: ICON.home },
+    { id: 'play', label: 'Play Now', icon: ICON.play },
+    { id: 'tournaments', label: 'Tournaments', icon: ICONS.trophy },
+    { id: 'wallet', label: 'Wallet', icon: ICONS.deposit },
+    { id: 'profile', label: 'Profile', icon: ICON.user }
+  ]
+  for (const tab of tabs) {
+    const active = tab.id === 'profile' ? current === 'settings' : tab.id === current
+    const btn = el('button', `cx-tabbar__item${active ? ' is-active' : ''}`) as HTMLButtonElement
+    btn.type = 'button'
+    if (active) btn.setAttribute('aria-current', 'page')
+    const icon = el('span', 'cx-tabbar__icon')
+    icon.innerHTML = tab.icon
+    btn.append(icon, el('span', 'cx-tabbar__label', tab.label))
+    btn.onclick = tab.id === 'profile' ? handlers.onProfile : () => handlers.go(tab.id as CasinoDestination)
+    tabbar.appendChild(btn)
+  }
+  root.appendChild(tabbar)
   return { root, main }
 }
 
 function footer(title: string): HTMLElement {
   const foot = el('footer', 'cx-footer')
+  // The phone's closing strip: the promise of the hall in one line. The desktop keeps its
+  // links row instead (casino.css hides one or the other).
+  const promo = el('div', 'cx-footer__promo')
+  const lead = el('span', 'cx-footer__lead')
+  lead.append(el('span', undefined, 'More Games'), el('strong', undefined, 'Bigger Rewards'))
+  promo.appendChild(lead)
+  for (const [icon, head, sub] of [
+    [ICONS.trophy, 'Compete', 'in Tournaments'],
+    [ICON.coin, 'Earn', 'USDT Rewards'],
+    [ICON.leaderboard, 'Climb', 'Leaderboards']
+  ] as const) {
+    const item = el('span', 'cx-footer__perk')
+    const i = el('span', 'cx-footer__perk-icon')
+    i.innerHTML = icon
+    const text = el('span', 'cx-footer__perk-text')
+    text.append(el('strong', undefined, head), el('span', undefined, sub))
+    item.append(i, text)
+    promo.appendChild(item)
+  }
+  const pays = el('span', 'cx-footer__pays')
+  pays.append(el('span', undefined, 'Skill'), el('strong', undefined, 'Pays!'))
+  promo.appendChild(pays)
+  foot.appendChild(promo)
   foot.appendChild(wordmark(title))
   const links = el('nav', 'cx-footer__links')
   for (const label of ['About', 'Terms', 'Privacy', 'Contact']) links.appendChild(el('span', 'cx-footer__link', label))
@@ -316,7 +457,10 @@ export function renderCasinoHome(bridge: LobbyBridge, actions: CasinoHomeActions
   cta.append(ctaIcon, document.createTextNode('PLAY NOW'))
   cta.onclick = actions.playNow
   body.append(ribbon, wordmark(title, true), tagline, cta)
-  hero.append(img, el('div', 'cx-hero__shade'), body)
+  const heroSide = el('div', 'cx-hero__side')
+  heroSide.setAttribute('aria-hidden', 'true')
+  heroSide.append(el('span', undefined, 'Real'), el('span', undefined, 'Players'), el('span', undefined, 'Real'), el('strong', undefined, 'Rewards'))
+  hero.append(img, el('div', 'cx-hero__shade'), body, heroSide)
   col.appendChild(hero)
 
   // ---------------------------------------------------------------- the strip of promises
@@ -416,7 +560,11 @@ export function renderCasinoHome(bridge: LobbyBridge, actions: CasinoHomeActions
   const rhead = el('div', 'cx-panel__head')
   const rtitle = el('h3', 'cx-panel__title')
   rtitle.append(el('span', 'cx-dot'), document.createTextNode('Recent Matches'))
-  rhead.appendChild(rtitle)
+  const recentAll = el('button', 'cx-link') as HTMLButtonElement
+  recentAll.type = 'button'
+  recentAll.textContent = 'View All'
+  recentAll.onclick = actions.history.length ? actions.openGames : actions.playNow
+  rhead.append(rtitle, recentAll)
   recent.appendChild(rhead)
   const list = el('div', 'cx-recent__list')
   const done = actions.history.filter((m) => m.finishedAt).slice(0, 7)
@@ -448,6 +596,20 @@ export function renderCasinoHome(bridge: LobbyBridge, actions: CasinoHomeActions
   warm.onclick = actions.practice
   card.appendChild(warm)
   aside.appendChild(card)
+
+  // Shown on a phone in the place of the warm-up card, which the mode cards already cover.
+  const anywhere = el('section', 'cx-panel cx-anywhere')
+  const anyIcon = el('span', 'cx-anywhere__icon')
+  anyIcon.innerHTML = ICON.phone
+  const anyText = el('div', 'cx-anywhere__text')
+  const anyTitle = el('h3', 'cx-panel__title cx-anywhere__title')
+  anyTitle.append(el('span', 'is-gold', 'Play'), el('span', undefined, 'Anytime'), el('span', undefined, 'Anywhere'))
+  anyText.append(anyTitle, el('p', 'cx-recent__empty', 'Phone, tablet or web. Your wallet and your record go with you.'))
+  const anyBtn = el('button', 'cx-btn cx-btn--play', 'Play Now') as HTMLButtonElement
+  anyBtn.type = 'button'
+  anyBtn.onclick = actions.playNow
+  anywhere.append(anyIcon, anyText, anyBtn)
+  aside.appendChild(anywhere)
 
   grid.appendChild(aside)
   screen.appendChild(grid)

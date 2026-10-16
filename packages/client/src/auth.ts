@@ -1,3 +1,4 @@
+import { APP_TITLE } from '@snooker/shared'
 import { api } from './game/network.js'
 
 /**
@@ -41,7 +42,7 @@ function brandCard(): HTMLElement {
   logo.innerHTML =
     '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" fill="#0a0a0f"/><circle cx="12" cy="12" r="7" fill="#c9a84c"/><circle cx="9.5" cy="9.5" r="2.5" fill="#e8c872"/></svg>'
   brand.appendChild(logo)
-  brand.appendChild(el('h1', 'auth-title', 'Snooker Arena'))
+  brand.appendChild(el('h1', 'auth-title', APP_TITLE))
   brand.appendChild(el('p', 'auth-subtitle', 'Premium Snooker Experience'))
   return brand
 }

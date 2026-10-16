@@ -45,8 +45,8 @@ export interface QualityTierConfig {
  *
  * low: 0.75 render scale, no AA, 1024 shadow, aniso 2, no cloth normal, no crowd,
  *      30fps, 24x14 balls. Ball gloss / cloth sheen are softened in scene materials.
- * medium: 0.9 scale, no AA, 1024 shadow, aniso 4, cloth normal on, crowd nearest-tier,
- *      60fps, 32x18 balls.
+ * medium: the table as high draws it (full scale, 2048 shadow, aniso 8, 32x20 balls),
+ *      no desktop AA, cloth normal on, crowd nearest-tier, 60fps.
  * high: full scale, MSAA on, 2048 shadow, aniso 8, cloth normal on, full crowd,
  *      60fps, 32x20 balls. Full phenolic clearcoat + env intensity.
  *
@@ -64,16 +64,19 @@ export const QUALITY_TIERS: Record<QualityTier, QualityTierConfig> = {
     fpsCap: 30,
     ballSegments: [24, 14]
   },
+  // Phones play here, so the table is drawn exactly as High draws it: full resolution,
+  // the same shadow map, texture filtering and ball mesh. What Medium still gives up is
+  // the desktop's edge smoothing (a phone gets it anyway, see scene3d) and the far crowd.
   medium: {
     name: 'medium',
-    renderScale: 0.9,
+    renderScale: 1,
     antialias: false,
-    shadowMapSize: 1024,
-    anisotropy: 4,
+    shadowMapSize: 2048,
+    anisotropy: 8,
     clothNormal: true,
     crowd: 'near',
     fpsCap: 60,
-    ballSegments: [32, 18]
+    ballSegments: [32, 20]
   },
   high: {
     name: 'high',
@@ -98,8 +101,11 @@ export function isQualityTier(value: unknown): value is QualityTier {
  * The device guess. Mirrored in `public/quality-boot.js` — same ladder, same
  * thresholds, so CSS and WebGL land on the same tier from one signal set:
  *
- *   - mobile user agent .................... low
- *   - phone-sized screen with dpr >= 2 ..... low   (webviews and small windows)
+ *   - mobile user agent on <= 4 cores or
+ *     <= 3GB ............................... low
+ *   - mobile user agent .................... medium (the table's light is baked, so a
+ *                                                      phone GPU can afford 60fps)
+ *   - phone-sized screen with dpr >= 2 ..... medium (webviews and small windows)
  *   - hardwareConcurrency <= 4 or
  *     deviceMemory <= 4 .................... medium
  *   - integrated or software GPU ........... medium  (cores say nothing about fill rate)
@@ -119,8 +125,9 @@ export function detectQualityTier(): QualityTier {
       ? Math.min(window.screen.width, window.screen.height) < 760
       : false
 
-  if (mobileUA) return 'low'
-  if (smallScreen && dpr >= 2) return 'low'
+  if (mobileUA && (cores <= 4 || mem <= 3)) return 'low'
+  if (mobileUA) return 'medium'
+  if (smallScreen && dpr >= 2) return 'medium'
   if (cores <= 4 || mem <= 4) return 'medium'
   if (hasWeakGpu()) return 'medium'
   if (dpr >= 2.5 && (cores <= 6 || mem <= 6)) return 'medium'
@@ -235,4 +242,16 @@ let resolved: QualityTierConfig | null = null
 export function qualityConfig(): QualityTierConfig {
   resolved ??= QUALITY_TIERS[resolveQualityTier()]
   return resolved
+}
+
+/**
+ * Whether this is a phone or a tablet: a mobile browser, or a touch screen whose short
+ * side is phone-sized. Decides the things a mobile GPU does differently from a desktop
+ * one (edge smoothing is nearly free there), not how much detail the device can carry.
+ */
+export function isPhoneScreen(): boolean {
+  if (typeof navigator === 'undefined' || typeof window === 'undefined') return false
+  if (/Android|iPhone|iPad|iPod|Mobile|Silk/i.test(navigator.userAgent)) return true
+  const touch = (navigator.maxTouchPoints ?? 0) > 0
+  return touch && Math.min(window.innerWidth, window.innerHeight) <= 820
 }

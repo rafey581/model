@@ -24,12 +24,19 @@ const HALF_W = TABLE_WIDTH / 2
  * the feel can be judged by eye and changed in one place.
  * ------------------------------------------------------------------ */
 
-/** Vertical field of view for the aim camera, in degrees. */
-export const AIM_FOV_DEG = 46
+/**
+ * Vertical field of view for the aim camera, in degrees.
+ *
+ * The aim view is the broadcast cue view: the lens a little wide, above and behind the
+ * cue ball, looking well down the table, so the table fills the frame from the cue ball to
+ * the far cushion and the room is a strip across the top. Down at 222mm the table ran off
+ * into a thin wedge under a wall of hoardings and looked small.
+ */
+export const AIM_FOV_DEG = 50
 /** How far behind the cue ball the aim camera sits, in millimetres. */
-export const AIM_BACK_MM = 480
+export const AIM_BACK_MM = 700
 /** How far above the cloth the aim camera sits, in millimetres. */
-export const AIM_HEIGHT_MM = 222
+export const AIM_HEIGHT_MM = 460
 /**
  * How far ahead of the cue ball the aim camera looks, in millimetres.
  *
@@ -37,7 +44,7 @@ export const AIM_HEIGHT_MM = 222
  * itself puts the horizon above the shot line, so the table runs away toward the top of
  * the screen and the cue ball sits low and near, the way a cue view actually looks.
  */
-export const AIM_LOOK_AHEAD_MM = 560
+export const AIM_LOOK_AHEAD_MM = 760
 /** The height the aim camera looks at: the cloth, not the ball. */
 export const AIM_LOOK_HEIGHT_MM = 0
 
@@ -64,10 +71,56 @@ export const AIM_PORTRAIT_FOV_PER_ASPECT = 14
 /** The most the portrait widening can ever add, in degrees. */
 export const AIM_PORTRAIT_MAX_EXTRA_DEG = 12
 
+/**
+ * The shape of the view behind the cue ball: how far back, how high, how far ahead it
+ * looks and how wide the lens is.
+ */
+export interface AimProfile {
+  backMm: number
+  heightMm: number
+  lookAheadMm: number
+  fovDeg: number
+}
+
+/** The desktop's cue view: the constants above. */
+export const AIM_PROFILE_DESKTOP: AimProfile = {
+  backMm: AIM_BACK_MM,
+  heightMm: AIM_HEIGHT_MM,
+  lookAheadMm: AIM_LOOK_AHEAD_MM,
+  fovDeg: AIM_FOV_DEG
+}
+
+/**
+ * The phone's cue view, the one the mobile snooker games use: the lens down near the
+ * player's eye over the cue, a little closer to the ball and tilted down less, with a
+ * slightly longer lens. The cue ball sits big and low, the shot runs up the middle, the
+ * far cushion is a third of the way down and the room is a band across the top.
+ * Measured off reference play: cue ball centre about three quarters down the screen and
+ * close to a tenth of its height across, far cushion about four tenths down.
+ */
+export const AIM_PROFILE_PHONE: AimProfile = {
+  backMm: 640,
+  heightMm: 280,
+  lookAheadMm: 1030,
+  fovDeg: 45
+}
+
+let aimProfile: AimProfile = AIM_PROFILE_DESKTOP
+
+/** Chooses the cue view for this device. The scene sets it once, when it is built. */
+export function setAimProfile(profile: AimProfile): void {
+  aimProfile = profile
+}
+
+/** The cue view in use. */
+export function currentAimProfile(): AimProfile {
+  return aimProfile
+}
+
 /** The aim camera's vertical FOV for a canvas shape, widened on narrow portrait screens. */
 export function aimFovDeg(aspect: number): number {
   const narrow = Math.max(0, AIM_PORTRAIT_FROM_ASPECT - aspect)
-  return AIM_FOV_DEG + Math.min(AIM_PORTRAIT_MAX_EXTRA_DEG, narrow * AIM_PORTRAIT_FOV_PER_ASPECT)
+  return aimProfile.fovDeg + Math.min(AIM_PORTRAIT_MAX_EXTRA_DEG, narrow * AIM_PORTRAIT_FOV_PER_ASPECT)
 }
 
 /** Vertical field of view for the overhead camera, in degrees. */
@@ -470,19 +523,20 @@ export function topDownHeight(aspect: number, fovDeg: number = TOP_DOWN_FOV_DEG)
 export function aimPose(
   cue: { x: number; y: number },
   yaw: number,
-  fovDeg: number = AIM_FOV_DEG
+  fovDeg: number = aimProfile.fovDeg
 ): CameraPose {
+  const { backMm, heightMm, lookAheadMm } = aimProfile
   const dx = Math.cos(yaw)
   const dy = Math.sin(yaw)
-  const x = cue.x - dx * AIM_BACK_MM
-  const y = cue.y - dy * AIM_BACK_MM
+  const x = cue.x - dx * backMm
+  const y = cue.y - dy * backMm
   const overRail = x < 0 || x > TABLE_LENGTH || y < 0 || y > TABLE_WIDTH
   return {
     x,
     y,
-    height: overRail ? Math.max(AIM_HEIGHT_MM, AIM_RAIL_CLEARANCE_MM) : AIM_HEIGHT_MM,
-    lookX: cue.x + dx * AIM_LOOK_AHEAD_MM,
-    lookY: cue.y + dy * AIM_LOOK_AHEAD_MM,
+    height: overRail ? Math.max(heightMm, AIM_RAIL_CLEARANCE_MM) : heightMm,
+    lookX: cue.x + dx * lookAheadMm,
+    lookY: cue.y + dy * lookAheadMm,
     lookHeight: AIM_LOOK_HEIGHT_MM,
     fov: fovDeg
   }

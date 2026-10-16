@@ -2227,3 +2227,38 @@ body:has(.gl-root) {
     overflow: visible;
   }
 }
+
+/* --- Wallet: one switch between the deposit and withdraw screens ------------------- */
+.gl-wallet-tabs {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  margin: 0 0 var(--space-4);
+  max-width: 360px;
+  border-radius: var(--radius-btn);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--panel-border);
+}
+.gl-wallet-tab {
+  flex: 1;
+  min-height: 40px;
+  border: 0;
+  border-radius: calc(var(--radius-btn) - 2px);
+  background: transparent;
+  color: var(--mist);
+  font-family: var(--font-label);
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background var(--motion-press), color var(--motion-press);
+}
+.gl-wallet-tab[aria-selected='true'] {
+  background: var(--primary-action);
+  color: var(--ink-950);
+}
+.gl-wallet-tab:focus-visible {
+  outline: 2px solid var(--amber-400);
+  outline-offset: 2px;
+}
