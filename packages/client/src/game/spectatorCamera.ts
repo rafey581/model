@@ -32,8 +32,17 @@ export interface SpectatorCamConfig {
   fovDeg: number
   /** Clear space kept between the table and each edge of the screen, as a fraction of it. */
   screenMargin: number
-  /** Which short end the camera stands over. `foot` is the end opposite the baulk line. */
-  endSide: 'foot' | 'baulk'
+  /**
+   * Extra table kept in view beyond the pocket mouths, in millimetres: the leather and the
+   * wood of the corners stand further out than the cloth. Absent is none.
+   */
+  extraMm?: number
+  /**
+   * Where the camera stands. `foot` and `baulk` are over a short end, looking down the
+   * length; `side` is over the near long cushion, looking across, so the length of the
+   * table runs across the screen — the fit for a wide phone held sideways.
+   */
+  endSide: 'foot' | 'baulk' | 'side'
   /** The lowest and highest the lens may stand, in millimetres above the cloth. */
   minHeight: number
   maxHeight: number
@@ -62,6 +71,22 @@ export interface SpectatorCamConfig {
   /** The opponent's aim line: the player's own ribbon, dimmer and warm. */
   aimLineColor: number
   aimLineOpacity: number
+}
+
+/**
+ * The phone's spectator view: from over the foot end, looking down the table the way the
+ * mobile snooker games show the opponent's visit, but lower and closer than the desktop's,
+ * with almost no margin. The near cushion spreads across the screen and the balls are drawn
+ * as large as a wide screen held sideways allows, with the whole table still in view.
+ */
+export const SPECTATOR_CAM_PHONE_OVERRIDES: Partial<SpectatorCamConfig> = {
+  endSide: 'foot',
+  pitchDeg: 45,
+  fovDeg: 44,
+  screenMargin: 0.04,
+  // The corner leather stands about 140 mm out from the cushion line on the model.
+  extraMm: 75,
+  minHeight: 600
 }
 
 export const SPECTATOR_CAM: SpectatorCamConfig = {
@@ -110,10 +135,29 @@ export interface SpectatorFit {
  * tightened and solved again, which backs the camera off along its own line of sight and
  * keeps the table centred top to bottom.
  */
+/**
+ * The axis the camera looks along, for where it stands: its centre on the table, how far
+ * the table reaches along it (depth) and across it (to the sides of the screen).
+ */
+function viewAxis(config: SpectatorCamConfig): { centre: number; halfDepth: number; halfSide: number; facing: number } {
+  const extra = config.extraMm ?? 0
+  if (config.endSide === 'side') {
+    // Over the long cushion at y = 0, looking towards +y.
+    return { centre: HALF_W, halfDepth: VISIBLE_HALF_WIDTH + extra, halfSide: VISIBLE_HALF_LENGTH + extra, facing: 1 }
+  }
+  // Looking towards -x from the foot end, towards +x from the baulk end.
+  return {
+    centre: HALF_L,
+    halfDepth: VISIBLE_HALF_LENGTH + extra,
+    halfSide: VISIBLE_HALF_WIDTH + extra,
+    facing: config.endSide === 'foot' ? -1 : 1
+  }
+}
+
 function solveForFov(config: SpectatorCamConfig, aspect: number, fovDeg: number): { x: number; height: number } {
   const pitch = (config.pitchDeg * Math.PI) / 180
-  // Looking towards -x from the foot end, towards +x from the baulk end.
-  const facing = config.endSide === 'foot' ? -1 : 1
+  const axis = viewAxis(config)
+  const facing = axis.facing
   const fx = facing * Math.cos(pitch)
   const fh = -Math.sin(pitch)
   const ux = facing * Math.sin(pitch)
@@ -121,8 +165,8 @@ function solveForFov(config: SpectatorCamConfig, aspect: number, fovDeg: number)
   const usable = Math.max(0.05, 1 - 2 * config.screenMargin)
   const tanV = Math.tan((fovDeg * Math.PI) / 360) * usable
   const tanH = tanV * Math.max(aspect, 0.05)
-  const nearX = HALF_L - facing * VISIBLE_HALF_LENGTH
-  const farX = HALF_L + facing * VISIBLE_HALF_LENGTH
+  const nearX = axis.centre - facing * axis.halfDepth
+  const farX = axis.centre + facing * axis.halfDepth
 
   const solve = (t: number): { x: number; height: number; nearDepth: number } => {
     // A rail at `t` up the frame satisfies r·(u − t·f) = 0, with r from the lens to it.
@@ -141,7 +185,7 @@ function solveForFov(config: SpectatorCamConfig, aspect: number, fovDeg: number)
   }
 
   let best = solve(tanV)
-  if (VISIBLE_HALF_WIDTH / best.nearDepth > tanH) {
+  if (axis.halfSide / best.nearDepth > tanH) {
     // Too wide for the screen at this framing. A tighter vertical frame is a camera
     // further back, and the near rail's depth grows steadily as it tightens, so the
     // loosest frame that still clears the sides is found by halving.
@@ -149,7 +193,7 @@ function solveForFov(config: SpectatorCamConfig, aspect: number, fovDeg: number)
     let high = tanV
     for (let i = 0; i < 48; i++) {
       const mid = (low + high) / 2
-      if (VISIBLE_HALF_WIDTH / solve(mid).nearDepth > tanH) high = mid
+      if (axis.halfSide / solve(mid).nearDepth > tanH) high = mid
       else low = mid
     }
     best = solve(low)
@@ -158,7 +202,7 @@ function solveForFov(config: SpectatorCamConfig, aspect: number, fovDeg: number)
 }
 
 const insideBox = (config: SpectatorCamConfig, at: { x: number; height: number }): boolean =>
-  at.height <= config.maxHeight && Math.abs(at.x - HALF_L) <= CAMERA_REACH_MM
+  at.height <= config.maxHeight && Math.abs(at.x - viewAxis(config).centre) <= CAMERA_REACH_MM
 
 /**
  * The spectator pose for a screen of this shape.
@@ -194,20 +238,23 @@ export function fitSpectatorCamera(aspect: number, config: SpectatorCamConfig = 
     }
   }
   const pitch = (config.pitchDeg * Math.PI) / 180
-  const facing = config.endSide === 'foot' ? -1 : 1
+  const axis = viewAxis(config)
+  const facing = axis.facing
   const height = Math.max(config.minHeight, at.height)
   // The look-at point is where the line of sight meets the cloth, so the pose carries the
   // pitch exactly and the rig's own `lookAt` reproduces it.
+  const along = at.x + (facing * Math.cos(pitch) * at.height) / Math.sin(pitch)
+  const side = config.endSide === 'side'
   const pose = clampPose({
-    x: at.x,
-    y: HALF_W,
+    x: side ? HALF_L : at.x,
+    y: side ? at.x : HALF_W,
     height,
-    lookX: at.x + (facing * Math.cos(pitch) * at.height) / Math.sin(pitch),
-    lookY: HALF_W,
+    lookX: side ? HALF_L : along,
+    lookY: side ? along : HALF_W,
     lookHeight: height - at.height,
     fov: fovDeg
   })
-  return { pose, fovDeg, distance: Math.hypot(pose.x - HALF_L, pose.height), fits }
+  return { pose, fovDeg, distance: Math.hypot(side ? pose.y - HALF_W : pose.x - HALF_L, pose.height), fits }
 }
 
 /**

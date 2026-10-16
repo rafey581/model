@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { BALL_IDS, TABLE_LENGTH, TABLE_WIDTH, BALL_RADIUS, BAULK_LINE_X, D_RADIUS, POCKET_RADIUS_CORNER, POCKET_RADIUS_MIDDLE, pocketPositions } from '@snooker/shared'
+import { BALL_IDS, TABLE_LENGTH, TABLE_WIDTH, BALL_RADIUS, BAULK_LINE_X, D_RADIUS, POCKET_RADIUS_CORNER, POCKET_RADIUS_MIDDLE, pocketPositions, SIDE_SPIN_FRICTION } from '@snooker/shared'
 import type { FrameSnapshotData, AimState, RenderOptions } from './renderer.js'
 import {
   aimLineWorldWidth,
@@ -15,6 +15,7 @@ import { buildArenaEnvironment, hideLegacyRoom } from './arenaEnvironment.js'
 import type { ArenaSeatPlacement } from './arenaEnvironment.js'
 import { ARENA_CONFIG, applyArenaQuality } from './arenaConfig.js'
 import { buildCueStick } from './cueStick.js'
+import { cueElevationDeg } from './cueClearance.js'
 import { readOpponentShot, buildVenueEvents, type VenueEvents, type VenueHost } from './venueEvents.js'
 import type { OpponentShot } from './opponentCue.js'
 import type { ShotPlayback } from '@snooker/shared'
@@ -95,6 +96,7 @@ import {
 } from './camera.js'
 import {
   SPECTATOR_CAM,
+  SPECTATOR_CAM_PHONE_OVERRIDES,
   addressHeading,
   beginSpectatorTransition,
   fitSpectatorCamera,
@@ -202,13 +204,34 @@ const STICK_REST_GAP = 8
 /** How far the tip draws back at full power, as the player loads the shot. */
 const STICK_POWER_DRAW = 190
 /**
+ * The stroke, once the shot is let go: the cue is driven through from where it was drawn
+ * back to the ball in this long, gathering pace as a cue arm does, then follows through
+ * past where the ball was. The ball sets off at the moment of contact (the replay is held
+ * back until then: see `strikeRemainingSeconds`).
+ */
+const STICK_STROKE_MS = 220
+/** How far the tip carries on past the contact, and how long that takes. */
+const STICK_FOLLOW_MM = 24
+const STICK_FOLLOW_MS = 90
+/** How long the cue rests at the end of its follow-through before it is put away. */
+const STICK_STROKE_HOLD_MS = 160
+/** A stroke whose shot never comes back (refused, lost) is put away after this long. */
+const STICK_STROKE_GIVE_UP_MS = 2500
+/**
+ * Drawing the cue back leans the camera back with it, a little, so a hard shot is felt as
+ * well as seen on the slider; it comes back in as the cue goes through. At full power the
+ * lens stands this much further back and this much higher.
+ */
+const POWER_CAM_BACK_MM = 130
+const POWER_CAM_UP_MM = 40
+/** How quickly the lean follows the power, per second. */
+const POWER_CAM_RATE = 10
+/**
  * How far from the centre of the cue ball the tip strikes at full spin, as a share of the
  * radius: half the radius is as far as a tip holds before it miscues, which is the offset the
  * engine's full spin stands for.
  */
 const TIP_REACH_SHARE = 0.5
-/** How far the butt of the cue is raised above level, in degrees. */
-const CUE_ELEVATION_DEG = 4
 /** The red spot on the cue ball where the tip will strike it. */
 const TIP_MARK_RADIUS_MM = 2.6
 const TIP_MARK_COLOR = 0xe02020
@@ -239,6 +262,8 @@ const SPIN_FOCUS_RATE = 9
 const SPIN_GUIDE_COLOR = 0x13243e
 const SPIN_GUIDE_EDGE_COLOR = 0xffffff
 const SPIN_GUIDE_DOT_MM = 1.9
+/** The vertical, for turning a ball about it (side spin). */
+const UP_AXIS = new THREE.Vector3(0, 1, 0)
 const tableX = (x: number): number => x - HALF_L
 const tableZ = (y: number): number => y - HALF_W
 /** Stands in for an undrawn table, so the camera's per-frame walk allocates nothing. */
@@ -656,10 +681,25 @@ const TEXTURED_HEMI_SCALE = 0.4
 const CANOPY_COLOR = 0xfff2e0
 const CANOPY_INTENSITY = 0.9
 
-/** How long a potted ball takes to go, how far it falls, and how much of that time is the run to the middle of the pocket. */
-const POT_DROP_SECONDS = 0.55
+/**
+ * A potted ball goes in the way it arrived: it keeps the speed and the direction it had as
+ * it crossed the lip, and falls under gravity while it does. A slow ball rolls over the
+ * edge and drops nearly where it was; a fast one is carried across the hole into the back
+ * of the pocket before it goes down. How far it falls before the pocket has hidden it.
+ */
 const POT_DROP_MM = 260
-const POT_RUN_IN = 0.45
+/** Gravity, in millimetres per second squared. */
+const POT_GRAVITY = 9810
+/** A ball that crept in still has to go over the edge: never slower than this, in mm/s. */
+const POT_MIN_SPEED = 260
+/** The fastest a ball is carried in at, in mm/s: a hard pot, not a shot fired through the back. */
+const POT_MAX_SPEED = 4200
+/** How far from the middle of the pocket the ball can travel before it meets the back of it. */
+const POT_BACK_MM = 34
+/** What is left of a ball's pace into the back of the pocket when it meets it. */
+const POT_BACK_BOUNCE = 0.18
+/** The longest a drop is ever drawn, whatever happens, in seconds. */
+const POT_DROP_MAX_SECONDS = 1.2
 
 /** The bed's material: physically based on the high tier, baked and unlit below it. */
 type ClothMaterial = THREE.MeshPhysicalMaterial | THREE.MeshLambertMaterial | THREE.MeshBasicMaterial
@@ -1189,6 +1229,11 @@ export class BallRig {
   sinkT = 0
   sinkStart = new THREE.Vector3()
   sinkTarget = new THREE.Vector3()
+  /** The ball's velocity across the cloth as drawn, in mm/s: what it takes into a pocket. */
+  velocity = new THREE.Vector3()
+  /** The velocity it is carrying in the pocket, and where it is across the hole. */
+  sinkVel = new THREE.Vector3()
+  sinkPos = new THREE.Vector3()
   rising = false
   riseT = 0
   riseFrom = new THREE.Vector3()
@@ -1203,6 +1248,10 @@ export class BallRig {
   private readonly prevVisual = new THREE.Vector3()
   private hasPrevVisual = false
   private readonly rollAxis = new THREE.Vector3()
+  /** How the replay says the ball is turning this frame; null when it does not say. */
+  turn: { rollX: number; rollY: number; sideRate: number } | null = null
+  /** Side spin still turning it, rad/s, left from the replay to wear off on its own. */
+  sideRate = 0
 
   constructor(radius: number, color: number, shadowTex: THREE.CanvasTexture, opts: BallRigOptions = {}) {
     this.cueShadow = opts.cue === true
@@ -1261,6 +1310,39 @@ export class BallRig {
     this.prevVisual.copy(p)
   }
 
+  /**
+   * Turns the ball for one frame the way it is really turning.
+   *
+   * With the replay's turning to go on, the ball turns at its own rate rather than at the
+   * rate its travel implies: a stunned ball slides with barely a turn, a screwed ball spins
+   * backwards while it still runs forwards, a ball with side spin turns about the vertical,
+   * and one that has stopped can go on spinning on the spot. Without it the ball is drawn
+   * rolling, from how far it moved. `scale` slows the turning with a slowed replay.
+   */
+  stepTurn(dt: number, scale = 1): void {
+    const turn = this.turn
+    if (turn) {
+      // The surface's velocity over the cloth: turning about up x that velocity, by its
+      // distance over the radius.
+      const rx = turn.rollX * scale
+      const rz = turn.rollY * scale
+      const speed = Math.hypot(rx, rz)
+      if (speed > 1e-3) {
+        this.rollAxis.set(rz, 0, -rx).normalize()
+        this.sphere.rotateOnWorldAxis(this.rollAxis, (speed * dt) / this.radius)
+      }
+      this.sideRate = turn.sideRate * scale
+      this.prevVisual.copy(this.group.position)
+      this.hasPrevVisual = true
+    } else {
+      this.stepRoll()
+      // Side spin carried over from the replay wears off on its own.
+      if (Math.abs(this.sideRate) > 0.05) this.sideRate *= Math.exp(-SIDE_SPIN_FRICTION * dt)
+      else this.sideRate = 0
+    }
+    if (this.sideRate !== 0) this.sphere.rotateOnWorldAxis(UP_AXIS, this.sideRate * dt)
+  }
+
   setVisible(visible: boolean): void {
     this.group.visible = visible
   }
@@ -1274,7 +1356,19 @@ export class BallRig {
     this.sinking = true
     this.sinkT = 0
     this.sinkStart.copy(this.group.position)
+    this.sinkPos.copy(this.group.position)
     this.sinkTarget.set(targetX, this.group.position.y - 8, targetZ)
+    // The pace it came in with, along the cloth.
+    this.sinkVel.set(this.velocity.x, 0, this.velocity.z)
+    let speed = this.sinkVel.length()
+    if (speed < POT_MIN_SPEED) {
+      // Barely moving (or no motion seen): it goes over the edge towards the middle.
+      const toward = new THREE.Vector3(targetX - this.group.position.x, 0, targetZ - this.group.position.z)
+      if (toward.lengthSq() < 1) toward.set(0, 0, 1)
+      this.sinkVel.copy(toward.normalize().multiplyScalar(POT_MIN_SPEED))
+      speed = POT_MIN_SPEED
+    }
+    if (speed > POT_MAX_SPEED) this.sinkVel.multiplyScalar(POT_MAX_SPEED / speed)
   }
 
   /**
@@ -1383,6 +1477,30 @@ export class Scene3D implements VenueHost {
   private spinFocusAmount = 0
   /** How far the player has pulled the view behind the cue ball back (0..1), and the eased view of it. */
   private aimPullTarget = 0
+  /**
+   * On a phone the camera stands straight behind the cue, always: the aim is turned by
+   * dragging, and the view turns with it exactly, the way the mobile snooker games work.
+   * Set once, with the cue view, when the scene is built.
+   */
+  private cameraFollowsAim = false
+  /** How fast the replay on the table runs against real time, for the balls' turning (a slowed recap turns them slower). */
+  private turnScale = 1
+  /** When the current stroke was let go (performance.now ms), 0 when none is on, and where the tip started from. */
+  private strikeAt = 0
+  private strikeFromGap = 0
+  /** The cue ball and the aim the stroke was played with, and the last ones drawn before it. */
+  private strikeShot: { cue: { x: number; y: number }; aim: AimState } | null = null
+  private lastAimShown: { cue: { x: number; y: number }; aim: AimState } | null = null
+  /** The power the cue is drawn back with, as the aim last gave it, and the camera's eased lean for it. */
+  private aimPowerTarget = 0
+  private aimPowerShown = 0
+  /**
+   * A recap (a replayed highlight, or the match's last shot) is on the table: the pocket
+   * camera cuts in for the pot as it does for an opponent's shot, and the pose it cut away
+   * from is kept so the picture cuts straight back to it once the ball has gone.
+   */
+  private recapCamera = false
+  private recapSavedPose: CameraPose | null = null
   private aimPullAmount = 0
   /** The strip's current and target opacity, so it fades rather than cuts. */
   private stickShadowAlpha = 0
@@ -1823,6 +1941,7 @@ export class Scene3D implements VenueHost {
     // The cue view is the phone's own on a phone (lower and closer, the mobile games' view)
     // and the broadcast one on a desktop. Chosen before any pose is worked out.
     setAimProfile(isPhoneScreen() ? AIM_PROFILE_PHONE : AIM_PROFILE_DESKTOP)
+    this.cameraFollowsAim = isPhoneScreen()
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       // Edge smoothing is the one part of High a laptop with built-in graphics cannot pay
@@ -4130,6 +4249,8 @@ const outerL = APRON_OUTER_L
         this.balls.set(ball.id, rig)
         this.scene.add(rig.group)
       }
+      // How the replay says this ball is turning, if it says (see BallRig.stepTurn).
+      rig.turn = ball.turn ?? null
       // A ball potted on this very update is still on show: it has its drop to do. Hiding
       // it here, before the drop below had a chance to start, is what made a potted ball
       // blink out at the lip — the drop only starts for a ball that is visible.
@@ -4206,7 +4327,17 @@ const outerL = APRON_OUTER_L
     // player's own visit. Without the canAim test they would be re-anchored to a
     // cue ball that is still travelling, which dragged the stick diagonally across
     // the cloth behind a shot the player had already played.
-    if (cueBall && options.aim && myTurn && options.canAim !== false) {
+    // A stroke under way is drawn through to its end from where it was played, whatever
+    // the table has moved on to: the answer from the server can land mid-stroke and hand
+    // the turn over, and the cue still has to finish going through.
+    const striking =
+      this.strikeAt !== 0 &&
+      this.strikeShot !== null &&
+      performance.now() - this.strikeAt < STICK_STROKE_MS + STICK_FOLLOW_MS + STICK_STROKE_HOLD_MS
+    if (striking) {
+      this.showAim(this.strikeShot!.cue, this.strikeShot!.aim, snapshot.balls, snapshot.ballOn)
+    } else if (cueBall && options.aim && myTurn && options.canAim !== false && !this.strikeAt) {
+      this.lastAimShown = { cue: { x: cueBall.x, y: cueBall.y }, aim: { ...options.aim } }
       this.showAim(cueBall, options.aim, snapshot.balls, snapshot.ballOn)
     } else {
       this.hideAim()
@@ -4261,13 +4392,35 @@ const outerL = APRON_OUTER_L
     this.aimRibbon2.visible = false
     this.aimRibbon3.visible = false
     if (guide) this.showContactMarker(guide)
+    // The guide goes as the cue goes through: it was for aiming, and the aiming is done.
+    if (this.strikeAt) {
+      this.aimRibbon1.visible = false
+      this.aimRibbon1Open.visible = false
+      this.aimRibbon2.visible = false
+      this.aimRibbon3.visible = false
+      this.contactRing.visible = false
+    }
 
     // Where the tip strikes: the spin dial's point, on the face of the ball the cue is
     // looking at. Side spin moves it across the ball, top and screw up and down it, by the
     // share of the ball a tip can reach before it miscues — the same offset the engine's
     // spin stands for. The cue stays parallel to the line of aim, the way a player cues
     // for side, and runs straight through that point; the red spot sits on it.
-    const tipGap = BALL_RADIUS + STICK_REST_GAP + aim.power * STICK_POWER_DRAW
+    let tipGap = BALL_RADIUS + STICK_REST_GAP + aim.power * STICK_POWER_DRAW
+    this.aimPowerTarget = this.strikeAt ? 0 : aim.power
+    if (this.strikeAt) {
+      // The stroke: driven through to the ball, faster as it goes, then followed through.
+      const elapsed = performance.now() - this.strikeAt
+      if (elapsed > STICK_STROKE_GIVE_UP_MS) {
+        this.strikeAt = 0
+      } else if (elapsed <= STICK_STROKE_MS) {
+        const t = elapsed / STICK_STROKE_MS
+        tipGap = this.strikeFromGap + (BALL_RADIUS - this.strikeFromGap) * t * t
+      } else {
+        const t = Math.min(1, (elapsed - STICK_STROKE_MS) / STICK_FOLLOW_MS)
+        tipGap = BALL_RADIUS - STICK_FOLLOW_MM * (1 - (1 - t) * (1 - t))
+      }
+    }
     const reach = BALL_RADIUS * TIP_REACH_SHARE
     const side = Math.max(-1, Math.min(1, aim.spinX ?? 0)) * reach
     const height = Math.max(-1, Math.min(1, aim.spinY ?? 0)) * reach
@@ -4278,9 +4431,10 @@ const outerL = APRON_OUTER_L
     const hitX = cx + rightX * side - dir.x * depth
     const hitY = BALL_RADIUS + height
     const hitZ = cz + rightZ * side - dir.z * depth
-    // The butt is raised a few degrees, as it is over a real table, so the cue clears the
-    // cushion behind the ball instead of lying flat through it.
-    const elev = (CUE_ELEVATION_DEG * Math.PI) / 180
+    // The butt is raised a few degrees over open cloth, as it is over a real table, and as
+    // steeply as it takes when the cue ball is near a cushion, so the cue comes over the
+    // rail behind the ball instead of running through the wood (see cueClearance.ts).
+    const elev = (cueElevationDeg(cueBall, aim.angle, hitY, depth) * Math.PI) / 180
     const fwd = new THREE.Vector3(dir.x * Math.cos(elev), -Math.sin(elev), dir.z * Math.cos(elev))
     const tipBack = tipGap - BALL_RADIUS + depth
     const backOff = tipBack + STICK_TIP_Y
@@ -4413,6 +4567,30 @@ const outerL = APRON_OUTER_L
     if (this.tipMark) this.tipMark.visible = false
     if (this.spinGuide) this.spinGuide.visible = false
     if (this.stickShadow) this.stickShadowTarget = 0
+    this.strikeAt = 0
+    this.strikeShot = null
+    this.aimPowerTarget = 0
+  }
+
+  /**
+   * The player has let the shot go: the cue is driven through from where it was drawn back
+   * (`power`, 0..1), over the stroke's length, and follows through. Picture only.
+   */
+  strikeCue(power: number): void {
+    if (!this.lastAimShown) return
+    this.strikeShot = { cue: { ...this.lastAimShown.cue }, aim: { ...this.lastAimShown.aim, power } }
+    this.strikeFromGap = BALL_RADIUS + STICK_REST_GAP + Math.max(0, Math.min(1, power)) * STICK_POWER_DRAW
+    this.strikeAt = performance.now()
+  }
+
+  /**
+   * Seconds until the stroke under way reaches the ball, 0 when none is. The shot's replay
+   * is held back this long, so the ball leaves the moment the tip meets it — however soon
+   * the server's answer came back.
+   */
+  strikeRemainingSeconds(): number {
+    if (!this.strikeAt) return 0
+    return Math.max(0, (STICK_STROKE_MS - (performance.now() - this.strikeAt)) / 1000)
   }
 
   /**
@@ -4422,6 +4600,20 @@ const outerL = APRON_OUTER_L
    */
   setSpinFocus(active: boolean): void {
     this.spinFocusTarget = active ? 1 : 0
+  }
+
+  /** How fast the replay on screen runs against real time (1 live, less in a slowed recap). */
+  setReplayRate(rate: number): void {
+    this.turnScale = Number.isFinite(rate) && rate > 0 ? rate : 1
+  }
+
+  /** A recap is starting (true) or over (false): the pocket camera covers its pots. */
+  setRecapCamera(active: boolean): void {
+    this.recapCamera = active
+    if (!active && this.recapSavedPose) {
+      this.rig = { pose: this.recapSavedPose, yaw: this.rig.yaw }
+      this.recapSavedPose = null
+    }
   }
 
   /**
@@ -4469,6 +4661,9 @@ const outerL = APRON_OUTER_L
     // The spectator view is a fixed television shot: a drag while it is up turns nothing,
     // and is not saved up to swing the aim view when it comes back.
     if (this.spectating) return
+    // On a phone the view is the aim's own heading (see `cameraFollowsAim`): a drag turns
+    // the aim, and the camera follows it there, so nothing is added on top.
+    if (this.cameraFollowsAim) return
     this.latch = addOrbit(this.latch, delta)
   }
 
@@ -4617,6 +4812,11 @@ const outerL = APRON_OUTER_L
       this.spectatorTransition = stepped.transition
       this.rig = { pose: stepped.pose, yaw: this.rig.yaw }
       this.aimViewSettled = false
+    } else if (this.recapCamera && !this.spectating && this.potCamera()) {
+      // A recap's pot: cut to the pocket, remembering where the picture was.
+      if (!this.recapSavedPose) this.recapSavedPose = this.rig.pose
+      this.rig = { pose: this.potCamera()!, yaw: this.rig.yaw }
+      this.aimViewSettled = false
     } else if (this.spectating) {
       // Held. Read through the fit each frame so a resize or a turned phone refits it.
       // While a ball is on its way into a pocket the picture cuts to that pocket, and cuts
@@ -4624,6 +4824,11 @@ const outerL = APRON_OUTER_L
       this.rig = { pose: this.potCamera() ?? this.spectatorPose(), yaw: this.rig.yaw }
       this.aimViewSettled = false
     } else {
+      // Back from a recap's pocket camera: straight back to the picture it cut away from.
+      if (this.recapSavedPose) {
+        this.rig = { pose: this.recapSavedPose, yaw: this.rig.yaw }
+        this.recapSavedPose = null
+      }
       // While a shot is playing the view stays the one the player chose. There used to be
       // a third view for this — the camera climbed up behind the balls to follow them —
       // and it took the player out of their seat at the moment they most wanted to watch
@@ -4635,7 +4840,15 @@ const outerL = APRON_OUTER_L
       // While the player is free to aim, the heading pans after an aim that has swung
       // out of the band in front of the lens — gated to the half-plane the camera can
       // see, so the drag-back that sets power cannot spin it.
-      if (!this.tracking) this.latch = followHeadingLatch(this.latch, this.lastAimAngle, dt)
+      // On a phone the heading is the aim itself, with no look-around on top: the old
+      // pairing of a following heading and a separate drag orbit could add up to twice
+      // the turn, or stop at the orbit's limit while the aim kept going, which left the
+      // view at angles a finger could not get back from.
+      if (!this.tracking) {
+        this.latch = this.cameraFollowsAim
+          ? { heading: this.lastAimAngle, orbit: 0 }
+          : followHeadingLatch(this.latch, this.lastAimAngle, dt)
+      }
       // The view the player just picked is cut to, not flown to. Only when the view on
       // screen is theirs to pick: a shot being followed keeps its own easing.
       const cut = this.cameraCut && !this.tracking && !this.placementViewHeld
@@ -4686,6 +4899,21 @@ const outerL = APRON_OUTER_L
       this.cameraMode === 'AIM'
     this.spinFocusAmount = damp(this.spinFocusAmount, canFocus ? 1 : 0, SPIN_FOCUS_RATE, dt)
     if (this.spinFocusAmount < 0.002) this.spinFocusAmount = 0
+    // The cue drawn back leans the view back with it (see POWER_CAM_*), and in again as it
+    // goes through. Only in the view behind the cue ball.
+    this.aimPowerShown = damp(this.aimPowerShown, this.tipMark.visible ? this.aimPowerTarget : 0, POWER_CAM_RATE, dt)
+    if (this.aimPowerShown > 0.002 && this.cameraMode === 'AIM' && !this.spectating && !this.placementTransition.active) {
+      const dx = pose.lookX - pose.x
+      const dy = pose.lookY - pose.y
+      const run = Math.hypot(dx, dy) || 1
+      const back = POWER_CAM_BACK_MM * this.aimPowerShown
+      pose = {
+        ...pose,
+        x: pose.x - (dx / run) * back,
+        y: pose.y - (dy / run) * back,
+        height: pose.height + POWER_CAM_UP_MM * this.aimPowerShown
+      }
+    }
     // The player's pull: back along the line of sight and up, the look point held.
     this.aimPullAmount = damp(this.aimPullAmount, this.aimPullTarget, AIM_PULL_RATE, dt)
     if (Math.abs(this.aimPullAmount - this.aimPullTarget) < 0.001) this.aimPullAmount = this.aimPullTarget
@@ -4901,7 +5129,10 @@ const outerL = APRON_OUTER_L
   private spectatorPose(): CameraPose {
     const aspect = this.cvw / Math.max(1, this.cvh)
     if (!this.spectatorFit || this.spectatorFit.aspect !== aspect) {
-      this.spectatorFit = { aspect, pose: fitSpectatorCamera(aspect).pose }
+      // A phone gets a lower, closer view down the length that fills a wide screen held
+      // sideways (SPECTATOR_CAM_PHONE_OVERRIDES); a desktop keeps its own.
+      const config = this.cameraFollowsAim ? { ...SPECTATOR_CAM, ...SPECTATOR_CAM_PHONE_OVERRIDES } : SPECTATOR_CAM
+      this.spectatorFit = { aspect, pose: fitSpectatorCamera(aspect, config).pose }
     }
     return this.spectatorFit.pose
   }
@@ -5149,9 +5380,16 @@ const outerL = APRON_OUTER_L
       const k = this.immediate ? 1 : 1 - Math.exp(-dt * 14)
       for (const rig of this.balls.values()) {
         if (rig.group.visible && !rig.sinking && !rig.rising) {
+          const beforeX = rig.group.position.x
+          const beforeZ = rig.group.position.z
           rig.group.position.lerp(rig.target, k)
-          // Visual roll from cloth translation (spin dots / phenolic highlights track motion).
-          rig.stepRoll()
+          // The velocity as drawn, lightly smoothed: what a pot carries into the pocket.
+          const vx = (rig.group.position.x - beforeX) / dt
+          const vz = (rig.group.position.z - beforeZ) / dt
+          rig.velocity.set(rig.velocity.x + (vx - rig.velocity.x) * 0.6, 0, rig.velocity.z + (vz - rig.velocity.z) * 0.6)
+          // Turned the way the replay says it is turning (skid, screw, side spin), or
+          // rolled from its travel when it does not say.
+          rig.stepTurn(dt, this.turnScale)
         }
       }
       for (const rig of this.balls.values()) {
@@ -5186,22 +5424,39 @@ const outerL = APRON_OUTER_L
         // to nothing on the spot where the simulation caught it, which is short of the
         // pocket: a ball that vanished as it arrived rather than one that went in.
         const before = rig.group.position.clone()
-        rig.sinkT += dt / POT_DROP_SECONDS
-        const t = Math.min(1, rig.sinkT)
-        const across = Math.min(1, t / POT_RUN_IN)
-        const run = 1 - (1 - across) * (1 - across)
-        const fall = Math.max(0, (t - POT_RUN_IN * 0.5) / (1 - POT_RUN_IN * 0.5))
-        rig.group.position.set(
-          rig.sinkStart.x + (rig.sinkTarget.x - rig.sinkStart.x) * run,
-          rig.sinkStart.y - fall * fall * POT_DROP_MM,
-          rig.sinkStart.z + (rig.sinkTarget.z - rig.sinkStart.z) * run
-        )
+        rig.sinkT += dt
+        const t = rig.sinkT
+        // Across the hole at the pace it came in with, until it meets the back of the
+        // pocket, which takes most of that pace out of it.
+        rig.sinkPos.x += rig.sinkVel.x * dt
+        rig.sinkPos.z += rig.sinkVel.z * dt
+        const offX = rig.sinkPos.x - rig.sinkTarget.x
+        const offZ = rig.sinkPos.z - rig.sinkTarget.z
+        const off = Math.hypot(offX, offZ)
+        if (off > POT_BACK_MM) {
+          const nx = offX / off
+          const nz = offZ / off
+          rig.sinkPos.x = rig.sinkTarget.x + nx * POT_BACK_MM
+          rig.sinkPos.z = rig.sinkTarget.z + nz * POT_BACK_MM
+          const outward = rig.sinkVel.x * nx + rig.sinkVel.z * nz
+          if (outward > 0) {
+            // The outward part bounces back a little; the rest of it is lost in the leather.
+            rig.sinkVel.x -= nx * outward * (1 + POT_BACK_BOUNCE)
+            rig.sinkVel.z -= nz * outward * (1 + POT_BACK_BOUNCE)
+            rig.sinkVel.multiplyScalar(0.55)
+          }
+        }
+        // Down under its own weight the whole time: slowly at first, then fast.
+        const fall = 0.5 * POT_GRAVITY * t * t
+        rig.group.position.set(rig.sinkPos.x, rig.sinkStart.y - Math.min(fall, POT_DROP_MM), rig.sinkPos.z)
         // Still turning as it goes in.
         const travelled = rig.group.position.distanceTo(before)
         if (travelled > 1e-4) rig.spinBy(travelled)
         // Full size all the way down: it is the pocket that hides a ball, not the ball
         // shrinking.
-        if (t >= 1) {
+        if (fall >= POT_DROP_MM || t >= POT_DROP_MAX_SECONDS) {
+          // Gone: the crowd's applause, if this pot earns any, lands now.
+          this.venue?.ballSunk()
           rig.sinking = false
           rig.setVisible(false)
           rig.group.scale.set(1, 1, 1)

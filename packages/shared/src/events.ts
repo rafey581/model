@@ -73,8 +73,21 @@ export interface SimKeyframe {
    * absent from later keyframes once it stops or is potted, which keeps the
    * payload proportional to how much is actually in motion.
    */
-  balls: Array<[id: number, x: number, y: number]>
+  balls: Array<SimBallSample>
 }
+
+/**
+ * One ball at one instant: where it is, and how it is turning.
+ *
+ * `rollX`, `rollY` are the speed and direction its surface turns at over the cloth, in
+ * mm/s — equal to its velocity when it rolls, short of it while it skids, against it
+ * under back spin. `side` is its side spin, the engine's -1..1 scaled by 1000. The three
+ * are only there to draw the ball turning the way it really does; a sample without them
+ * (a ball dropping into a pocket, or an older server) is drawn as rolling.
+ */
+export type SimBallSample =
+  | [id: number, x: number, y: number]
+  | [id: number, x: number, y: number, rollX: number, rollY: number, side: number]
 
 /**
  * Server-to-client shot animation stream. Times are simulated seconds; the

@@ -176,6 +176,20 @@ function rememberSideCollapsed(collapsed: boolean): void {
   }
 }
 
+/**
+ * Writes a balance as its number and a smaller currency after it ("12.50" then "USDT"),
+ * so the amount is what the eye reads first. The text comes formatted ("12.50 USDT");
+ * anything without a currency on the end is written as it is.
+ */
+export function fillBalance(node: HTMLElement, formatted: string): void {
+  const match = /^(.*?)\s*([A-Za-z]{2,5})$/.exec(formatted.trim())
+  if (!match) {
+    node.textContent = formatted
+    return
+  }
+  node.replaceChildren(el('span', 'cx-balance__num', match[1]!), el('span', 'cx-balance__unit', match[2]!))
+}
+
 function activeDestination(view: LobbyView): CasinoDestination {
   if (view === 'setup') return 'play'
   if (view === 'statistics') return 'games'
@@ -297,10 +311,12 @@ export function createCasinoShell(
   avatar.appendChild(bridge.createAvatar(bridge.username))
   const who = el('span', 'cx-profile__meta')
   // On a phone the balance sits under the name, in place of the separate wallet pill.
+  const balanceLine = el('span', 'cx-profile__balance')
+  fillBalance(balanceLine, bridge.formatCash(bridge.walletBalance))
   who.append(
     el('span', 'cx-profile__name', bridge.username),
     el('span', 'cx-profile__level', 'Player'),
-    el('span', 'cx-profile__balance', bridge.formatCash(bridge.walletBalance))
+    balanceLine
   )
   profile.append(avatar, who)
   profile.onclick = handlers.onProfile
@@ -309,7 +325,9 @@ export function createCasinoShell(
   const coin = el('span', 'cx-wallet__coin', '₮')
   coin.setAttribute('aria-hidden', 'true')
   const amount = el('span', 'cx-wallet__amount')
-  amount.append(el('span', 'cx-wallet__label', 'Balance'), el('span', 'cx-wallet__value', bridge.formatCash(bridge.walletBalance)))
+  const walletValue = el('span', 'cx-wallet__value')
+  fillBalance(walletValue, bridge.formatCash(bridge.walletBalance))
+  amount.append(el('span', 'cx-wallet__label', 'Balance'), walletValue)
   const add = el('button', 'cx-wallet__add') as HTMLButtonElement
   add.type = 'button'
   add.title = 'Deposit'

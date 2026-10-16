@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { BALL_RADIUS, TABLE_LENGTH, TABLE_WIDTH } from '@snooker/shared'
 import { VENUE_CONFIG, type VenueConfig } from './venueConfig.js'
 import { CUE_TIP_Y, buildCueStick } from './cueStick.js'
+import { cueElevationDeg } from './cueClearance.js'
 
 /**
  * The opponent's cue, and how hard they are about to hit it.
@@ -162,8 +163,12 @@ export function buildOpponentCue(config: VenueConfig = VENUE_CONFIG): OpponentCu
     const dirZ = Math.sin(shot.angle)
     const back = BALL_RADIUS + atGap
     group.position.set(worldX(shot.x) - dirX * back, BALL_RADIUS, worldZ(shot.y) - dirZ * back)
-    // A little rise at the butt while the bot is still lining up, flattening as it goes.
-    stick.rotation.x = -lift * 0.001 * (1 - power * 0.35)
+    // A little rise at the butt while the bot is still lining up, flattening as it goes —
+    // and, from the spectator view where the cue lies back from the ball, at least as
+    // steep as it takes to come over the rail behind the ball (see cueClearance.ts).
+    const rise = lift * 0.001 * (1 - power * 0.35)
+    const overRail = spectating ? (cueElevationDeg({ x: shot.x, y: shot.y }, shot.angle, BALL_RADIUS, BALL_RADIUS) * Math.PI) / 180 : 0
+    stick.rotation.x = -Math.max(rise, overRail)
     // The stick is built butt-along-+Z, so +Z has to point back from the ball, away from
     // the shot. Outside the spectator view it is left pointing the way it always has,
     // which is forwards along the shot line; from above that reads as a cue lying across

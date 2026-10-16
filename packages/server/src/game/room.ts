@@ -23,7 +23,9 @@ import { config } from '../config.js'
  * at full-power break speed; a full-rack break comes to roughly 56KB of JSON
  * (about 18KB gzipped) sent once per shot.
  */
-const SHOT_KEYFRAME_RATE = 30
+// Sixty a second, the same as a frame: a contact or a cushion lands within a frame of
+// where it happened, rather than being cut across between samples a 30th of a second apart.
+const SHOT_KEYFRAME_RATE = 60
 
 /**
  * How long a placement hold may last before the room releases it by itself.

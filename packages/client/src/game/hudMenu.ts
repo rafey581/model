@@ -19,7 +19,28 @@
  * accident.
  */
 
+import { Capacitor, registerPlugin } from '@capacitor/core'
 import { isPhoneScreen } from './qualityConfig.js'
+
+/**
+ * The Android app's own screen turner (android/.../ScreenOrientationPlugin.java). Inside the
+ * app the browser's orientation lock is refused, but the app may turn its own screen at any
+ * time, with no permission and no fullscreen request. Absent on the website.
+ */
+const NativeOrientation = registerPlugin<{ set(options: { to: 'landscape' | 'portrait' | 'free' }): Promise<void> }>(
+  'SnookerXOrientation'
+)
+
+/** Turns the app's screen when running as the Android app; false on the website. */
+function setNativeOrientation(to: 'landscape' | 'portrait' | 'free'): boolean {
+  try {
+    if (!Capacitor.isNativePlatform()) return false
+  } catch {
+    return false
+  }
+  void NativeOrientation.set({ to }).catch(() => undefined)
+  return true
+}
 
 const STYLE_ID = 'hud-menu-styles'
 
@@ -222,20 +243,22 @@ body.game-mode .rotate-hint-skip { display: none; }
     transform-origin: bottom center;
     max-width: 86vw;
   }
+  /* Power under the right thumb, spin under the left, the way the mobile snooker games
+     lay them out. The opponent's power reading takes the left edge, clear of both. */
   .power-rail {
-    right: auto;
-    left: calc(env(safe-area-inset-left, 0px) + 0px);
-    padding: 0 12px 0 16px;
+    left: auto;
+    right: calc(env(safe-area-inset-right, 0px) + 0px);
+    padding: 0 16px 0 12px;
     top: 56%;
   }
   .spin-dial {
-    left: auto;
-    right: calc(env(safe-area-inset-right, 0px) + clamp(8px, 1.6vw, 20px));
-    transform-origin: bottom right;
+    right: auto;
+    left: calc(env(safe-area-inset-left, 0px) + clamp(8px, 1.6vw, 20px));
+    transform-origin: bottom left;
   }
   .venue-opponent-power {
-    left: auto !important;
-    right: calc(env(safe-area-inset-right, 0px) + clamp(6px, 1.4vw, 18px));
+    right: auto !important;
+    left: calc(env(safe-area-inset-left, 0px) + clamp(6px, 1.4vw, 18px)) !important;
   }
   .hud-menu-panel > .hud-tool { height: 44px; }
 }
@@ -299,6 +322,8 @@ async function goLandscape(): Promise<void> {
  * screen there is the player's own choice from the fullscreen button.
  */
 export function requestLandscape(): void {
+  // The app turns its own screen, straight away and without asking.
+  if (setNativeOrientation('landscape')) return
   if (!isPhoneScreen()) return
   void goLandscape()
 }
@@ -308,6 +333,8 @@ export function requestLandscape(): void {
  * is kept: leaving it is the player's choice, and dropping it would flash the browser bar.
  */
 export function releaseLandscape(): void {
+  // In the app the lobby is held upright, the way it is laid out.
+  if (setNativeOrientation('portrait')) return
   try {
     const orientation = screen.orientation as ScreenOrientation & { unlock?: () => void }
     orientation.unlock?.()
@@ -509,8 +536,12 @@ export function installHudMenu(mounts: HudMenuMounts): HudMenu {
   document.addEventListener('visibilitychange', onHidden)
 
   // Asked for again as a match starts, in case the player is already fullscreen. Outside
-  // fullscreen the browser refuses, and the notice does the asking instead.
-  try {
+  // fullscreen the browser refuses, and the notice does the asking instead. The app turns
+  // its own screen, so a match reached any other way (a reconnect, an accepted invite)
+  // is sideways too.
+  if (setNativeOrientation('landscape')) {
+    // Turned natively; nothing for the browser to ask.
+  } else try {
     const orientation = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }
     void orientation.lock?.('landscape').catch(() => undefined)
   } catch {

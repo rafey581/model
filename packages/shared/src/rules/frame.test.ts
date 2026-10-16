@@ -3,6 +3,7 @@ import { BAULK_LINE_X, BALL_IDS, COLOR_ORDER, COLOR_VALUES, TABLE_LENGTH, TABLE_
 import { colourSpotPosition, cueStartPosition } from '../physics/layout.js'
 import { vec, type Vec2 } from '../vec.js'
 import type { FrameState } from '../state.js'
+import type { SimKeyframe } from '../events.js'
 import { buildInitialBalls } from '../state.js'
 import { applyCuePlacement, applyFrameWinner, applyStroke, createFrame, createMatch, frameFromSnapshot, frameSnapshot, framesToWin, matchWinnerIndex, maybeEndFrame } from './frame.js'
 import { applyResolution, isRedId, resolveStroke, respotBall, applyTimeoutFoul } from './snooker.js'
@@ -522,7 +523,7 @@ describe('shot playback', () => {
    * black), and any move the last keyframe does not show becomes a visible snap
    * across the table on the final frame.
    */
-  function expectReplayEndsOnFrameState(frame: FrameState, sim: { keyframes?: Array<{ t: number; balls: Array<[number, number, number]> }> }, label: string): void {
+  function expectReplayEndsOnFrameState(frame: FrameState, sim: { keyframes?: SimKeyframe[] }, label: string): void {
     const keyframes = sim.keyframes!
     const last = keyframes[keyframes.length - 1]!
     for (const ball of frameSnapshot(frame).balls) {

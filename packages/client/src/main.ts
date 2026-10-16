@@ -43,6 +43,8 @@ import { installHudMenu, releaseLandscape, requestLandscape, type HudMenu } from
 import { ShotPlayer } from './game/playback.js'
 import type { PlaybackBall } from './game/playback.js'
 import { rateShot, type Highlight } from './game/highlight.js'
+import { playRecapWipe } from './game/recapWipe.js'
+import { fillBalance } from './lobby/casino.js'
 import { renderAuthScreen } from './auth.js'
 import {
   confirmPlacement,
@@ -940,6 +942,13 @@ async function refreshWallet(): Promise<void> {
   // for every state update, so without this the number on screen goes stale.
   const amount = document.querySelector<HTMLElement>('#wallet-chip .wallet-amount')
   if (amount) amount.textContent = formatCash(wallet.balance)
+  // The lobby's own balance readouts: under the name on a phone, the wallet pill on a desktop.
+  for (const node of document.querySelectorAll<HTMLElement>('.cx-profile__balance, .cx-wallet__value')) {
+    fillBalance(node, formatCash(wallet.balance))
+  }
+  for (const node of document.querySelectorAll<HTMLElement>('.gl-profile__wallet')) {
+    node.textContent = formatCash(wallet.balance)
+  }
 }
 
 async function loadTiers(): Promise<void> {
@@ -1587,26 +1596,39 @@ function tableSettled(): Promise<void> {
  * result is already known by the time this starts.
  */
 function playFinalShotRecap(): Promise<void> {
-  // A highlight still on the table gives way to the match's last shot.
-  recapDone?.()
+  // A highlight still on the table gives way to the match's last shot, at once: its own
+  // sweep out would land in the middle of this one.
+  skipHighlight?.()
   const recap = lastShotRecap
   if (!recap || !scene3d || !frame) return Promise.resolve()
   return new Promise((resolve) => {
     let finished = false
-    const done = (): void => {
-      if (finished) return
-      finished = true
+    const clear = (): void => {
       recapPlayer = null
       recapDone = null
       scene3d?.planShotCamera(null)
-      resolve()
+      scene3d?.setRecapCamera(false)
     }
-    recapStart = recap.start.map((ball) => ({ ...ball }))
-    recapPlayer = new ShotPlayer(recap.playback, recap.start.map((ball) => ({ ...ball })))
-    recapHold = FINAL_SHOT_HOLD_SECONDS
+    const done = (): void => {
+      if (finished) return
+      finished = true
+      // Out of the replay the way it came in: the bars sweep across and the table is
+      // handed back underneath them. The result waits for the sweep.
+      playRecapWipe(() => {
+        clear()
+        resolve()
+      })
+    }
     recapDone = done
-    scene3d?.planShotCamera(recap.playback)
-    hud?.flashEvent('FINAL SHOT', 'info')
+    // Into the replay under a sweep of bars, with no words: the cut says it is a replay.
+    playRecapWipe(() => {
+      if (finished) return
+      recapStart = recap.start.map((ball) => ({ ...ball }))
+      recapPlayer = new ShotPlayer(recap.playback, recap.start.map((ball) => ({ ...ball })))
+      recapHold = FINAL_SHOT_HOLD_SECONDS
+      scene3d?.planShotCamera(recap.playback)
+      scene3d?.setRecapCamera(true)
+    })
     // Whatever happens to the picture, the result is never held up for long.
     window.setTimeout(done, FINAL_SHOT_WAIT_MS)
   })
@@ -1636,27 +1658,41 @@ function playHighlight(entry: { highlight: Highlight; playback: ShotPlayback; st
     }
     done()
   }
-  const done = (): void => {
+  /** Takes the replay off the table and reports the shot done (to its own match only). */
+  const clear = (): void => {
+    recapPlayer = null
+    recapDone = null
+    scene3d?.planShotCamera(null)
+    scene3d?.setRecapCamera(false)
+    if (activeMatchId === matchAtStart) finishShot()
+  }
+  /**
+   * Ends the highlight. Normally under a sweep of bars, the way it began; `now` clears it on
+   * the spot, for a new shot arriving or a new match starting, which cannot wait for one.
+   */
+  const done = (now = false): void => {
     if (finished) return
     finished = true
     window.clearTimeout(backstop)
     document.removeEventListener('pointerdown', skip, true)
     skipHighlight = null
-    recapPlayer = null
-    recapDone = null
-    scene3d?.planShotCamera(null)
-    // Reported only to the match it belongs to.
-    if (activeMatchId === matchAtStart) finishShot()
+    if (now) clear()
+    else playRecapWipe(clear)
   }
-  recapStart = entry.start.map((ball) => ({ ...ball }))
-  recapPlayer = new ShotPlayer(entry.playback, entry.start.map((ball) => ({ ...ball })))
-  recapHold = HIGHLIGHT_HOLD_SECONDS
-  recapDone = done
-  skipHighlight = done
-  scene3d.planShotCamera(entry.playback)
-  hud?.flashEvent(`GREAT SHOT \u2022 ${entry.highlight.label}`, 'good', 'Replay \u00b7 tap to skip')
+  recapDone = () => done()
+  skipHighlight = () => done(true)
   document.addEventListener('pointerdown', skip, true)
-  const backstop = window.setTimeout(done, HIGHLIGHT_MAX_MS)
+  const backstop = window.setTimeout(() => done(), HIGHLIGHT_MAX_MS)
+  // Into the replay under a sweep of bars, with no words or banners: the cut itself says
+  // this is a replay. The table changes to the shot's first frame while it is covered.
+  playRecapWipe(() => {
+    if (finished) return
+    recapStart = entry.start.map((ball) => ({ ...ball }))
+    recapPlayer = new ShotPlayer(entry.playback, entry.start.map((ball) => ({ ...ball })))
+    recapHold = HIGHLIGHT_HOLD_SECONDS
+    scene3d?.planShotCamera(entry.playback)
+    scene3d?.setRecapCamera(true)
+  })
 }
 
 async function finishMatch(winnerSeat: number, reason?: string): Promise<void> {
@@ -1821,7 +1857,11 @@ function createLobbyBridge(): LobbyBridge {
     appTitle: APP_TITLE,
     username: currentUser?.username ?? 'Player',
     userId: currentUser?.id ?? '',
-    walletBalance: wallet.balance,
+    // Read live: the lobby is built before the wallet request comes back, and a copy
+    // taken here would show the balance from before it did.
+    get walletBalance() {
+      return wallet.balance
+    },
     logoSvg,
     formatCash,
     createAvatar: (name) => createAvatarBadge({ name, isBot: false }),
@@ -3371,6 +3411,9 @@ function renderGame(): void {
     },
     onShoot: (shot: Omit<ShotInput, 'timestamp'>) => {
       getSocket().emit('shot:play', { matchId: activeMatchId, input: { ...shot, timestamp: Date.now() } })
+      // The cue goes through the ball on the table at once, while the shot is on its way;
+      // the replay waits for the tip to reach the ball (see the pre-roll below).
+      scene3d?.strikeCue(shot.power)
       // The shot is on its way, so the bar empties for the next one. Eased inside the
       // controller, and it keeps animating on its own frames rather than being driven
       // by a state change that has already happened.
@@ -3561,7 +3604,9 @@ function applyGameUpdate(data: GameUpdatePayload): void {
     lastShotRecap = { playback: data.playback, start: (previous.balls as PlaybackBall[]).map((ball) => ({ ...ball })) }
     shotInFlight = true
     const opponentsShot = mySeat !== undefined && previous.turnIndex !== mySeat
-    shotPreRoll = opponentsShot ? (scene3d?.opponentShotPreRoll(data.playback) ?? 0) : 0
+    // The opponent's cue winds up before their replay runs; my own shot's replay waits for
+    // the rest of my stroke, so the ball leaves as the tip meets it, never before.
+    shotPreRoll = opponentsShot ? (scene3d?.opponentShotPreRoll(data.playback) ?? 0) : (scene3d?.strikeRemainingSeconds() ?? 0)
     shotStartBalls = previous.balls
     // Sound only: tells the effects a replay has been set up. Nothing comes back.
     replaySfx?.shotStarted(data.playback, previous.balls)
@@ -3654,7 +3699,7 @@ function announcePot(ids: number[], foul = false): void {
     playCushion()
     playPot(ids.length)
   }
-  toast(`Potted: ${ids.map(ballName).join(', ')}`)
+  // Said once, centre-screen, by the banner below; no second note in the corner.
   if (foul) return
   // The centre-screen banner carries the score the pot is worth, so the moment
   // lands as a number as well as a sound: reds one each, colours their own value.
@@ -4235,6 +4280,8 @@ function loop(): void {
         // the view for as long as it lasts, then hands it back.
         scene3d.setCameraMode(cameraMode)
         scene3d.setTracking(shotPlayer !== null || recapping)
+        // How fast the replay runs against real time, so the balls turn at the pace they move.
+        scene3d.setReplayRate(recapping ? FINAL_SHOT_SPEED * SHOT_PLAYBACK_SPEED : SHOT_PLAYBACK_SPEED)
         // The replay clock, for the pocket camera. Held at the start through the wind-up
         // before an opponent's shot, when the replay has been set up but is not moving.
         scene3d.setShotTime(

@@ -128,8 +128,12 @@ export const MAX_SIM_TICKS = TICK_RATE * 60
  * This is a presentation choice only, and it is meant to be tuned by eye: the
  * simulation is unaffected by it, and the server's playback hold is derived from
  * it so the two cannot drift apart.
+ *
+ * Now real time. Sped up, every ball moved half as fast again as the cloth said it
+ * should, and a ball rolling to a stop read as one gliding across ice: a real table is
+ * the speed a player's eye is tuned to, and anything else looks like a skid.
  */
-export const SHOT_PLAYBACK_SPEED = 1.5
+export const SHOT_PLAYBACK_SPEED = 1
 
 export const RED_VALUE = 1
 

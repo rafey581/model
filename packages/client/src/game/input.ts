@@ -140,8 +140,14 @@ const AXIS_PROBE_MM = BALL_RADIUS * 4
  * and if the two disagreed the cue would slide off the line of sight as the finger moved.
  */
 const TOUCH_AIM_RAD_PER_PX = Math.PI / 900
-/** How much more a touch move has to go up or down than across to be read as moving the camera. */
+/** How much more a touch gesture has to go up or down than across to be read as moving the camera. */
 const TOUCH_PULL_DOMINANCE = 1.4
+/**
+ * How far a finger travels before its gesture is decided as an aim or a camera pull, in
+ * pixels. Decided once, and kept for the rest of the gesture: a sideways aim that drifts
+ * up or down never starts moving the camera halfway through, and the other way round.
+ */
+const TOUCH_DECIDE_PX = 7
 /**
  * A slow drag turns the aim more finely than a fast one.
  *
@@ -193,7 +199,17 @@ export function createCueController(options: CueControllerOptions): CueControlle
    * left and right anywhere on the table and the cue turns, with the view turning with it.
    * It never charges power and never fires; on a touch screen that is the slider's job.
    */
-  let touch: { id: number; x: number; y: number } | null = null
+  let touch: {
+    id: number
+    x: number
+    y: number
+    startX: number
+    startY: number
+    axis: 'aim' | 'pull' | null
+    /** The aim, and the view turn, before this gesture: given back if it turns out to be a pull. */
+    angleAtStart: number
+    turned: number
+  } | null = null
   /**
    * Where a mouse was last seen hovering over the table with no button held, or null.
    *
@@ -397,27 +413,53 @@ export function createCueController(options: CueControllerOptions): CueControlle
     options.onChange({ ...aim })
   }
 
+  /** Turns the aim by a finger's sideways travel, finer for a slow finger. Returns the view turn it made. */
+  function turnAimByTouch(dx: number): number {
+    if (dx === 0) return 0
+    const fine = Math.max(TOUCH_FINE_FLOOR, Math.min(1, Math.abs(dx) / TOUCH_FINE_BELOW_PX))
+    const turn = dx * fine
+    aim.angle += turn * TOUCH_AIM_RAD_PER_PX
+    // The view turns by the same amount, so the cue stays straight up the screen.
+    options.onOrbit?.(turn)
+    options.onChange({ ...aim })
+    return turn
+  }
+
   const onPointerMove = (event: PointerEvent) => {
     if (touch && event.pointerId === touch.id) {
+      if (!options.enabled()) return
       const dx = event.clientX - touch.x
       const dy = event.clientY - touch.y
       touch.x = event.clientX
       touch.y = event.clientY
-      if (!options.enabled()) return
-      // Each move goes to one thing: a stroke mostly up or down the screen moves the
-      // camera, anything else turns the aim. So pulling the view back never swings the
-      // shot, and a sideways aim never bobs the camera.
-      if (options.onPull && Math.abs(dy) > Math.abs(dx) * TOUCH_PULL_DOMINANCE) {
-        options.onPull(dy)
+      if (touch.axis === null) {
+        // Not decided yet: the aim turns as usual, finely for a slow finger, until the
+        // finger has really moved; then the whole of its travel decides what it is.
+        const tdx = event.clientX - touch.startX
+        const tdy = event.clientY - touch.startY
+        if (Math.hypot(tdx, tdy) >= TOUCH_DECIDE_PX) {
+          touch.axis = options.onPull && Math.abs(tdy) > Math.abs(tdx) * TOUCH_PULL_DOMINANCE ? 'pull' : 'aim'
+        }
+        if (touch.axis === 'pull') {
+          // A pull after all: the little turn it made on the way is given back, and its
+          // whole vertical travel goes to the camera.
+          if (touch.turned !== 0) {
+            aim.angle = touch.angleAtStart
+            options.onOrbit?.(-touch.turned)
+            touch.turned = 0
+            options.onChange({ ...aim })
+          }
+          if (tdy !== 0) options.onPull?.(tdy)
+          return
+        }
+        touch.turned += turnAimByTouch(dx)
         return
       }
-      if (dx === 0) return
-      const fine = Math.max(TOUCH_FINE_FLOOR, Math.min(1, Math.abs(dx) / TOUCH_FINE_BELOW_PX))
-      const turn = dx * fine
-      aim.angle += turn * TOUCH_AIM_RAD_PER_PX
-      // The view turns by the same amount, so the cue stays straight up the screen.
-      options.onOrbit?.(turn)
-      options.onChange({ ...aim })
+      if (touch.axis === 'pull') {
+        if (dy !== 0) options.onPull?.(dy)
+        return
+      }
+      turnAimByTouch(dx)
       return
     }
     // Any other finger says nothing: a second one down, or one that started while the visit
@@ -465,7 +507,16 @@ export function createCueController(options: CueControllerOptions): CueControlle
     if (event.pointerType === 'touch') {
       // One finger at a time turns the aim; a second one down is ignored.
       if (touch) return
-      touch = { id: event.pointerId, x: event.clientX, y: event.clientY }
+      touch = {
+        id: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        startX: event.clientX,
+        startY: event.clientY,
+        axis: null,
+        angleAtStart: aim.angle,
+        turned: 0
+      }
       options.canvas.setPointerCapture(event.pointerId)
       event.preventDefault()
       return
@@ -650,9 +701,10 @@ export function createCueController(options: CueControllerOptions): CueControlle
       // Eased rather than cleared: the bar sliding down to rest reads as the shot
       // being spent, where a jump to zero reads as the control having broken.
       let display = aim.power
-      const from = display
       const step = (): void => {
-        display = from * 0.82
+        // Each frame takes a share of what is left, so the bar slides home and stops at
+        // zero. Multiplying the starting power instead held it at 82% of the last shot.
+        display *= 0.82
         aim.power = display < 0.01 ? 0 : display
         options.onChange({ ...aim })
         resetFrame = aim.power > 0 ? requestAnimationFrame(step) : 0

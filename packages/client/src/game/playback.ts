@@ -1,4 +1,4 @@
-import { SHOT_PLAYBACK_SPEED, type ShotPlayback } from '@snooker/shared'
+import { BALL_IDS, BALL_RADIUS, SHOT_PLAYBACK_SPEED, SIDE_SPIN_FRICTION, TIP_SPIN_RATIO, type ShotPlayback } from '@snooker/shared'
 
 /**
  * Shot playback speed. Shared with the server, which needs the same number to know
@@ -10,6 +10,10 @@ interface BallSample {
   t: number
   x: number
   y: number
+  /** How the ball's surface turns over the cloth (mm/s) and its side spin (-1..1), when the server sent them. */
+  rx?: number
+  ry?: number
+  side?: number
 }
 
 interface BallTrack {
@@ -23,6 +27,20 @@ interface BallTrack {
   cursor: number
   x: number
   y: number
+  /** How it is turning now, read off its samples; null before it has any, or when none were sent. */
+  turn: BallTurn | null
+}
+
+/**
+ * How a ball is turning at an instant, for drawing it: its surface's velocity over the
+ * cloth in table millimetres per second (its velocity when it rolls, short of it while it
+ * skids, against it under back spin) and its side spin as a rate about the vertical,
+ * radians per second, positive turning the way right-hand side does.
+ */
+export interface BallTurn {
+  rollX: number
+  rollY: number
+  sideRate: number
 }
 
 export interface PlaybackBall {
@@ -30,6 +48,8 @@ export interface PlaybackBall {
   x: number
   y: number
   potted: boolean
+  /** How it is turning, when the replay knows; absent, it is drawn as rolling. */
+  turn?: BallTurn
 }
 
 /**
@@ -47,6 +67,12 @@ export class ShotPlayer {
   private clock = 0
   private nextPot = 0
   private done = false
+  /**
+   * The cue ball's pace off the tip, mm/s, read off its first two samples. Side spin is
+   * sent as a share of the most a tip can put on (-1..1), and turned into a real rate
+   * about the vertical against this: the same 5/2 x offset the engine gives top and back.
+   */
+  private readonly strikeSpeed: number
 
   constructor(playback: ShotPlayback, startBalls: PlaybackBall[], private readonly speed = SHOT_PLAYBACK_SPEED) {
     this.duration = Math.max(0, playback.duration)
@@ -60,7 +86,8 @@ export class ShotPlayer {
         samples: [],
         cursor: 0,
         x: ball.x,
-        y: ball.y
+        y: ball.y,
+        turn: null
       }
       this.tracks.push(track)
       this.byId.set(ball.id, track)
@@ -72,12 +99,26 @@ export class ShotPlayer {
     }
 
     for (const keyframe of playback.keyframes) {
-      for (const [id, x, y] of keyframe.balls) {
-        const track = this.byId.get(id)
+      for (const entry of keyframe.balls) {
+        const track = this.byId.get(entry[0])
         if (!track) continue
-        track.samples.push({ t: keyframe.t, x, y })
+        const sample: BallSample = { t: keyframe.t, x: entry[1], y: entry[2] }
+        if (entry.length >= 6) {
+          sample.rx = entry[3]
+          sample.ry = entry[4]
+          sample.side = (entry[5] ?? 0) / 1000
+        }
+        track.samples.push(sample)
       }
     }
+
+    const cue = this.byId.get(BALL_IDS.CUE)?.samples
+    let strike = 0
+    if (cue && cue.length >= 2) {
+      const span = cue[1]!.t - cue[0]!.t
+      if (span > 0) strike = Math.hypot(cue[1]!.x - cue[0]!.x, cue[1]!.y - cue[0]!.y) / span
+    }
+    this.strikeSpeed = strike
   }
 
   get finished(): boolean {
@@ -96,12 +137,34 @@ export class ShotPlayer {
       if (this.clock >= this.duration) this.done = true
     }
     for (const track of this.tracks) this.sample(track)
-    return this.tracks.map((track) => ({
-      id: track.id,
-      x: track.x,
-      y: track.y,
-      potted: this.isPotted(track)
-    }))
+    return this.tracks.map((track) => {
+      const ball: PlaybackBall = { id: track.id, x: track.x, y: track.y, potted: this.isPotted(track) }
+      if (track.turn) ball.turn = track.turn
+      return ball
+    })
+  }
+
+  /** The rate a side spin of `share` (-1..1) turns the ball at, radians per second. */
+  private sideRate(share: number): number {
+    return (share * TIP_SPIN_RATIO * this.strikeSpeed) / BALL_RADIUS
+  }
+
+  /**
+   * How a ball is turning between two samples (or at one), when the server sent it. Past
+   * its last sample a ball has stopped travelling, but side spin can still be turning it
+   * on the spot: that wears off on the cloth's clock, the engine's own rate.
+   */
+  private turnAt(a: BallSample, b: BallSample | undefined, f: number): BallTurn | null {
+    if (a.rx === undefined || a.ry === undefined || a.side === undefined) return null
+    if (!b || b.rx === undefined || b.ry === undefined || b.side === undefined) {
+      const since = Math.max(0, this.clock - a.t)
+      return { rollX: a.rx, rollY: a.ry, sideRate: this.sideRate(a.side * Math.exp(-SIDE_SPIN_FRICTION * since)) }
+    }
+    return {
+      rollX: a.rx + (b.rx - a.rx) * f,
+      rollY: a.ry + (b.ry - a.ry) * f,
+      sideRate: this.sideRate(a.side + (b.side - a.side) * f)
+    }
   }
 
   /**
@@ -141,6 +204,7 @@ export class ShotPlayer {
       track.cursor = samples.length - 1
       track.x = final.x
       track.y = final.y
+      track.turn = this.turnAt(final, undefined, 0)
       return
     }
 
@@ -152,9 +216,14 @@ export class ShotPlayer {
 
     const current = samples[cursor]!
     const next = samples[cursor + 1]
+    // Before its first sample the ball has not been touched yet: it is not turning.
+    if (this.clock < current.t) {
+      track.turn = null
+    }
     if (!next) {
       track.x = current.x
       track.y = current.y
+      if (this.clock >= current.t) track.turn = this.turnAt(current, undefined, 0)
       return
     }
     const span = next.t - current.t
@@ -162,5 +231,6 @@ export class ShotPlayer {
     const f = span > 0 ? Math.min(1, Math.max(0, (this.clock - current.t) / span)) : 0
     track.x = current.x + (next.x - current.x) * f
     track.y = current.y + (next.y - current.y) * f
+    if (this.clock >= current.t) track.turn = this.turnAt(current, next, f)
   }
 }

@@ -7,6 +7,12 @@ export interface DrawableBall {
   x: number
   y: number
   potted: boolean
+  /**
+   * How the ball is turning, when a shot's replay knows (see playback.ts): its surface's
+   * velocity over the cloth in mm/s and its side spin in rad/s. Absent, a moving ball is
+   * drawn as rolling.
+   */
+  turn?: { rollX: number; rollY: number; sideRate: number }
 }
 
 export interface FrameSnapshotData {

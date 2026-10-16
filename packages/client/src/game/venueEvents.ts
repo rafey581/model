@@ -56,6 +56,8 @@ export interface VenueEvents {
    * behind the player's own shot is waiting for.
    */
   step(dt: number, replayRunning: boolean): void
+  /** A potted ball has dropped out of sight on the table: any applause for it comes now. */
+  ballSunk(): void
   /** How many spectators are in the bowl. */
   crowdSize(): number
   /** Puts the opponent's cue up behind the cue ball. */
@@ -224,9 +226,20 @@ export function buildVenueEvents(host: VenueHost, config: VenueConfig = VENUE_CO
    * soft-lock when playback was promised but never animates (no pre-shot snapshot).
    */
   let replayStartWait = 0
-  /** Queued applause, so it lands when the ball lands rather than when the packet does. */
+  /**
+   * Queued applause, so it lands when the ball lands rather than when the packet does.
+   *
+   * The table says when that is: the scene calls `ballSunk` the moment a potted ball has
+   * dropped out of sight, and the applause follows a beat later (so a ball or two more
+   * going down in the same shot joins it rather than starting it again). `clapAt` is only
+   * the backstop, for a pot whose drop is never drawn.
+   */
   let clapAt = 0
   let clapPots = 0
+  /** A beat after the first ball has gone, for the others to join it, in seconds. */
+  const CLAP_AFTER_SINK = 0.12
+  /** How long past the pot's own time the backstop waits before clapping anyway, in seconds. */
+  const CLAP_BACKSTOP = 2.5
 
   const seatKnown = (): boolean => mySeat !== undefined
 
@@ -267,10 +280,17 @@ export function buildVenueEvents(host: VenueHost, config: VenueConfig = VENUE_CO
     }
     lastTurn = turn
 
+    // Nobody claps a foul: a shot that fouled — the cue ball in, the wrong ball down —
+    // gets no applause, whatever else dropped with it.
+    const fouled = (data.events ?? []).some((event) => (event as { type?: string }).type === 'FOUL')
     for (const event of data.events ?? []) {
       // Wire shape is `{ type, data }`; shared GameUpdate is flat. Accept both.
       const type = (event as { type?: string }).type
-      if (type === 'BALL_POTTED') {
+      if (type === 'BALL_POTTED' && !fouled) {
+        const raw = event as { data?: { ballId?: number }; ballId?: number }
+        const ballId = raw.data?.ballId ?? raw.ballId
+        // The cue ball going down is never applauded.
+        if (ballId === 0) continue
         // Counted rather than fired: a break arrives as four separate events in the same
         // message, and four claps on top of each other is a click, not applause.
         clapPots = Math.max(clapPots + 1, 1)
@@ -285,8 +305,9 @@ export function buildVenueEvents(host: VenueHost, config: VenueConfig = VENUE_CO
       if (playback.pots.length) {
         // Applause follows the ball down the replay, which runs at twice table speed, so
         // the wait is the pot's timestamp divided back down to wall-clock.
+        // Only the backstop: the clap itself comes when the table reports the ball gone.
         const drop = Math.max(...playback.pots.map(([, at]) => at)) / SHOT_PLAYBACK_SPEED
-        clapAt = drop
+        clapAt = drop + CLAP_BACKSTOP
       }
       const clapBase = clapAt
       // Only ever the opponent's: "my own shot is one I aimed" is read off who shot,
@@ -358,6 +379,10 @@ export function buildVenueEvents(host: VenueHost, config: VenueConfig = VENUE_CO
   }
 
   return {
+    ballSunk(): void {
+      // The ball has dropped out of sight: the applause comes now, a beat behind it.
+      if (clapPots > 0) clapAt = Math.min(clapAt, CLAP_AFTER_SINK)
+    },
     step(dt: number, replayRunning: boolean): void {
       attach()
       ballsMoving = replayRunning

@@ -214,7 +214,7 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
           if (moving) stillMoving.add(ball.id)
           else if (sampledAsMoving.has(ball.id)) newlySettled.add(ball.id)
         }
-        keyframes.push(captureKeyframe(balls, simTime, justPotted, newlySettled))
+        keyframes.push(captureKeyframe(balls, simTime, justPotted, newlySettled, roll))
         sampledAsMoving = stillMoving
         justPotted = []
         nextSampleAt = simTime + (due ? sampleInterval : 0)
@@ -261,7 +261,8 @@ function captureKeyframe(
   balls: BallState[],
   t: number,
   justPotted: Array<[number, [number, number]]>,
-  newlySettled: Set<number>
+  newlySettled: Set<number>,
+  roll: Map<BallState, Roll>
 ): SimKeyframe {
   const sampled: SimKeyframe['balls'] = []
   const dropped = justPotted.length ? new Map(justPotted) : null
@@ -275,7 +276,18 @@ function captureKeyframe(
     // At rest and already recorded at rest: nothing has moved, so there is nothing
     // to send. A ball captured on the keyframe where it stopped keeps that sample.
     if (ball.vel.x === 0 && ball.vel.y === 0 && !newlySettled.has(ball.id)) continue
-    sampled.push([ball.id, round(ball.pos.x), round(ball.pos.y)])
+    // How it is turning as well as where it is, for the replay to draw it turning the way
+    // it really does: skidding, screwing back, or spinning on its side. Recorded only;
+    // nothing in the simulation reads it back.
+    const turning = roll.get(ball)
+    sampled.push([
+      ball.id,
+      round(ball.pos.x),
+      round(ball.pos.y),
+      round(turning?.x ?? 0),
+      round(turning?.y ?? 0),
+      round(ball.spin.x * 1000)
+    ])
   }
   return { t: round(t, 3), balls: sampled }
 }

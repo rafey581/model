@@ -86,3 +86,47 @@ describe('a potted cue ball', () => {
     expect(frameCue.x).toBeLessThan(TABLE_LENGTH)
   })
 })
+
+/**
+ * How a ball is turning, carried through the replay when the server sends it: the
+ * surface's velocity over the cloth and the side spin, so the ball can be drawn
+ * skidding, screwing back or spinning on its side rather than always rolling.
+ */
+describe('a ball turning in the replay', () => {
+  function spinShot(): ShotPlayback {
+    return {
+      duration: 1,
+      keyframes: [
+        // Struck at 3 m/s with right-hand side and screw: its surface turns backwards.
+        { t: 0, balls: [[BALL_IDS.CUE, 400, 400, -1000, 0, 800]] },
+        { t: 0.1, balls: [[BALL_IDS.CUE, 700, 400, -600, 0, 760]] },
+        { t: 0.5, balls: [[BALL_IDS.CUE, 1500, 400, 0, 0, 600]] }
+      ],
+      pots: []
+    }
+  }
+
+  it('reads the turning off the samples and interpolates it between them', () => {
+    const player = new ShotPlayer(spinShot(), table())
+    const mid = cueOf(runTo(player, 0.05))
+    expect(mid.turn).toBeDefined()
+    expect(mid.turn!.rollX).toBeCloseTo(-800, 6)
+    expect(mid.turn!.rollY).toBeCloseTo(0, 6)
+    // Right-hand side turns it positively, and at a real rate off the strike speed.
+    expect(mid.turn!.sideRate).toBeGreaterThan(0)
+  })
+
+  it('keeps spinning a stopped ball on the spot, wearing off over time', () => {
+    const player = new ShotPlayer(spinShot(), table())
+    const atStop = cueOf(runTo(player, 0.5)).turn!.sideRate
+    const later = cueOf(runTo(player, 0.4)).turn!.sideRate
+    expect(atStop).toBeGreaterThan(0)
+    expect(later).toBeGreaterThan(0)
+    expect(later).toBeLessThan(atStop)
+  })
+
+  it('says nothing about turning for a ball sampled without it (an older server)', () => {
+    const player = new ShotPlayer(shot([]), table())
+    expect(cueOf(runTo(player, 1.5)).turn).toBeUndefined()
+  })
+})

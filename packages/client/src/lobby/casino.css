@@ -2290,12 +2290,13 @@
 
 /* A narrow phone: the profile chip keeps its picture and gives up the name. */
 @media (max-width: 360px) {
-  .cx-profile__meta {
+  /* A narrow phone: the chip gives up the name, never the balance. */
+  .cx-profile__name {
     display: none;
   }
 
   .cx-profile {
-    padding: 2px;
+    padding: 2px 8px 2px 2px;
   }
 
   .cx-top__brand .cx-wordmark__word {
@@ -2648,4 +2649,48 @@
   .cx-root .gl-deposit-input {
     font-size: 16px;
   }
+}
+
+/* The balance under the name is always shown on a phone, whatever else the chip drops. */
+@media (max-width: 1023px) {
+  .cx-profile__meta {
+    display: flex;
+    justify-content: center;
+  }
+
+  .cx-profile__balance {
+    font-size: 12.5px;
+  }
+}
+
+/* ==================================================================
+ * The bell: just the icon, no button disc behind it.
+ * ================================================================== */
+.cx-icon-btn.cx-top__bell {
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.cx-icon-btn.cx-top__bell:hover {
+  border: 0;
+  box-shadow: none;
+}
+
+.cx-icon-btn.cx-top__bell svg {
+  width: 24px;
+  height: 24px;
+}
+
+/* A balance: the amount first, the currency after it in a smaller letter. */
+.cx-balance__num {
+  font-variant-numeric: tabular-nums;
+}
+
+.cx-balance__unit {
+  margin-left: 0.28em;
+  font-size: 0.72em;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  opacity: 0.85;
 }
