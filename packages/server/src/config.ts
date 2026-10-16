@@ -129,6 +129,12 @@ const envSchema = z.object({
   // expected to go through the OTP signup flow.
   AUTH_ALLOW_DIRECT_REGISTER: boolFlag(true),
 
+  // Temporary guest play while the game is being built: one tap makes a throwaway
+  // account with no email, phone, password or code, and signs it in. Guests can play
+  // but never withdraw. Switch it off with AUTH_ALLOW_GUEST=false, or remove it, once
+  // the OTP signup is live on the phone.
+  AUTH_ALLOW_GUEST: boolFlag(true),
+
   // --- OTP (email / WhatsApp verification) --------------------------------
   // A one-time code proves the player owns the email or WhatsApp number they signed
   // up with. The code is short and lives briefly, so the window and the attempt cap

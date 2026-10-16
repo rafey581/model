@@ -546,6 +546,63 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     }
   })
 
+  /**
+   * POST /api/auth/guest
+   *
+   * TEMPORARY. Makes a throwaway player account and signs it in, with no email, phone,
+   * password or one-time code, so the game can be played while the OTP signup is not
+   * yet working on the phone. Switched off with `AUTH_ALLOW_GUEST=false`. A guest is an
+   * ordinary PLAYER (so every game path works for it) marked by `authProvider: 'GUEST'`,
+   * and the withdrawal route refuses it.
+   */
+  app.post('/api/auth/guest', { config: { public: true } }, async (_request, reply) => {
+    if (!config.AUTH_ALLOW_GUEST) {
+      return reply.code(403).send({ ok: false, error: 'guest play is switched off' })
+    }
+    const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789'
+    for (let attempt = 0; attempt < 5; attempt++) {
+      let suffix = ''
+      for (let i = 0; i < 6; i++) suffix += alphabet[Math.floor(Math.random() * alphabet.length)]
+      const username = `guest_${suffix}`
+      const referralCode = await pickReferralCode()
+      try {
+        const user = await prisma.$transaction(async (tx) => {
+          const created = await tx.user.create({
+            data: {
+              name: 'Guest',
+              username,
+              role: 'PLAYER',
+              authProvider: 'GUEST',
+              referralCode,
+              profile: { create: {} },
+              wallet: { create: { available: config.START_BALANCE } }
+            }
+          })
+          await tx.walletTransaction.create({
+            data: {
+              userId: created.id,
+              type: 'START_BALANCE',
+              amount: config.START_BALANCE,
+              currency: 'USDT',
+              status: 'COMPLETED',
+              balanceBefore: 0,
+              balanceAfter: config.START_BALANCE,
+              meta: { description: 'guest balance (USDT)' }
+            }
+          })
+          return created
+        })
+        const token = issueSession(reply, user)
+        return reply.send({ ok: true, data: { user: toPublicUser(user), token } })
+      } catch (error) {
+        // A name that happened to be taken: roll another one.
+        if (isUniqueViolation(error, 'username') || isUniqueViolation(error, 'referralCode')) continue
+        throw error
+      }
+    }
+    return reply.code(503).send({ ok: false, error: 'could not start a guest session, try again' })
+  })
+
   app.post('/api/auth/logout', async (_request, reply) => {
     reply.clearCookie('token', { path: '/' })
     return reply.send({ ok: true })

@@ -552,13 +552,17 @@ function renderGuestMode(
   submit.addEventListener('click', async () => {
     submit.disabled = true
     submit.textContent = 'ENTERING…'
+    errs.clear()
     try {
-      localStorage.removeItem('token')
-      window.location.replace('/')
-    } catch {
+      // TEMPORARY: the server makes a throwaway account (POST /api/auth/guest) and signs
+      // it in, with no email, phone or code, while the OTP signup is not yet working on
+      // the phone. The session is then taken exactly as a normal sign-in's is.
+      const res = await api<{ user: AuthUserShape; token: string }>('/auth/guest', { method: 'POST', body: {} })
+      completeSignIn(res.token)
+    } catch (error: unknown) {
       submit.disabled = false
       submit.textContent = 'PLAY AS GUEST'
-      errs.show('Failed to start guest session')
+      errs.show(error instanceof Error ? error.message : 'Failed to start guest session')
     }
   })
 
