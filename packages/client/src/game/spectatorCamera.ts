@@ -363,8 +363,16 @@ export const POT_CAM = {
    * give every shot away the moment it cut.
    */
   showShare: 0.8,
-  /** A ball that misses still gets the pocket camera if it passes this close to a pocket, in mm. */
-  nearMissMm: 260,
+  /**
+   * A ball that does not drop still gets the pocket camera when it was sent at a pocket: its
+   * first straight line passes within `aimOffMm` of the pocket, and it runs to within
+   * `nearMissMm` of it before it turns or stops. `headingMm` is how far along its run its
+   * heading is read, and a turn of more than `turnDeg` ends the straight line.
+   */
+  nearMissMm: 600,
+  aimOffMm: 220,
+  headingMm: 40,
+  turnDeg: 12,
   /** Simulated seconds of the ball's run the camera is up for, at most, before it reaches the pocket. */
   leadSeconds: 2.6,
   /** And for how long after: a ball that drops, and one that only went close. */
@@ -381,6 +389,64 @@ export const POT_CAM = {
    */
   afterStrikeSeconds: 0.3
 } as const
+
+/**
+ * The pocket a ball was sent at, read off its first straight run: the line it leaves the
+ * contact on, up to where it first turns (a cushion or another ball). Only that line says
+ * where the player was aiming; a ball that comes off a cushion and drifts past some other
+ * pocket was never going there. Null when the line points at no pocket, or the ball stops
+ * well short of the one it points at. `at` is when it is closest to that pocket.
+ */
+function aimedPocket(
+  run: ReadonlyArray<{ t: number; x: number; y: number }>,
+  pockets: ReadonlyArray<{ x: number; y: number }>
+): { pocket: { x: number; y: number }; at: number } | null {
+  const start = run[0]
+  if (!start) return null
+  // Its heading, from far enough along the run for rounding not to swing it.
+  let dirX = 0
+  let dirY = 0
+  for (const s of run) {
+    const d = Math.hypot(s.x - start.x, s.y - start.y)
+    if (d >= POT_CAM.headingMm) {
+      dirX = (s.x - start.x) / d
+      dirY = (s.y - start.y) / d
+      break
+    }
+  }
+  if (dirX === 0 && dirY === 0) return null
+  // The straight run: every sample still on that heading.
+  const straight: Array<{ t: number; x: number; y: number }> = [start]
+  for (let i = 1; i < run.length; i++) {
+    const s = run[i]!
+    const d = Math.hypot(s.x - start.x, s.y - start.y)
+    if (d >= POT_CAM.headingMm) {
+      const along = ((s.x - start.x) * dirX + (s.y - start.y) * dirY) / d
+      if (along < Math.cos(POT_CAM.turnDeg * (Math.PI / 180))) break
+    }
+    straight.push(s)
+  }
+  // The pocket on that line: ahead of the ball and closest to the line.
+  let best: { pocket: { x: number; y: number }; off: number } | null = null
+  for (const p of pockets) {
+    const ahead = (p.x - start.x) * dirX + (p.y - start.y) * dirY
+    if (ahead <= 0) continue
+    const off = Math.abs((p.x - start.x) * dirY - (p.y - start.y) * dirX)
+    if (off <= POT_CAM.aimOffMm && (!best || off < best.off)) best = { pocket: { x: p.x, y: p.y }, off }
+  }
+  if (!best) return null
+  // How close it got to that pocket along the straight run, and when.
+  let closest = Infinity
+  let at = start.t
+  for (const s of straight) {
+    const d = Math.hypot(best.pocket.x - s.x, best.pocket.y - s.y)
+    if (d < closest) {
+      closest = d
+      at = s.t
+    }
+  }
+  return closest <= POT_CAM.nearMissMm ? { pocket: best.pocket, at } : null
+}
 
 /** The pocket a shot's camera goes to, in table millimetres, and the stretch of the replay it is up for. */
 export interface PocketShot {
@@ -454,20 +520,14 @@ export function planPocketShot(
       target = { pocket: nearestPocket(last.x, last.y).pocket, at: firstPot[1], moving: run[0]!.t, tail: POT_CAM.tailSeconds }
     }
   } else {
-    // Nothing dropped: the first object ball, if it went close to a pocket.
+    // Nothing dropped: the pocket the first object ball was sent at, if it was sent at one.
     let first: Array<{ t: number; x: number; y: number }> | null = null
     for (const [id, run] of runs) {
       if (id !== cueId && run.length && (!first || run[0]!.t < first[0]!.t)) first = run
     }
-    if (first) {
-      let closest: { pocket: { x: number; y: number }; d: number; t: number } | null = null
-      for (const s of first) {
-        const near = nearestPocket(s.x, s.y)
-        if (!closest || near.d < closest.d) closest = { pocket: near.pocket, d: near.d, t: s.t }
-      }
-      if (closest && closest.d <= POT_CAM.nearMissMm) {
-        target = { pocket: closest.pocket, at: closest.t, moving: first[0]!.t, tail: POT_CAM.missTailSeconds }
-      }
+    const aimed = first ? aimedPocket(first, pockets) : null
+    if (first && aimed) {
+      target = { pocket: aimed.pocket, at: aimed.at, moving: first[0]!.t, tail: POT_CAM.missTailSeconds }
     }
   }
   if (!target) return null

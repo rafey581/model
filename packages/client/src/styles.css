@@ -3056,55 +3056,118 @@ button.bell::after {
  * a loss, carried by one colour the whole card reads from.
  */
 .overlay .card.end-screen {
-  --end-tone: #e7c768;
+  --end-tone: #f3c75a;
+  --end-tone-deep: #b9822a;
+  --end-glow: rgba(243, 199, 90, 0.55);
   position: relative;
-  width: min(460px, 92vw);
+  width: min(440px, 92vw);
   max-width: none;
-  padding: 26px 28px 24px;
+  max-height: 94vh;
+  max-height: 94dvh;
+  padding: clamp(16px, 3.4vh, 26px) clamp(18px, 3vw, 28px) clamp(14px, 3vh, 22px);
   text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: clamp(4px, 1.1vh, 8px);
   overflow: hidden;
+  isolation: isolate;
+  border-radius: 20px;
   background:
-    radial-gradient(120% 70% at 50% 0%, color-mix(in srgb, var(--end-tone) 20%, transparent), transparent 70%),
-    linear-gradient(180deg, rgba(20, 26, 38, 0.98), rgba(8, 11, 17, 0.98));
-  border: 1px solid color-mix(in srgb, var(--end-tone) 45%, transparent);
+    radial-gradient(110% 60% at 50% 0%, color-mix(in srgb, var(--end-tone) 26%, transparent), transparent 70%),
+    radial-gradient(80% 50% at 50% 100%, rgba(0, 0, 0, 0.55), transparent 70%),
+    linear-gradient(180deg, #1a1220 0%, #0d0a14 55%, #07060b 100%);
+  border: 1.5px solid transparent;
+  background-clip: padding-box;
   box-shadow:
-    0 24px 70px rgba(0, 0, 0, 0.6),
-    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
-  animation: end-screen-in 420ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+    0 0 0 1.5px color-mix(in srgb, var(--end-tone) 70%, transparent),
+    0 0 40px color-mix(in srgb, var(--end-tone) 30%, transparent),
+    0 28px 80px rgba(0, 0, 0, 0.7);
+  animation: end-screen-in 560ms cubic-bezier(0.18, 1.25, 0.4, 1) both;
 }
 
+/* A thin gold rail along the top, with a glint running along it. */
 .overlay .card.end-screen::before {
   content: '';
   position: absolute;
   left: 0;
   right: 0;
   top: 0;
-  height: 4px;
-  background: linear-gradient(90deg, transparent, var(--end-tone) 25%, var(--end-tone) 75%, transparent);
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--end-tone-deep) 15%, #fff4c8 50%, var(--end-tone-deep) 85%, transparent);
+  background-size: 200% 100%;
+  animation: end-rail 2.6s linear infinite;
+  z-index: 2;
+}
+
+/* Marquee bulbs round the edge, as on a casino sign: a dotted border that chases. */
+.overlay .card.end-screen::after {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border-radius: 15px;
+  border: 2px dotted color-mix(in srgb, var(--end-tone) 55%, transparent);
+  opacity: 0.55;
+  pointer-events: none;
+  animation: end-bulbs 1.2s steps(2) infinite;
+  z-index: 0;
 }
 
 .overlay .card.end-screen.is-loss {
-  --end-tone: #ff6b6b;
+  --end-tone: #ff5d6c;
+  --end-tone-deep: #a3243a;
+  --end-glow: rgba(255, 93, 108, 0.4);
 }
 
 .overlay .card.end-screen.is-neutral {
   --end-tone: #8fc4ff;
+  --end-tone-deep: #3d6fa8;
+  --end-glow: rgba(143, 196, 255, 0.4);
+}
+
+.overlay .card.end-screen > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Light rays turning slowly behind the trophy. */
+.end-rays {
+  position: absolute !important;
+  left: 50%;
+  top: clamp(34px, 8vh, 58px);
+  width: 420px;
+  height: 420px;
+  margin: -210px 0 0 -210px;
+  border-radius: 50%;
+  background: repeating-conic-gradient(from 0deg, color-mix(in srgb, var(--end-tone) 22%, transparent) 0deg 9deg, transparent 9deg 22deg);
+  -webkit-mask: radial-gradient(circle, #000 0%, transparent 62%);
+  mask: radial-gradient(circle, #000 0%, transparent 62%);
+  animation: end-rays-turn 18s linear infinite;
+  pointer-events: none;
+  z-index: 0 !important;
+}
+
+.end-screen.is-loss .end-rays {
+  opacity: 0.45;
+  animation-duration: 40s;
 }
 
 .end-emblem {
-  width: 64px;
-  height: 64px;
+  width: clamp(44px, 11vh, 66px);
+  height: clamp(44px, 11vh, 66px);
   color: var(--end-tone);
-  filter: drop-shadow(0 0 14px color-mix(in srgb, var(--end-tone) 55%, transparent));
+  filter: drop-shadow(0 0 16px var(--end-glow));
+  animation: end-emblem-in 700ms 120ms cubic-bezier(0.2, 1.6, 0.4, 1) both;
+}
+
+.end-screen.is-win .end-emblem {
+  animation:
+    end-emblem-in 700ms 120ms cubic-bezier(0.2, 1.6, 0.4, 1) both,
+    end-emblem-bob 2.4s 900ms ease-in-out infinite;
 }
 
 .end-screen.is-loss .end-emblem {
-  opacity: 0.55;
-  filter: none;
+  opacity: 0.7;
 }
 
 .end-emblem svg {
@@ -3114,27 +3177,36 @@ button.bell::after {
 }
 
 .end-title {
-  font-size: clamp(32px, 7vw, 46px);
+  font-size: clamp(28px, 10vh, 46px);
   font-weight: 900;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.12em;
   line-height: 1;
-  color: var(--end-tone);
-  text-shadow: 0 0 26px color-mix(in srgb, var(--end-tone) 45%, transparent);
+  background: linear-gradient(100deg, var(--end-tone-deep) 0%, var(--end-tone) 30%, #fff8dc 48%, var(--end-tone) 66%, var(--end-tone-deep) 100%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 2px 0 rgba(0, 0, 0, 0.6)) drop-shadow(0 0 18px var(--end-glow));
+  animation:
+    end-title-in 620ms 220ms cubic-bezier(0.2, 1.4, 0.4, 1) both,
+    end-shine 3.2s 900ms ease-in-out infinite;
 }
 
 .end-sub {
-  font-size: 14px;
-  color: rgba(230, 237, 243, 0.78);
-  margin-bottom: 6px;
+  font-size: clamp(12px, 2.6vh, 14px);
+  color: rgba(240, 232, 220, 0.8);
+  margin-bottom: 2px;
+  animation: end-fade-up 420ms 380ms ease-out both;
 }
 
 .end-score {
   display: flex;
   align-items: stretch;
   justify-content: center;
-  gap: 14px;
+  gap: 12px;
   width: 100%;
-  margin: 6px 0 2px;
+  margin: 4px 0 0;
+  animation: end-fade-up 460ms 460ms ease-out both;
 }
 
 .end-side {
@@ -3143,16 +3215,17 @@ button.bell::after {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
-  padding: 10px 8px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  gap: 1px;
+  padding: clamp(6px, 1.6vh, 10px) 8px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .end-side.is-winner {
-  background: color-mix(in srgb, var(--end-tone) 12%, transparent);
-  border-color: color-mix(in srgb, var(--end-tone) 50%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--end-tone) 22%, transparent), color-mix(in srgb, var(--end-tone) 6%, transparent));
+  border-color: color-mix(in srgb, var(--end-tone) 60%, transparent);
+  box-shadow: 0 0 22px color-mix(in srgb, var(--end-tone) 25%, transparent);
 }
 
 .end-side-name {
@@ -3160,29 +3233,40 @@ button.bell::after {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: clamp(11px, 2.4vh, 13px);
   font-weight: 600;
-  color: rgba(230, 237, 243, 0.8);
+  color: rgba(240, 232, 220, 0.8);
 }
 
 .end-side-points {
-  font-size: 38px;
+  font-size: clamp(24px, 7.5vh, 38px);
   font-weight: 800;
   line-height: 1.05;
   font-variant-numeric: tabular-nums;
-  color: #f0f6fc;
+  color: #fff;
+}
+
+.end-side.is-winner .end-side-points {
+  color: var(--end-tone);
+  text-shadow: 0 0 14px var(--end-glow);
 }
 
 .end-score-dash {
   align-self: center;
-  font-size: 26px;
-  color: rgba(230, 237, 243, 0.4);
+  font-size: 22px;
+  color: rgba(240, 232, 220, 0.4);
 }
 
 .end-margin,
 .end-frames {
-  font-size: 13px;
-  color: rgba(230, 237, 243, 0.7);
+  font-size: clamp(11px, 2.4vh, 13px);
+  color: rgba(240, 232, 220, 0.72);
+  animation: end-fade-up 420ms 560ms ease-out both;
+}
+
+.end-screen .muted {
+  font-size: clamp(11px, 2.4vh, 13px);
+  animation: end-fade-up 420ms 600ms ease-out both;
 }
 
 .end-actions {
@@ -3190,24 +3274,201 @@ button.bell::after {
   gap: 10px;
   justify-content: center;
   width: 100%;
-  margin-top: 12px;
+  margin-top: clamp(4px, 1.6vh, 12px);
+  animation: end-fade-up 420ms 680ms ease-out both;
 }
 
 .end-actions button {
   flex: 1 1 0;
-  min-height: 46px;
+  min-height: clamp(38px, 9vh, 46px);
+  border-radius: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.end-actions button:not(.ghost) {
+  position: relative;
+  overflow: hidden;
+  color: #1d1406;
+  background: linear-gradient(180deg, #ffe08a 0%, #f0b93a 55%, #c98a1c 100%);
+  border: 1px solid #ffe7a3;
+  box-shadow: 0 6px 18px rgba(240, 185, 58, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  animation: end-button-pulse 2s 1.4s ease-in-out infinite;
+}
+
+/* A glint that crosses the main button now and then. */
+.end-actions button:not(.ghost)::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -60%;
+  width: 40%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.65), transparent);
+  transform: skewX(-20deg);
+  animation: end-button-glint 3s 1.6s ease-in-out infinite;
+}
+
+/* Confetti and coins for a win: thrown up from behind the card and falling through it. */
+.end-confetti {
+  position: absolute !important;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 3 !important;
+}
+
+.end-confetti i {
+  position: absolute;
+  top: -12%;
+  width: 7px;
+  height: 12px;
+  border-radius: 2px;
+  opacity: 0;
+  animation: end-confetti-fall var(--dur, 2.6s) var(--delay, 0s) cubic-bezier(0.25, 0.6, 0.5, 1) infinite;
+}
+
+.end-confetti i.is-coin {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff3c4, #f2c14e 45%, #b9822a 100%);
+  box-shadow: inset 0 0 0 2px rgba(120, 80, 10, 0.5);
 }
 
 @keyframes end-screen-in {
   from {
     opacity: 0;
-    transform: translateY(18px) scale(0.96);
+    transform: translateY(26px) scale(0.86);
+  }
+}
+
+@keyframes end-emblem-in {
+  from {
+    opacity: 0;
+    transform: scale(0.2) rotate(-25deg);
+  }
+}
+
+@keyframes end-emblem-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes end-title-in {
+  from {
+    opacity: 0;
+    transform: scale(1.6);
+    letter-spacing: 0.4em;
+  }
+}
+
+@keyframes end-shine {
+  0%,
+  100% {
+    background-position: 100% 0;
+  }
+  50% {
+    background-position: 0% 0;
+  }
+}
+
+@keyframes end-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+@keyframes end-rays-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes end-rail {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes end-bulbs {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@keyframes end-button-pulse {
+  0%,
+  100% {
+    box-shadow: 0 6px 18px rgba(240, 185, 58, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  }
+  50% {
+    box-shadow: 0 6px 28px rgba(240, 185, 58, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  }
+}
+
+@keyframes end-button-glint {
+  0% {
+    left: -60%;
+  }
+  40%,
+  100% {
+    left: 130%;
+  }
+}
+
+@keyframes end-confetti-fall {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  8% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.9;
+    transform: translate3d(var(--drift, 0px), 115vh, 0) rotate(var(--spin, 540deg));
+  }
+}
+
+/* A phone held sideways: less height than anything else, so everything is tighter. */
+@media (max-height: 480px) {
+  .overlay .card.end-screen {
+    width: min(400px, 86vw);
+    border-radius: 16px;
+  }
+  .end-rays {
+    width: 300px;
+    height: 300px;
+    margin: -150px 0 0 -150px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .overlay .card.end-screen {
-    animation: none;
+  .overlay .card.end-screen,
+  .overlay .card.end-screen::before,
+  .overlay .card.end-screen::after,
+  .end-rays,
+  .end-emblem,
+  .end-title,
+  .end-sub,
+  .end-score,
+  .end-margin,
+  .end-frames,
+  .end-screen .muted,
+  .end-actions,
+  .end-actions button,
+  .end-actions button::after {
+    animation: none !important;
+  }
+  .end-confetti {
+    display: none;
   }
 }
 

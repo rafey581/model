@@ -405,15 +405,11 @@ const renderScaler = createRenderScaler({
       } catch {
         // Storage refused. The next match finds out again in its first couple of seconds.
       }
-      toast('Lowered background detail for smoother play', 'info')
       return true
     }
     // The room is already on its cheaper finish (every match starts there): the stands and
     // the crowd go next, still before a single pixel of the table is given up.
-    if (scene3d?.lowerSurroundingDetail()) {
-      toast('Lowered background detail for smoother play', 'info')
-      return true
-    }
+    if (scene3d?.lowerSurroundingDetail()) return true
     return false
   }
 })
@@ -1150,6 +1146,54 @@ async function loadMatchMeta(matchId: string): Promise<void> {
   }
 }
 
+/** The colours the win screen's confetti is cut from: gold, the table's green, red and white. */
+const END_CONFETTI_COLOURS = ['#f3c75a', '#ffe08a', '#2fbf5b', '#e8344e', '#ffffff', '#5fa8ff']
+/** How many pieces of confetti, and how many of them are coins. */
+const END_CONFETTI_PIECES = 26
+const END_CONFETTI_COINS = 8
+
+/** Confetti and gold coins falling through the win screen, each with its own path and pace. */
+function endConfetti(): HTMLElement {
+  const layer = el('div', 'end-confetti')
+  layer.setAttribute('aria-hidden', 'true')
+  for (let i = 0; i < END_CONFETTI_PIECES; i++) {
+    const piece = document.createElement('i')
+    if (i < END_CONFETTI_COINS) piece.className = 'is-coin'
+    else piece.style.background = END_CONFETTI_COLOURS[i % END_CONFETTI_COLOURS.length]!
+    piece.style.left = `${(Math.random() * 96 + 2).toFixed(1)}%`
+    piece.style.setProperty('--delay', `${(Math.random() * 2.4).toFixed(2)}s`)
+    piece.style.setProperty('--dur', `${(2.2 + Math.random() * 1.6).toFixed(2)}s`)
+    piece.style.setProperty('--drift', `${Math.round((Math.random() - 0.5) * 120)}px`)
+    piece.style.setProperty('--spin', `${Math.round(360 + Math.random() * 540) * (Math.random() < 0.5 ? -1 : 1)}deg`)
+    layer.appendChild(piece)
+  }
+  return layer
+}
+
+/** Counts a number up from nought to `to` on screen, easing out, after the card has landed. */
+function countUp(node: HTMLElement, to: number, delayMs = 550, durationMs = 900): void {
+  const target = Math.max(0, Math.round(to))
+  let reduce = false
+  try {
+    reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  } catch {
+    // No media queries: count anyway.
+  }
+  if (reduce || target === 0) {
+    node.textContent = String(target)
+    return
+  }
+  const start = performance.now() + delayMs
+  const tick = (now: number): void => {
+    if (!node.isConnected && now > start) return
+    const t = Math.min(1, Math.max(0, (now - start) / durationMs))
+    const eased = 1 - Math.pow(1 - t, 3)
+    node.textContent = String(Math.round(target * eased))
+    if (t < 1) requestAnimationFrame(tick)
+  }
+  requestAnimationFrame(tick)
+}
+
 function showOverlay(box: HTMLElement): void {
   removeOverlay()
   const overlay = el('div', 'overlay')
@@ -1744,6 +1788,11 @@ async function finishMatch(winnerSeat: number, reason?: string): Promise<void> {
     : (meta?.players.find((p) => p.seat === winnerSeat)?.user.username ?? `Seat ${winnerSeat}`)
 
   const box = el('div', `card end-screen ${watching ? 'is-neutral' : iWon ? 'is-win' : 'is-loss'}`)
+  // Light turning slowly behind the trophy, and for a win, confetti and coins falling.
+  const rays = el('div', 'end-rays')
+  rays.setAttribute('aria-hidden', 'true')
+  box.appendChild(rays)
+  if (iWon && !watching) box.appendChild(endConfetti())
   const emblem = el('div', 'end-emblem')
   emblem.setAttribute('aria-hidden', 'true')
   emblem.innerHTML = END_TROPHY_SVG
@@ -1761,7 +1810,9 @@ async function finishMatch(winnerSeat: number, reason?: string): Promise<void> {
     const side = (name: string, points: number, won: boolean): HTMLElement => {
       const cell = el('div', `end-side${won ? ' is-winner' : ''}`)
       cell.appendChild(el('span', 'end-side-name', name))
-      cell.appendChild(el('span', 'end-side-points', String(points)))
+      const value = el('span', 'end-side-points', '0')
+      cell.appendChild(value)
+      countUp(value, points)
       return cell
     }
     board.appendChild(side(myName, mine, iWon))
@@ -3083,7 +3134,29 @@ function renderGame(): void {
   // because placement only ever consumes the event when it is actually placing.
   canvas.addEventListener('pointermove', (e) => {
     lastPointerCanvas = { clientX: e.clientX, clientY: e.clientY }
+    if (handleDrag && handleDrag.id === e.pointerId) {
+      if (!handleDrag.moved && Math.hypot(e.clientX - handleDrag.startX, e.clientY - handleDrag.startY) > HANDLE_TAP_SLOP_PX) {
+        handleDrag.moved = true
+      }
+      if (handleDrag.moved) dragHandleBall(e.clientX - handleDrag.lastX, e.clientY - handleDrag.lastY)
+      handleDrag.lastX = e.clientX
+      handleDrag.lastY = e.clientY
+      e.preventDefault()
+    }
   })
+  const endHandleDrag = (e: PointerEvent, cancelled: boolean): void => {
+    if (!handleDrag || handleDrag.id !== e.pointerId) return
+    const tapped = !handleDrag.moved && !cancelled
+    handleDrag = null
+    // A tap, not a drag: the ball is put down where it stands. A drag only ever moves it,
+    // so the ball stays in hand until the player taps to say this is the spot.
+    if (tapped && handlePos && placementAllowsGhostInput(placementFlow) && !placementCommitInFlight) {
+      placementPendingCommit = { x: handlePos.x, y: handlePos.y }
+    }
+    e.preventDefault()
+  }
+  canvas.addEventListener('pointerup', (e) => endHandleDrag(e, false))
+  canvas.addEventListener('pointercancel', (e) => endHandleDrag(e, true))
   canvas.addEventListener('pointerdown', (e) => {
     lastPointerCanvas = { clientX: e.clientX, clientY: e.clientY }
     // Only a placement in the `PLACING` phase accepts a click. During either camera move
@@ -3091,9 +3164,10 @@ function renderGame(): void {
     // lifting cannot commit a spot from a view that has not finished moving.
     if (!placementAllowsGhostInput(placementFlow) || placementCommitInFlight) return
     if (handlePlacement) {
-      // With the handle, the ball is already standing where it will go: a touch on the
-      // table puts it down there, and has nothing to say about where.
-      if (handlePos) placementPendingCommit = { x: handlePos.x, y: handlePos.y }
+      // With the handle, a finger on the table either drags the ball with it (it moves as
+      // far as the finger does) or, if it lifts without moving, is a tap that puts the ball
+      // down where it stands (see endHandleDrag).
+      handleDrag = { id: e.pointerId, startX: e.clientX, startY: e.clientY, lastX: e.clientX, lastY: e.clientY, moved: false }
       e.preventDefault()
       return
     }
@@ -3680,7 +3754,7 @@ function applyGameUpdate(data: GameUpdatePayload): void {
         // the replay.
         framesWon = d.winnerSeat === 0 ? [framesWon[0] + 1, framesWon[1]] : [framesWon[0], framesWon[1] + 1]
         playFrameEnd()
-        toast(`Frame ${frameIndex} won by ${seatName(d.winnerSeat)}`)
+        // No note in the corner: the bell, the score and the frame's own end say it.
       }
       if (verdictDeferred) deferredVerdict.push(show)
       else show()
@@ -3791,8 +3865,7 @@ function handleSocketEvents(socket: Socket): void {
     // straight back down again.
     if (data.snapshot) applyGameUpdate({ frame: data.snapshot, turn: data.turn })
     else applyTurnTiming(data.turn)
-    const opp = opponentName()
-    toast(`Playing vs ${opp} (seat ${data.seat + 1})`)
+    // No note in the corner: the scoreboard already names both players.
     updateHud()
   })
   socket.on('match:start', (data: { snapshot: FrameSnapshotData; frameIndex: number; turn?: TurnTiming }) => {
@@ -3808,7 +3881,6 @@ function handleSocketEvents(socket: Socket): void {
       resetSpin()
     }
     applyTurnTiming(data.turn)
-    toast('Match started!')
     updateHud()
   })
   socket.on('frame:start', (data: { frameIndex: number; snapshot: FrameSnapshotData; turn?: TurnTiming }) => {
@@ -3820,7 +3892,6 @@ function handleSocketEvents(socket: Socket): void {
     // adopted when the update applies, which is after the replay, when the new frame's
     // table is actually shown.
     handleGameUpdate({ frame: data.snapshot, turn: data.turn })
-    toast(`Frame ${data.frameIndex} starting`)
   })
   socket.on('game:update', (data: GameUpdatePayload) => handleGameUpdate(data))
   // The clock's own channel. The room also changes its clock between table broadcasts
@@ -3863,21 +3934,10 @@ function handleSocketEvents(socket: Socket): void {
   })
   socket.on(
     'match:replay',
-    (data: { events: Array<{ seq: number; type: string; data: unknown }> }) => {
-      if (!data.events.length) return
-      toast(`Reconnected — missed ${data.events.length} event${data.events.length === 1 ? '' : 's'}`)
-      for (const ev of data.events) {
-        if (ev.type === 'BALL_POTTED') {
-          const d = ev.data as { ballId: number }
-          toast(`Missed: potted ${ballName(d.ballId)}`)
-        } else if (ev.type === 'FOUL') {
-          const d = ev.data as { penalty: number; reason?: string; bySeat?: number }
-          toast(`Missed: ${foulHeadline(d.penalty, d.bySeat).toLowerCase()} — ${foulDetail(d.reason)}`, 'error')
-        } else if (ev.type === 'FRAME_END') {
-          const d = ev.data as { winnerSeat: number }
-          toast(`Missed: frame won by ${seatName(d.winnerSeat)}`)
-        }
-      }
+    () => {
+      // Events missed while disconnected are not read out in the corner one by one: the
+      // table, the score and the turn the snapshot brings back already show where things
+      // stand.
     }
   )
   socket.on('error', (data: { code?: string }) => {
@@ -4027,7 +4087,10 @@ placementTarget = null
       if (!handlePos) handlePos = firstHandleSpot(inD, snapshotBalls)
       placementTarget = handlePos
       placementLegal = scene3d.updatePlacementGhost(handlePos, inD, snapshotBalls).ok
-      hintPlacement('Drag the handle to move the cue ball, then tap the table to place it')
+      hintPlacement('Drag to move the cue ball, then tap the table to place it')
+      // Away from the break-off the camera goes with the ball, from behind it, so the
+      // player sees where they are putting it. At the break-off it stays behind the D.
+      if (!inD) scene3d.setPlacementAnchor(handlePos)
       if (!cueHandle) cueHandle = createCueHandle(moveHandleBall)
       const at = scene3d.tableToScreen(handlePos.x, handlePos.y)
       if (at) {
@@ -4113,7 +4176,6 @@ placementTarget = null
       // The clock stays held from here until the camera is home. This is the flag that
       // sends the release when that happens.
       placementResumePending = true
-      toast('Cue ball placed', 'info')
       emitSfx({ type: 'aux', sound: 'placeTick' })
     }
   }
@@ -4195,6 +4257,10 @@ const handlePlacement = ((): boolean => {
 })()
 /** Where the ball stands at the moment, while it is being placed with the handle. */
 let handlePos: { x: number; y: number } | null = null
+/** A finger on the table during a handle placement: where it went down and is now, and whether it has moved. */
+let handleDrag: { id: number; startX: number; startY: number; lastX: number; lastY: number; moved: boolean } | null = null
+/** How far a finger may wander, in CSS pixels, and still count as a tap rather than a drag. */
+const HANDLE_TAP_SLOP_PX = 10
 let cueHandle: CueHandle | null = null
 /** Where the camera stands for a handle placement: at the back of the D, looking down the table. */
 const HANDLE_CAMERA_ANCHOR = { x: D_CENTRE.x - D_ZONE_RADIUS, y: D_CENTRE.y }
@@ -4235,6 +4301,42 @@ function moveHandleBall(clientX: number, clientY: number): void {
   const py = ((clientY - rect.top) / rect.height) * canvas.height
   const point = scene3d.screenToTable(px, py)
   if (!point) return
+  moveHandleBallTo(point)
+}
+
+/**
+ * A finger dragged across the table moved this far on the screen, in CSS pixels: the ball
+ * moves as far across the table as that is at the ball, as the camera sees it now.
+ *
+ * Worked out from the movement rather than from where the finger is, because the camera
+ * follows the ball as it goes, and a point under a still finger moves with the camera.
+ */
+function dragHandleBall(dxClient: number, dyClient: number): void {
+  const canvas = document.getElementById('game-canvas') as HTMLCanvasElement | null
+  if (!canvas || !scene3d || !handlePos || (dxClient === 0 && dyClient === 0)) return
+  const rect = canvas.getBoundingClientRect()
+  const sx = canvas.width / Math.max(1, rect.width)
+  const sy = canvas.height / Math.max(1, rect.height)
+  // How the ball's spot moves on the screen for 100mm along each table axis.
+  const step = 100
+  const at = scene3d.tableToScreen(handlePos.x, handlePos.y)
+  const ax = scene3d.tableToScreen(handlePos.x + step, handlePos.y)
+  const ay = scene3d.tableToScreen(handlePos.x, handlePos.y + step)
+  if (!at || !ax || !ay) return
+  const a = (ax.x - at.x) / step
+  const c = (ax.y - at.y) / step
+  const b = (ay.x - at.x) / step
+  const d = (ay.y - at.y) / step
+  const det = a * d - b * c
+  if (Math.abs(det) < 1e-6) return
+  const px = dxClient * sx
+  const py = dyClient * sy
+  moveHandleBallTo({ x: handlePos.x + (d * px - b * py) / det, y: handlePos.y + (-c * px + a * py) / det })
+}
+
+/** Moves the ball in hand to this point on the table, if the spot is one the server would take. */
+function moveHandleBallTo(point: { x: number; y: number }): void {
+  if (!scene3d || !frame || !placementAllowsGhostInput(placementFlow) || placementCommitInFlight) return
   const inD = frame.cueInHandInD === true
   let at = { x: point.x, y: point.y }
   if (inD) {
@@ -4275,10 +4377,9 @@ function loop(): void {
         const lowered = renderScaler.scale < 1
         applyCanvasSize()
         if (adaptiveQuality) storeRenderScale(renderScaler.scale)
-        if (lowered && !renderScaleAnnounced) {
-          renderScaleAnnounced = true
-          toast('Lowered graphics quality for smoother play', 'info')
-        }
+        // Not announced: a note in the corner mid-match is a distraction, and the
+        // change is made so that the player does not notice it.
+        if (lowered && !renderScaleAnnounced) renderScaleAnnounced = true
       }
       // While a shot replays, the table shows sampled simulation positions; the
       // authoritative snapshot above still drives the HUD and turn state.

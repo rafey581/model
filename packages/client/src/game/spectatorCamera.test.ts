@@ -358,6 +358,17 @@ describe('which pocket a shot is watched from', () => {
     expect(planPocketShot(towardsCorner(2600, 1000), pockets, CUE, 0)).toBeNull()
   })
 
+  it('goes by where the ball was sent, not by a pocket it drifts past off a cushion', () => {
+    // Sent straight along the table into the far end cushion, well between the pockets, it
+    // comes back off it and runs past the top middle pocket: it was never sent there.
+    const keyframes: Array<{ t: number; balls: number[][] }> = [{ t: 0, balls: [[CUE, 800, 900]] }]
+    for (let i = 0; i <= 10; i++) keyframes.push({ t: 0.2 + i * 0.1, balls: [[1, 1800 + 170 * i, 900]] })
+    for (let i = 1; i <= 10; i++) {
+      keyframes.push({ t: 1.2 + i * 0.1, balls: [[1, 3500 - 170 * i, 900 + 80 * i]] })
+    }
+    expect(planPocketShot({ keyframes }, pockets, CUE, 0)).toBeNull()
+  })
+
   it('is used for the planned share of shots only, unless asked always', () => {
     const recording = towardsCorner(TABLE_LENGTH - 20, TABLE_WIDTH - 20, [[1, 1.2]])
     expect(planPocketShot(recording, pockets, CUE, POT_CAM.showShare - 0.01)).not.toBeNull()
