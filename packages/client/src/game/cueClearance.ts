@@ -15,8 +15,13 @@ import { TABLE_LENGTH, TABLE_WIDTH } from '@snooker/shared'
 
 /** The cue's angle above level over open cloth, in degrees. */
 export const CUE_FLAT_ELEVATION_DEG = 4
-/** The steepest a cue is ever drawn, in degrees: past this a player plays a massé, not a shot. */
-export const CUE_MAX_ELEVATION_DEG = 80
+/**
+ * The steepest a cue is ever drawn, in degrees. Only a slight lift, as the cue is drawn in
+ * the games players know: with the ball tight on a cushion the butt comes up a little and
+ * the cue may graze the top of the rail, rather than standing up nearly on end, which hid
+ * the shot and was awkward to line up.
+ */
+export const CUE_MAX_ELEVATION_DEG = 20
 /** The top of the cushion and the wooden rail above the cloth, in millimetres (measured off the table model). */
 export const RAIL_TOP_MM = 39
 /** Clear air kept between the underside of the cue and the top of the rail, in millimetres. */

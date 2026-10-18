@@ -234,6 +234,8 @@ const POWER_CAM_RATE = 10
 const TIP_REACH_SHARE = 0.5
 /** The red spot on the cue ball where the tip will strike it. */
 const TIP_MARK_RADIUS_MM = 2.6
+/** The cue ball's dot that is set facing the tip: one of the six, on the sphere's own +x. */
+const CUE_DOT_AXIS = new THREE.Vector3(1, 0, 0)
 const TIP_MARK_COLOR = 0xe02020
 /**
  * Holding the spin control leans the camera in on the cue ball: this share of the way
@@ -668,18 +670,40 @@ const BAKED_LIGHT_ON_EVERY_TIER = true
 const BALL_SHADOW_OPACITY = 0.62
 
 /**
- * How much the textured table's pockets are darkened inside. Its pockets are modelled — net,
- * leather drop, the frame under them — so they are dimmed rather than blacked out.
+ * The inside of a textured table's pocket, behind its net: near black, so the white net
+ * shows against the dark of the pocket the way it does on a match table.
  */
-const TEXTURED_POCKET_SHADE = 0.55
+const POCKET_BACKING_COLOR = 0x070707
+/**
+ * The textured table's cushion felt under the table lights (see buildTable): how much of its
+ * own green it glows with, so the face under the nose is not a black band, and how far its
+ * green is taken down, so its top, which faces the key light squarely, is the bed's green
+ * and not a pale, washed-out strip.
+ */
+const CUSHION_SELF_LIGHT = 0.15
+const CUSHION_LIT_SCALE = 0.85
+/** How far outside the net the backing sits, so the net is always drawn in front of it. */
+const POCKET_BACKING_GAP_MM = 3
 
 /** How much of the room's flat fill light the textured table keeps (see buildTable). */
 const TEXTURED_AMBIENT_SCALE = 0.35
 const TEXTURED_HEMI_SCALE = 0.4
 
-/** The canopy over the textured table: two soft overhead lights, warm white, each this strong. */
+/** The table lights' colour: warm white. */
 const CANOPY_COLOR = 0xfff2e0
-const CANOPY_INTENSITY = 0.9
+/**
+ * The textured table's two lights, as a broadcast table is lit: a key light and a softer
+ * fill, each from above one corner and across the table from the other, so everything on
+ * the table has a lit side and a shaded side and every cushion drops a soft shadow on the
+ * cloth beside it, stronger on the key light's side. Positions are directions towards the
+ * light (it shines at the middle of the table), and the strengths.
+ */
+const TABLE_LIGHTS: ReadonlyArray<{ from: readonly [number, number, number]; intensity: number }> = [
+  { from: [-1100, 1700, -1400], intensity: 1.9 },
+  { from: [1100, 1700, 1400], intensity: 0.75 }
+]
+/** What is left of the overhead lamp on the textured table, which the table lights now do the work of. */
+const TEXTURED_LAMP_INTENSITY = 0.3
 
 /**
  * A potted ball goes in the way it arrived: it keeps the speed and the direction it had as
@@ -698,6 +722,12 @@ const POT_MAX_SPEED = 4200
 const POT_BACK_MM = 34
 /** What is left of a ball's pace into the back of the pocket when it meets it. */
 const POT_BACK_BOUNCE = 0.18
+/**
+ * How far a ball drops while it is still going over the lip. A ball caught by the
+ * simulation at the edge of the hole is brought inside it over this much of its fall,
+ * rather than dropping straight down through the edge of the bed.
+ */
+const POT_LIP_MM = 16
 /** The longest a drop is ever drawn, whatever happens, in seconds. */
 const POT_DROP_MAX_SECONDS = 1.2
 
@@ -711,9 +741,11 @@ type ClothMaterial = THREE.MeshPhysicalMaterial | THREE.MeshLambertMaterial | TH
  * that on purpose: a table under a canopy of lights is the brightest thing in the room.
  */
 const CLOTH_BAKED_LEVEL = 1.12
+/** How bright the textured table's lit bed is, against the felt's own colours. */
+const CLOTH_LIT_LEVEL = 1.1
 
 /** How strongly the fibre tile shows in the bed's colour. */
-const CLOTH_DETAIL_STRENGTH = 0.65
+const CLOTH_DETAIL_STRENGTH = 0.4
 /** How strongly the fibre shows on the cushions, and how much cloth one repeat of it covers in mm. */
 const CUSHION_DETAIL_STRENGTH = 0.6
 const CLOTH_DETAIL_TILE_MM = 270
@@ -1159,9 +1191,13 @@ function canopyEnvTexture(): THREE.CanvasTexture {
   })
 }
 
-/** How far the balls' reflection picture is turned up: the coloured balls, and the cue ball. */
-const BALL_ENV_INTENSITY = 10
-const CUE_BALL_ENV_INTENSITY = 8
+/**
+ * How far the balls' reflection picture is turned up: the coloured balls, and the cue ball.
+ * Held a little under full so a ball keeps its own colour and falls into shade below its
+ * middle, with a crisp highlight on top, rather than every ball washed bright all over.
+ */
+const BALL_ENV_INTENSITY = 4.5
+const CUE_BALL_ENV_INTENSITY = 5
 
 /**
  * The back wall: blue paint, brightest at the height the lamp reaches, falling to
@@ -1225,6 +1261,12 @@ export class BallRig {
   blob: THREE.Mesh
   target = new THREE.Vector3()
   firstSeen = true
+  /**
+   * Set down and not yet played since: the cue ball at the start of a frame or put back
+   * after an in-off. While it is, the cue ball is turned so one of its dots faces the tip
+   * (see showAim), as a player sets the ball down.
+   */
+  fresh = false
   sinking = false
   sinkT = 0
   sinkStart = new THREE.Vector3()
@@ -1234,6 +1276,10 @@ export class BallRig {
   /** The velocity it is carrying in the pocket, and where it is across the hole. */
   sinkVel = new THREE.Vector3()
   sinkPos = new THREE.Vector3()
+  /** How far from the middle of the hole the ball's centre can be once it is down in it. */
+  sinkReach = POT_BACK_MM
+  /** How far from the middle of the hole it was when it went over the edge. */
+  sinkStartOff = 0
   rising = false
   riseT = 0
   riseFrom = new THREE.Vector3()
@@ -1322,6 +1368,8 @@ export class BallRig {
   stepTurn(dt: number, scale = 1): void {
     const turn = this.turn
     if (turn) {
+      // Being played: it turns its own way from here.
+      this.fresh = false
       // The surface's velocity over the cloth: turning about up x that velocity, by its
       // distance over the radius.
       const rx = turn.rollX * scale
@@ -1352,12 +1400,14 @@ export class BallRig {
     if (this.rollAxis.lengthSq() > 0) this.sphere.rotateOnWorldAxis(this.rollAxis, distance / this.radius)
   }
 
-  startSink(targetX: number, targetZ: number): void {
+  startSink(targetX: number, targetZ: number, reach = POT_BACK_MM): void {
     this.sinking = true
     this.sinkT = 0
     this.sinkStart.copy(this.group.position)
     this.sinkPos.copy(this.group.position)
     this.sinkTarget.set(targetX, this.group.position.y - 8, targetZ)
+    this.sinkReach = reach
+    this.sinkStartOff = Math.hypot(this.group.position.x - targetX, this.group.position.z - targetZ)
     // The pace it came in with, along the cloth.
     this.sinkVel.set(this.velocity.x, 0, this.velocity.z)
     let speed = this.sinkVel.length()
@@ -1383,6 +1433,7 @@ export class BallRig {
   startRise(targetX: number, targetZ: number): void {
     // A sink still in flight is abandoned rather than raced. The ball is back on the
     // table, so letting the drop finish would take it away again a moment later.
+    this.fresh = true
     this.sinking = false
     this.rising = true
     this.riseT = 0
@@ -1394,6 +1445,7 @@ export class BallRig {
   aim(targetX: number, targetZ: number, highlight: boolean, reset: boolean): void {
     if (reset) {
       this.group.position.set(targetX, BALL_RADIUS, targetZ)
+      this.fresh = true
       this.firstSeen = false
       this.hasPrevVisual = false
     }
@@ -1464,6 +1516,8 @@ export class Scene3D implements VenueHost {
   private stickShadow!: THREE.Mesh
   /** The red dot on the cue ball where the tip will strike it: the spin dial's point, on the ball. */
   private tipMark!: THREE.Mesh
+  private readonly tipNormal = new THREE.Vector3()
+  private readonly tipTurn = new THREE.Quaternion()
   /**
    * The spin guide: while the spin control is held, a ring on the face of the cue ball
    * the cue is looking at, as far out as the tip can strike, with a cross through its
@@ -1564,6 +1618,14 @@ export class Scene3D implements VenueHost {
   private ballEnv: THREE.Texture | null = null
   /** The textured table, when that is the table built: its polished parts get the lamp reflections. */
   private texturedTable: THREE.Group | null = null
+  /**
+   * Where each pocket's hole really is on the textured table, and how far a ball's centre
+   * can be from its middle once it is down inside it, in the order of POCKETS. The model's
+   * holes sit behind the physics' pocket centres (those are on the cushion lines), so a ball
+   * dropped straight down on the physics' centre fell through the edge of the bed. Null on
+   * the other tables, which drop it on the physics' centre as before.
+   */
+  private pocketHoles: Array<{ x: number; z: number; reach: number }> | null = null
   /** When, in the shot being replayed, a ball drops, and into which pocket. Empty when none does. */
   /**
    * The balls the shot on screen pots: when each drops, into which pocket, when it was set
@@ -2283,6 +2345,16 @@ export class Scene3D implements VenueHost {
     // of the work, and that fraction is the difference between a table that holds its
     // frame rate on a laptop's built-in graphics and one that does not. The balls, which
     // are small on screen and are where a shine actually reads, keep theirs.
+    if (studio) {
+      // The textured table's bed is lit for real: by the table lights, which have a
+      // direction and cast shadows (see buildTable). A painted light is the same flat
+      // picture whichever way the lamps hang, and it is what made the table read as fake.
+      // A diffuse surface with the shadow map baked once costs a light sum and a shadow
+      // read per pixel, no more.
+      const lit = new THREE.MeshLambertMaterial({ map: felt() })
+      lit.color.setScalar(CLOTH_LIT_LEVEL)
+      return withClothDetail(lit)
+    }
     if (BAKED_LIGHT_ON_EVERY_TIER || qualityConfig().name !== 'high') {
       // And its light is not worked out at all: it is in the texture. The lamp does not
       // move and neither does the table, so what the lamp does to the cloth is the same
@@ -2392,6 +2464,106 @@ export class Scene3D implements VenueHost {
     group.add(liner)
   }
 
+  /**
+   * The textured table's pockets: a dark cup behind each net, and where each hole is.
+   *
+   * The model's nets hang in nothing, so through the weave the room's floor showed, and the
+   * old liner (see buildPocketLiners) sat inside the net, in front of it, and greyed it out.
+   * The backing is a lathe of the net's own outer outline, a few millimetres outside it, so
+   * the net is drawn white over the dark of the pocket. It starts up inside the leather
+   * drop, wider than the leather's own wall there, so there is no gap between the two to see
+   * the floor through. The six merge into one unlit draw call.
+   *
+   * The same measurement gives each hole's real middle (the middle of its net) and how far
+   * a ball can be from it once it is inside the leather: what a pot drops a ball into.
+   */
+  private buildPocketBacking(group: THREE.Group): void {
+    this.pocketHoles = null
+    const net = group.getObjectByName('table:NetCord') as THREE.Mesh | undefined
+    const leather = group.getObjectByName('table:Leather') as THREE.Mesh | undefined
+    const pos = net?.geometry.getAttribute('position') as THREE.BufferAttribute | undefined
+    const leatherPos = leather?.geometry.getAttribute('position') as THREE.BufferAttribute | undefined
+    if (!pos) return
+    // The net is measured where it hangs as a round basket, under the leather drop.
+    const BASKET_TOP = -75
+    const BASKET_BOTTOM = -140
+    const FIND_MM = 200
+    const REACH_MM = 120
+    const BIN_MM = 8
+    const TOP_Y = -30
+    const segments = qualityConfig().name === 'low' ? 20 : 32
+    const geoms: THREE.BufferGeometry[] = []
+    const holes: Array<{ x: number; z: number; reach: number }> = []
+    for (const p of POCKETS) {
+      const px = tableX(p.x)
+      const pz = tableZ(p.y)
+      let sx = 0
+      let sz = 0
+      let n = 0
+      for (let i = 0; i < pos.count; i++) {
+        const y = pos.getY(i)
+        if (y > BASKET_TOP || y < BASKET_BOTTOM) continue
+        const x = pos.getX(i)
+        const z = pos.getZ(i)
+        if (Math.hypot(x - px, z - pz) > FIND_MM) continue
+        sx += x
+        sz += z
+        n++
+      }
+      if (n < 8) return
+      const cx = sx / n
+      const cz = sz / n
+      // The net's outer outline, top to bottom, and the mouth of its basket.
+      const bins = new Map<number, number>()
+      let bottom = Infinity
+      let mouth = 0
+      for (let i = 0; i < pos.count; i++) {
+        const y = pos.getY(i)
+        if (y > TOP_Y) continue
+        const r = Math.hypot(pos.getX(i) - cx, pos.getZ(i) - cz)
+        if (r > REACH_MM) continue
+        const bin = Math.round(y / BIN_MM)
+        bins.set(bin, Math.max(bins.get(bin) ?? 0, r))
+        bottom = Math.min(bottom, y)
+        if (y <= BASKET_TOP + 10 && y >= BASKET_TOP - 10) mouth = Math.max(mouth, r)
+      }
+      // The leather drop's inside wall just above the net: the hole a ball goes down.
+      let wall = Infinity
+      if (leatherPos) {
+        for (let i = 0; i < leatherPos.count; i++) {
+          const y = leatherPos.getY(i)
+          if (y > -10 || y < -50) continue
+          const r = Math.hypot(leatherPos.getX(i) - cx, leatherPos.getZ(i) - cz)
+          if (r < REACH_MM) wall = Math.min(wall, r)
+        }
+      }
+      if (!Number.isFinite(wall)) wall = mouth
+      const points: THREE.Vector2[] = [new THREE.Vector2(Math.min(REACH_MM, Math.max(wall, mouth)) + 6, TOP_Y)]
+      for (const bin of [...bins.keys()].sort((a, b) => b - a)) {
+        if (bin * BIN_MM > TOP_Y - 4) continue
+        points.push(new THREE.Vector2(bins.get(bin)! + POCKET_BACKING_GAP_MM, bin * BIN_MM))
+      }
+      points.push(new THREE.Vector2(0.01, bottom - 6))
+      if (points.length < 3) return
+      const lathe = new THREE.LatheGeometry(points, segments)
+      lathe.translate(cx, 0, cz)
+      geoms.push(lathe)
+      // A ball's centre stays this far inside the leather wall as it goes down.
+      holes.push({ x: cx, z: cz, reach: Math.max(8, Math.min(wall, mouth) - BALL_RADIUS - 3) })
+    }
+    if (geoms.length !== POCKETS.length) return
+    const merged = mergeGeometries(geoms, false)
+    geoms.forEach((g) => g.dispose())
+    if (!merged) return
+    const backing = new THREE.Mesh(merged, new THREE.MeshBasicMaterial({ color: POCKET_BACKING_COLOR, side: THREE.DoubleSide }))
+    backing.name = 'pocket-liner'
+    backing.castShadow = false
+    backing.receiveShadow = false
+    backing.userData.physicsSurface = 'pocketLiner'
+    group.add(backing)
+    this.pocketHoles = holes
+  }
+
   private buildTable(): void {
     const textured = this.tableSource !== null && isTexturedTableModel(this.tableSource)
     const clothMat = this.makeClothMaterial(textured)
@@ -2408,7 +2580,17 @@ export class Scene3D implements VenueHost {
       })
       this.scene.add(model)
       this.texturedTable = model
-      this.buildPocketLiners(model, -3, TEXTURED_POCKET_SHADE)
+      this.buildPocketBacking(model)
+      // The cushions' faces stand upright under an overhead canopy, so the light barely
+      // reaches them and they went a dark green band along every rail. The felt carries a
+      // share of its own green as glow, as the bed's painted light does, so a face is only
+      // a little darker than the top it rolls down from.
+      const cushions = model.getObjectByName('table:JawCloth') as THREE.Mesh | undefined
+      const cushionMat = cushions?.material as THREE.MeshLambertMaterial | undefined
+      if (cushionMat?.emissive && cushionMat.color) {
+        cushionMat.emissive.copy(cushionMat.color).multiplyScalar(CUSHION_SELF_LIGHT)
+        cushionMat.color.multiplyScalar(CUSHION_LIT_SCALE)
+      }
       // The canopy. A tournament table is lit by a long box over the whole bed, not by one
       // bulb: two soft overhead lights along its length, warm white, no shadows. They are
       // what the wood, the brass and the balls read their shape by. The bed's own light is
@@ -2424,17 +2606,42 @@ export class Scene3D implements VenueHost {
         if ((light as THREE.AmbientLight).isAmbientLight) light.intensity *= TEXTURED_AMBIENT_SCALE
         if ((light as THREE.HemisphereLight).isHemisphereLight) light.intensity *= TEXTURED_HEMI_SCALE
       })
-      // Overhead and along the table's length, as a canopy hangs: lights to the side of
-      // the table mirrored in the rails as a white glare from above.
-      for (const [x, z] of [
-        [-900, 0],
-        [900, 0]
-      ] as const) {
-        const canopy = new THREE.DirectionalLight(CANOPY_COLOR, CANOPY_INTENSITY)
-        canopy.position.set(x, 3000, z)
-        canopy.name = 'table-canopy'
-        this.scene.add(canopy)
+      // The table lights: a key and a fill, from opposite corners (see TABLE_LIGHTS). They
+      // cast the shadows the bed takes, the cushions' on the cloth beside them and the
+      // table's on the floor. Everything that casts is part of the table and never moves,
+      // so the maps are drawn once, with the rest of the static bake.
+      const bed = model.getObjectByName('table:Cloth') as THREE.Mesh | undefined
+      if (bed) bed.receiveShadow = true
+      // The cushions neither drop a shadow on the cloth nor take one: a cushion is glued to
+      // the bed, not standing over it, and its rubber face reads as a dark band otherwise.
+      if (cushions) {
+        cushions.castShadow = false
+        cushions.receiveShadow = false
       }
+      const mapSize = qualityConfig().shadowMapSize
+      for (const { from, intensity } of TABLE_LIGHTS) {
+        const light = new THREE.DirectionalLight(CANOPY_COLOR, intensity)
+        light.position.set(from[0], from[1], from[2])
+        light.name = 'table-canopy'
+        light.castShadow = true
+        light.shadow.mapSize.set(mapSize, mapSize)
+        const cam = light.shadow.camera
+        cam.left = -2300
+        cam.right = 2300
+        cam.top = 1500
+        cam.bottom = -1500
+        cam.near = 500
+        cam.far = 6000
+        cam.updateProjectionMatrix()
+        light.shadow.bias = -0.0004
+        light.shadow.normalBias = 1.5
+        light.shadow.radius = 4
+        this.scene.add(light)
+      }
+      // The overhead lamp stays as a little fill, and its own shadow goes: the table
+      // lights cast the table's shadows now.
+      this.lamp.intensity = TEXTURED_LAMP_INTENSITY
+      this.lamp.castShadow = false
     } else if (this.tableSource) {
       console.info('[scene3d] buildTable: Blender model branch (9 draw calls)')
       // The Blender table brings its own bed, apron, rails, legs, cushions and
@@ -4285,17 +4492,21 @@ const outerL = APRON_OUTER_L
         let best = Infinity
         let targetX = px
         let targetZ = pz
-        for (const p of POCKETS) {
-          const dx = tableX(p.x) - px
-          const dz = tableZ(p.y) - pz
+        let reach = POT_BACK_MM
+        // Into the hole as the table draws it, where it knows; else the physics' pocket.
+        const holes = this.pocketHoles ?? POCKETS.map((p) => ({ x: tableX(p.x), z: tableZ(p.y), reach: POT_BACK_MM }))
+        for (const hole of holes) {
+          const dx = hole.x - px
+          const dz = hole.z - pz
           const d2 = dx * dx + dz * dz
           if (d2 < best) {
             best = d2
-            targetX = tableX(p.x)
-            targetZ = tableZ(p.y)
+            targetX = hole.x
+            targetZ = hole.z
+            reach = hole.reach
           }
         }
-        rig.startSink(targetX, targetZ)
+        rig.startSink(targetX, targetZ, reach)
       } else {
         rig.firstSeen = true
       }
@@ -4450,6 +4661,15 @@ const outerL = APRON_OUTER_L
     this.tipMark.position.set(hitX + nx * 0.3, hitY + ny * 0.3, hitZ + nz * 0.3)
     this.tipMark.lookAt(hitX + nx * 10, hitY + ny * 10, hitZ + nz * 10)
     this.tipMark.visible = true
+    // A cue ball just set down is turned so a dot of its own sits where the tip will meet
+    // it: there is no painted spot on the ball, the ball's own dot is the mark.
+    const cueRig = this.balls.get(BALL_IDS.CUE)
+    if (cueRig?.fresh && !this.strikeAt) {
+      this.tipNormal.set(nx, ny, nz)
+      cueRig.group.getWorldQuaternion(this.tipTurn).invert()
+      this.tipNormal.applyQuaternion(this.tipTurn).normalize()
+      cueRig.sphere.quaternion.setFromUnitVectors(CUE_DOT_AXIS, this.tipNormal)
+    }
 
     // The spin guide is centred on the ball and `stepCamera` turns it to face the lens.
     // Its dot is the strike point as the cue sees the ball, face-on: right is right side,
@@ -4578,6 +4798,8 @@ const outerL = APRON_OUTER_L
    */
   strikeCue(power: number): void {
     if (!this.lastAimShown) return
+    const cueRig = this.balls.get(BALL_IDS.CUE)
+    if (cueRig) cueRig.fresh = false
     this.strikeShot = { cue: { ...this.lastAimShown.cue }, aim: { ...this.lastAimShown.aim, power } }
     this.strikeFromGap = BALL_RADIUS + STICK_REST_GAP + Math.max(0, Math.min(1, power)) * STICK_POWER_DRAW
     this.strikeAt = performance.now()
@@ -4955,10 +5177,10 @@ const outerL = APRON_OUTER_L
       // the ball, and its dot exactly over the red spot the tip will strike.
       this.spinGuide.quaternion.copy(this.camera.quaternion)
     }
-    // One red dot at a time: the guide's while it is up, the spot on the ball otherwise.
-    if (this.tipMark.visible || this.spinGuide.visible) {
-      ;(this.tipMark.material as THREE.MeshBasicMaterial).visible = !this.spinGuide.visible
-    }
+    // No painted spot on the ball: the cue ball's own dots show it turning, and one of
+    // them is set at the tip when the ball is set down (see showAim). The mesh stays, its
+    // visibility is what says the cue is up; only its paint is off.
+    ;(this.tipMark.material as THREE.MeshBasicMaterial).visible = false
   }
 
   /**
@@ -5059,6 +5281,9 @@ const outerL = APRON_OUTER_L
    * to drop and where. Reads the recording and keeps a few numbers; changes nothing.
    */
   planShotCamera(playback: ShotPlayback | null): void {
+    // A shot is being played: the cue ball is no longer just set down.
+    const cueRig = this.balls.get(BALL_IDS.CUE)
+    if (cueRig && playback) cueRig.fresh = false
     this.shotPots = []
     this.shotTime = null
     if (!playback) return
@@ -5433,11 +5658,17 @@ const outerL = APRON_OUTER_L
         const offX = rig.sinkPos.x - rig.sinkTarget.x
         const offZ = rig.sinkPos.z - rig.sinkTarget.z
         const off = Math.hypot(offX, offZ)
-        if (off > POT_BACK_MM) {
+        // Down under its own weight the whole time: slowly at first, then fast.
+        const fall = 0.5 * POT_GRAVITY * t * t
+        // Inside the hole once it is over the lip. Caught at the edge, it is brought in as it
+        // drops, the way a ball rolls off the edge into the hole, not down through the bed.
+        const lip = Math.max(0, 1 - fall / POT_LIP_MM)
+        const reach = rig.sinkReach + Math.max(0, rig.sinkStartOff - rig.sinkReach) * lip
+        if (off > reach && off > 1e-6) {
           const nx = offX / off
           const nz = offZ / off
-          rig.sinkPos.x = rig.sinkTarget.x + nx * POT_BACK_MM
-          rig.sinkPos.z = rig.sinkTarget.z + nz * POT_BACK_MM
+          rig.sinkPos.x = rig.sinkTarget.x + nx * reach
+          rig.sinkPos.z = rig.sinkTarget.z + nz * reach
           const outward = rig.sinkVel.x * nx + rig.sinkVel.z * nz
           if (outward > 0) {
             // The outward part bounces back a little; the rest of it is lost in the leather.
@@ -5446,8 +5677,6 @@ const outerL = APRON_OUTER_L
             rig.sinkVel.multiplyScalar(0.55)
           }
         }
-        // Down under its own weight the whole time: slowly at first, then fast.
-        const fall = 0.5 * POT_GRAVITY * t * t
         rig.group.position.set(rig.sinkPos.x, rig.sinkStart.y - Math.min(fall, POT_DROP_MM), rig.sinkPos.z)
         // Still turning as it goes in.
         const travelled = rig.group.position.distanceTo(before)

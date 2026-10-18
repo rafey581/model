@@ -12,15 +12,15 @@ import { BALL_IDS } from '@snooker/shared'
 export const BALL_COLORS: Record<number, number> = {
   [BALL_IDS.CUE]: 0xece2cc,
   [BALL_IDS.YELLOW]: 0xf4c430,
-  [BALL_IDS.GREEN]: 0x1b7f46,
-  [BALL_IDS.BROWN]: 0x8a4b23,
-  [BALL_IDS.BLUE]: 0x1e6fd9,
+  [BALL_IDS.GREEN]: 0x12904c,
+  [BALL_IDS.BROWN]: 0x96501f,
+  [BALL_IDS.BLUE]: 0x1f74e6,
   [BALL_IDS.PINK]: 0xf0709c,
   [BALL_IDS.BLACK]: 0x1a1a1e
 }
 
 /** Every red is the same red; snooker has no ball numbering to keep straight. */
-export const RED_BALL_COLOR = 0xb3121b
+export const RED_BALL_COLOR = 0xc0101c
 
 export function ballColor(id: number): number {
   return BALL_COLORS[id] ?? RED_BALL_COLOR

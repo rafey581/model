@@ -10,7 +10,7 @@ import { buildOpponentCue, type OpponentCue, type OpponentShot } from './opponen
 import { buildOpponentPowerMeter, type OpponentPowerMeter } from './opponentPowerMeter.js'
 import type { ArenaSeatPlacement } from './arenaEnvironment.js'
 import { VENUE_CONFIG, type VenueConfig } from './venueConfig.js'
-import { qualityConfig } from './qualityConfig.js'
+import { isPhoneScreen, qualityConfig } from './qualityConfig.js'
 import { SPECTATOR_CAM } from './spectatorCamera.js'
 import { emitSfx } from '../sfx/sfxEvents.js'
 
@@ -388,7 +388,9 @@ export function buildVenueEvents(host: VenueHost, config: VenueConfig = VENUE_CO
       ballsMoving = replayRunning
       audience.step(dt)
       cue.step(dt)
-      meter.show(spectator && cue.active(), cue.power())
+      // Not on a phone: there the opponent's cue and aim say enough, and the meter only
+      // crowded a small screen.
+      meter.show(spectator && cue.active() && !isPhoneScreen(), cue.power())
       banner.tick(dt)
       if (clapPots > 0) {
         clapAt -= dt

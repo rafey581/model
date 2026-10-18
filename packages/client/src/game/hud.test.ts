@@ -417,7 +417,7 @@ describe('the HUD uses the same colours as the table', () => {
       expect(ballColorHex(chip.id)).toMatch(/^#[0-9a-f]{6}$/)
     }
     expect(ballColorHex(BALL_IDS.YELLOW)).toBe('#f4c430')
-    expect(ballColorHex(BALL_IDS.BLUE)).toBe('#1e6fd9')
+    expect(ballColorHex(BALL_IDS.BLUE)).toBe('#1f74e6')
     expect(ballColorHex(BALL_IDS.BLACK)).toBe('#1a1a1e')
   })
 

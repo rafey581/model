@@ -267,7 +267,7 @@ const CUSHION_TONES_CLASSIC: CushionTones = { face: 0.56, top: 1, throat: 0.4 }
  * properly rounded and smooth-shaded, so the shape carries itself, and a hard split
  * between the two tones drew a line along every cushion.
  */
-const CUSHION_TONES_STUDIO: CushionTones = { face: 0.92, top: 1, throat: 0.8 }
+const CUSHION_TONES_STUDIO: CushionTones = { face: 0.86, top: 1, throat: 0.86 }
 
 function applyCushionShading(geo: THREE.BufferGeometry, tones: CushionTones = CUSHION_TONES_CLASSIC): void {
   const pos = geo.getAttribute('position') as THREE.BufferAttribute | undefined
@@ -365,6 +365,115 @@ export interface TexturedTableOptions {
  */
 const WOOD_FIGURE_POWER = 2.4
 
+/** The pocket leathers' dye, sRGB 0..255: the warm cream of a match table's pockets. */
+const LEATHER_CREAM: readonly [number, number, number] = [226, 206, 168]
+/** How much of the leather's grain survives the re-dye: 1 keeps all of it, 0 none. */
+const LEATHER_GRAIN = 0.8
+/**
+ * The leather's fall into the hole: full colour from this height above the cloth, down to
+ * LEATHER_DEPTH_SHADE of it this far below, millimetres.
+ */
+const LEATHER_DEPTH_TOP_MM = 30
+const LEATHER_DEPTH_BOTTOM_MM = -70
+const LEATHER_DEPTH_SHADE = 0.4
+
+/**
+ * The stitching round each pocket leather's cap: a dashed seam this high above the cloth,
+ * just under the top of the cap where the hide is sewn over its frame, and a faint pressed
+ * line a little below it. Heights in millimetres, the seam's dash pitch in radians per mm.
+ */
+const LEATHER_STITCH_Y_MM = 31.7
+const LEATHER_STITCH_DARKEN = 0.45
+const LEATHER_STITCH_PITCH = 0.9
+const LEATHER_CREASE_Y_MM = 27.3
+const LEATHER_CREASE_DARKEN = 0.18
+
+/**
+ * Darkens a pocket leather the further down into the hole it goes, as the light falls off
+ * inside a real pocket: the cap stays its cream, the drop under the cloth goes into shade.
+ * The cap also gets its stitching (see LEATHER_STITCH_Y_MM). One varying and a few
+ * multiplies; the leather's own lighting is untouched.
+ */
+function withLeatherDepth<T extends THREE.MeshStandardMaterial>(material: T): T {
+  const f = (n: number): string => n.toFixed(2)
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vLeatherWorld;')
+      .replace(
+        '#include <project_vertex>',
+        '#include <project_vertex>\nvLeatherWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;'
+      )
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vLeatherWorld;')
+      .replace(
+        '#include <map_fragment>',
+        [
+          '#include <map_fragment>',
+          `diffuseColor.rgb *= mix(${f(LEATHER_DEPTH_SHADE)}, 1.0, smoothstep(${f(LEATHER_DEPTH_BOTTOM_MM)}, ${f(LEATHER_DEPTH_TOP_MM)}, vLeatherWorld.y));`,
+          `float leatherSeam = smoothstep(${f(LEATHER_STITCH_Y_MM - 1.1)}, ${f(LEATHER_STITCH_Y_MM - 0.5)}, vLeatherWorld.y) * (1.0 - smoothstep(${f(LEATHER_STITCH_Y_MM + 0.5)}, ${f(LEATHER_STITCH_Y_MM + 1.1)}, vLeatherWorld.y));`,
+          `float leatherDash = step(0.0, sin((vLeatherWorld.x + vLeatherWorld.z) * ${f(LEATHER_STITCH_PITCH)}));`,
+          `diffuseColor.rgb *= 1.0 - ${f(LEATHER_STITCH_DARKEN)} * leatherSeam * leatherDash;`,
+          `float leatherCrease = smoothstep(${f(LEATHER_CREASE_Y_MM - 1.3)}, ${f(LEATHER_CREASE_Y_MM - 0.3)}, vLeatherWorld.y) * (1.0 - smoothstep(${f(LEATHER_CREASE_Y_MM + 0.3)}, ${f(LEATHER_CREASE_Y_MM + 1.3)}, vLeatherWorld.y));`,
+          `diffuseColor.rgb *= 1.0 - ${f(LEATHER_CREASE_DARKEN)} * leatherCrease;`
+        ].join('\n')
+      )
+  }
+  material.customProgramCacheKey = () => 'leather-depth'
+  return material
+}
+
+const creamLeatherCache = new WeakMap<THREE.Texture, THREE.Texture>()
+
+/**
+ * The model's leather map, re-dyed cream: each pixel takes the cream at its own brightness
+ * against the map's average, so the grain and the stitching stay and only the colour goes.
+ * Made once per map; null (and the leather is left as it is) if the map cannot be read.
+ */
+function creamLeatherMap(source: THREE.Texture | null): THREE.Texture | null {
+  if (!source) return null
+  const cached = creamLeatherCache.get(source)
+  if (cached) return cached
+  const image = source.image as (CanvasImageSource & { width: number; height: number }) | undefined
+  if (!image || !image.width || !image.height || typeof document === 'undefined') return null
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = image.width
+    canvas.height = image.height
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (!ctx) return null
+    ctx.drawImage(image, 0, 0)
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const px = data.data
+    let sum = 0
+    for (let i = 0; i < px.length; i += 4) sum += 0.3 * px[i]! + 0.59 * px[i + 1]! + 0.11 * px[i + 2]!
+    const mean = Math.max(1, sum / (px.length / 4))
+    for (let i = 0; i < px.length; i += 4) {
+      const k = Math.pow((0.3 * px[i]! + 0.59 * px[i + 1]! + 0.11 * px[i + 2]!) / mean, LEATHER_GRAIN)
+      px[i] = Math.min(255, LEATHER_CREAM[0] * k)
+      px[i + 1] = Math.min(255, LEATHER_CREAM[1] * k)
+      px[i + 2] = Math.min(255, LEATHER_CREAM[2] * k)
+    }
+    ctx.putImageData(data, 0, 0)
+    const cream = new THREE.CanvasTexture(canvas)
+    cream.colorSpace = source.colorSpace
+    cream.flipY = source.flipY
+    cream.wrapS = source.wrapS
+    cream.wrapT = source.wrapT
+    cream.anisotropy = source.anisotropy
+    cream.channel = source.channel
+    cream.repeat.copy(source.repeat)
+    cream.offset.copy(source.offset)
+    cream.rotation = source.rotation
+    cream.center.copy(source.center)
+    cream.matrixAutoUpdate = source.matrixAutoUpdate
+    cream.matrix.copy(source.matrix)
+    creamLeatherCache.set(source, cream)
+    return cream
+  } catch {
+    return null
+  }
+}
+
 /** The average brightness of a texture's pixels, in linear light, measured once off a small copy. */
 function meanLinearLuminance(texture: THREE.Texture | null): number {
   const image = texture?.image as CanvasImageSource | undefined
@@ -428,14 +537,15 @@ const UNDERSIDE = new THREE.MeshBasicMaterial({ name: 'Underside', color: 0x0606
  * stain was a node the export could not carry. Multiplying the map by this puts the colour
  * back: a deep red-brown with the birch's figure still in it.
  */
-const MAHOGANY_STAIN = '#5a2c16'
+// A polished red-brown, as a match table's rails are, rather than near black.
+const MAHOGANY_STAIN = '#7a3519'
 
 /**
  * How strongly each of the model's polished materials mirrors the lamps, once the scene hands
  * them its lamp-only reflection map (see {@link dressTableReflections}).
  */
 const LAMP_REFLECTION: Record<string, number> = {
-  Mahogany: 0.85,
+  Mahogany: 1.1,
   Gold: 3,
   'Gold metal': 3,
   Leather: 1.2,
@@ -643,10 +753,11 @@ function dressModelMaterial(source: THREE.Material, low: boolean): THREE.Materia
           roughnessMap: std.roughnessMap,
           roughness: 1,
           metalness: 0,
-          // A thin satin coat, not a mirror: under the canopy lights a thicker one threw
-          // a white glare along the rails from the overhead view.
-          clearcoat: low ? 0 : 0.12,
-          clearcoatRoughness: 0.3,
+          // A real lacquer: the rails of a match table are polished and catch the lights
+          // in a soft sheen along their length. The table lights come in at an angle now,
+          // so the coat no longer throws a white glare into the overhead view.
+          clearcoat: low ? 0 : 0.45,
+          clearcoatRoughness: 0.12,
           specularIntensity: 0.3,
           envMapIntensity: 0.3
         })
@@ -663,7 +774,15 @@ function dressModelMaterial(source: THREE.Material, low: boolean): THREE.Materia
       const leather = std.clone()
       leather.roughness = 0.6
       leather.envMapIntensity = 0.35
-      return leather
+      // Cream hide, as a match table's pocket leathers are, rather than the model's tan:
+      // the leather keeps its grain, re-dyed. Never one flat colour: it takes the table
+      // lights like any surface, with a soft sheen, and darkens on the way down into the
+      // hole (see withLeatherDepth), so the cap is pale and the drop falls into shade.
+      const cream = creamLeatherMap(std.map)
+      if (cream) leather.map = cream
+      leather.roughness = 0.5
+      leather.envMapIntensity = 0.5
+      return withLeatherDepth(leather)
     }
     case 'Knot': {
       const net = std.clone()

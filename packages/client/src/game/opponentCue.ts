@@ -3,6 +3,7 @@ import { BALL_RADIUS, TABLE_LENGTH, TABLE_WIDTH } from '@snooker/shared'
 import { VENUE_CONFIG, type VenueConfig } from './venueConfig.js'
 import { CUE_TIP_Y, buildCueStick } from './cueStick.js'
 import { cueElevationDeg } from './cueClearance.js'
+import { isPhoneScreen } from './qualityConfig.js'
 
 /**
  * The opponent's cue, and how hard they are about to hit it.
@@ -115,6 +116,9 @@ export function buildOpponentCue(config: VenueConfig = VENUE_CONFIG): OpponentCu
   const fill = new THREE.Mesh(new THREE.BoxGeometry(cfg.barWidthMm * 0.82, cfg.barHeightMm * 1.25, 1), fillMat)
   const bar = new THREE.Group()
   bar.add(track, fill)
+  // No power bar beside the opponent's cue on a phone: the cue and its aim are shown, how
+  // hard they are about to hit it is not.
+  bar.visible = !isPhoneScreen()
   group.add(bar)
 
   // The ramp, sampled once, so the fill's colour is a lookup rather than a lerp chain
@@ -314,7 +318,7 @@ export function buildOpponentCue(config: VenueConfig = VENUE_CONFIG): OpponentCu
       aimSeconds = on ? spectatorAimSeconds : cfg.aimSeconds
       const k = on ? thickness : 1
       stick.scale.set(k, k, 1)
-      bar.visible = !on
+      bar.visible = !on && !isPhoneScreen()
     },
     hide(): void {
       phase = 'idle'

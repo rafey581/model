@@ -8,7 +8,7 @@ import { qualityConfig } from './qualityConfig.js'
  */
 export const CUE_BALL_COLOR = 0xece2cc
 /** Base lacquer roughness under the clearcoat: glossy resin, not rubber. */
-export const CUE_BALL_ROUGHNESS = 0.36
+export const CUE_BALL_ROUGHNESS = 0.32
 /** Phenolic resin is a dielectric: no metalness anywhere on this ball. */
 export const CUE_BALL_METALNESS = 0
 /** Clearcoat film that carries the crisp lamp highlight. */
@@ -27,7 +27,7 @@ export const CUE_BALL_ENV_MAP_INTENSITY = 0.65
 export const CUE_BALL_IOR = 1.5
 
 /** Shared phenolic look for every coloured object ball. */
-export const COLOURED_BALL_ROUGHNESS = 0.36
+export const COLOURED_BALL_ROUGHNESS = 0.28
 export const COLOURED_BALL_CLEARCOAT = 1
 export const COLOURED_BALL_CLEARCOAT_ROUGHNESS = 0.045
 export const COLOURED_BALL_ENV_MAP_INTENSITY = 1
@@ -51,10 +51,22 @@ export function ballGlossScale(): { clearcoat: number; env: number } {
 }
 
 /**
+ * The cue ball's spin dots: each one's angular radius on the ball, and its red. The size
+ * of the dots on a match cue ball, about six millimetres across on a 52.5mm ball.
+ */
+const CUE_BALL_DOT_RADIUS = (7 * Math.PI) / 180
+const CUE_BALL_DOT_RGB: readonly [number, number, number] = [206, 24, 30]
+
+/**
  * Cream cue-ball albedo with red spin-reference dots. DataTexture (no DOM), zero download.
  * Sphere UVs: dots land on different hemispheres so roll always shows a mark.
  */
+const cueBallAlbedoCache = new Map<number, Uint8Array>()
+
 export function cueBallAlbedoPixels(size = 256): Uint8Array {
+  // The same picture every time: made once per size, then shared (it is only ever read).
+  const cached = cueBallAlbedoCache.get(size)
+  if (cached) return cached
   const data = new Uint8Array(size * size * 4)
   // Warm ivory resin base: an aged cue ball's skin tone, not paper white.
   const baseR = (CUE_BALL_COLOR >> 16) & 0xff
@@ -67,37 +79,57 @@ export function cueBallAlbedoPixels(size = 256): Uint8Array {
     data[o + 2] = baseB
     data[o + 3] = 255
   }
-  const dots: Array<{ u: number; v: number; r: number }> = [
-    { u: 0.28, v: 0.38, r: 0.045 },
-    { u: 0.72, v: 0.55, r: 0.04 },
-    { u: 0.48, v: 0.78, r: 0.035 }
+  // Six dots, one on each end of the ball's three axes, as on a match cue ball: from any
+  // side two or three are in view and the ball's turn always shows. The one on +x is the
+  // dot set facing the tip when the ball is set down (see scene3d's showAim). Each is
+  // measured on the sphere itself rather than on the flat map, so it is round wherever it
+  // sits, not squashed towards the poles, and it is a crisp printed dot, softened by a
+  // texel only.
+  const dots: Array<[number, number, number]> = [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+    [0, 0, 1],
+    [0, 0, -1]
   ]
-  for (const d of dots) {
-    const cx = d.u * size
-    const cy = d.v * size
-    const rad = d.r * size
-    const r0 = Math.max(1, Math.ceil(rad))
-    const x0 = Math.max(0, Math.floor(cx - r0))
-    const x1 = Math.min(size - 1, Math.ceil(cx + r0))
-    const y0 = Math.max(0, Math.floor(cy - r0))
-    const y1 = Math.min(size - 1, Math.ceil(cy + r0))
-    for (let y = y0; y <= y1; y++) {
-      for (let x = x0; x <= x1; x++) {
-        const dist = Math.hypot(x + 0.5 - cx, y + 0.5 - cy) / rad
-        if (dist >= 1) continue
-        const a = (1 - dist) * (1 - dist) * 0.95
-        const o = (y * size + x) * 4
-        data[o] = Math.round(data[o]! * (1 - a) + 190 * a)
-        data[o + 1] = Math.round(data[o + 1]! * (1 - a) + 28 * a)
-        data[o + 2] = Math.round(data[o + 2]! * (1 - a) + 28 * a)
-      }
+  const cosEdge = Math.cos(CUE_BALL_DOT_RADIUS)
+  const soft = 1.5 * ((2 * Math.PI) / size)
+  const cosOuter = Math.cos(CUE_BALL_DOT_RADIUS + soft)
+  const cosPhi = new Float64Array(size)
+  const sinPhi = new Float64Array(size)
+  for (let x = 0; x < size; x++) {
+    const phi = ((x + 0.5) / size) * Math.PI * 2
+    cosPhi[x] = Math.cos(phi)
+    sinPhi[x] = Math.sin(phi)
+  }
+  for (let y = 0; y < size; y++) {
+    // The sphere's UVs: u around the equator, v from pole to pole.
+    const theta = (1 - (y + 0.5) / size) * Math.PI
+    const sinT = Math.sin(theta)
+    const cosT = Math.cos(theta)
+    for (let x = 0; x < size; x++) {
+      const px = -cosPhi[x]! * sinT
+      const py = cosT
+      const pz = sinPhi[x]! * sinT
+      let best = -1
+      for (const [dx, dy, dz] of dots) best = Math.max(best, px * dx + py * dy + pz * dz)
+      if (best < cosOuter) continue
+      // Angular distance past the dot's edge, faded over a texel or so.
+      const over = Math.acos(Math.min(1, best)) - CUE_BALL_DOT_RADIUS
+      const a = best >= cosEdge ? 1 : Math.max(0, 1 - over / soft)
+      const o = (y * size + x) * 4
+      data[o] = Math.round(data[o]! * (1 - a) + CUE_BALL_DOT_RGB[0] * a)
+      data[o + 1] = Math.round(data[o + 1]! * (1 - a) + CUE_BALL_DOT_RGB[1] * a)
+      data[o + 2] = Math.round(data[o + 2]! * (1 - a) + CUE_BALL_DOT_RGB[2] * a)
     }
   }
+  cueBallAlbedoCache.set(size, data)
   return data
 }
 
 export function cueBallAlbedoTexture(): THREE.DataTexture {
-  const size = 256
+  const size = 512
   const texture = new THREE.DataTexture(cueBallAlbedoPixels(size), size, size)
   texture.colorSpace = THREE.SRGBColorSpace
   texture.generateMipmaps = true

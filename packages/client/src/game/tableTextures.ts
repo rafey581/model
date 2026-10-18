@@ -344,8 +344,10 @@ const FELT_STUDIO: FeltLook = {
   outer: '#28a632',
   edge: '#209a2a',
   ends: 0.06,
-  cushionMm: 55,
-  cushion: 0.2,
+  // No painted shade along the cushions: a cushion sits on the cloth, it does not hang
+  // over it in the air. What shade there is comes from the table lights themselves.
+  cushionMm: 50,
+  cushion: 0,
   pocketMm: 0,
   pocket: 0
 }
