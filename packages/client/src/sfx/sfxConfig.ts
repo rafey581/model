@@ -138,14 +138,18 @@ export const SFX_CONFIG: SfxConfig = {
   busDb: { sfx: 0, rolling: -100, ui: 0 },
   limiter: { thresholdDb: -6, knee: 0, ratio: 12, attackMs: 3, releaseMs: 120 },
   room: { seconds: 0.25, lowpassHz: 6000, wet: 0.06 },
+  // Tuned towards the sound of a match on television. The tip's knock is heard on the
+  // gentlest touch as well as the hardest; a kiss between two balls is quiet but still
+  // there; and a pot is the fullest sound on the table, the knock down into the leather
+  // and the ball running away into the net, because that is the moment a frame is played for.
   rangeDb: {
-    cue: { min: -14, max: -6 },
-    ball: { min: -30, max: -10 },
+    cue: { min: -12, max: -6 },
+    ball: { min: -26, max: -9 },
     cushion: { min: -26, max: -12 },
-    drop: { min: -22, max: -10 },
+    drop: { min: -18, max: -7 },
     jaw: { min: -26, max: -14 },
     // With recordings, this slot is the ball running away under the table after a pot.
-    net: { min: -34, max: -24 },
+    net: { min: -30, max: -20 },
     aux: { min: -30, max: -22 }
   },
   ignoreBelow: { ball: 0.02, cushion: 0.03, jaw: 0.03 },
@@ -164,7 +168,9 @@ export const SFX_CONFIG: SfxConfig = {
   },
   tiers: {
     high: { impactVoices: 24, variants: 4, rollingVoices: 3, room: true },
-    medium: { impactVoices: 18, variants: 3, rollingVoices: 3, room: false },
+    // The small room on phones too: a short, faint tail is what puts the clicks in an
+    // arena rather than in the player's ear, and it costs one convolver.
+    medium: { impactVoices: 18, variants: 3, rollingVoices: 3, room: true },
     low: { impactVoices: 12, variants: 2, rollingVoices: 2, room: false }
   },
   rolling: {

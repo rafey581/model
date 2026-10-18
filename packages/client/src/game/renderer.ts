@@ -29,6 +29,8 @@ export interface FrameSnapshotData {
    * Absent reads as unrestricted, which matches how the HUD treats it.
    */
   cueInHandInD?: boolean
+  /** After a foul: who fouled, and who chooses to play on or make them play again. */
+  foulChoice?: { offender: number; chooser: number } | null
 }
 
 export interface AimState {

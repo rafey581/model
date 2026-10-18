@@ -7,6 +7,7 @@ import {
   applyCuePlacement,
   applyFrameWinner,
   applyTimeoutFoul,
+  applyFoulChoice,
   maybeEndFrame,
   matchWinnerIndex,
   frameSnapshot,
@@ -490,6 +491,12 @@ export class GameRoom {
     if (!frame) return
     const seat = frame.turnIndex
     if (!this.isHumanTurn(seat) || this.isSeatDisconnected(seat)) return
+    // A foul's choice left unmade is not a visit wasted: the player simply plays on, as if
+    // they had chosen to, with a fresh clock. No penalty for not answering.
+    if (frame.foulChoice && frame.foulChoice.chooser === seat) {
+      this.resolveFoulChoice(seat, false)
+      return
+    }
     this.simulating = true
     try {
       const { foulValue, reason } = applyTimeoutFoul(frame, seat, 'turn timeout')
@@ -557,12 +564,46 @@ export class GameRoom {
    * state for a while, must land on the hold that is already running rather than
    * starting a second one, and must never be handed the remainder as a fresh clock.
    */
+  /**
+   * The player a foul was committed against says whether they play on or make the
+   * offender play again (see applyFoulChoice in the shared rules).
+   *
+   * Only theirs to make, only while it is pending, and only once the shot that caused it
+   * has been watched through. Playing a shot instead is the same as choosing to play on.
+   */
+  handleFoulChoice(userId: string, playAgain: boolean): { accepted: boolean; error?: string } {
+    const frame = this.match.currentFrame
+    if (!frame) return { accepted: false, error: 'frame not running' }
+    const seat = this.seatOfUser.get(userId)
+    if (seat === undefined) return { accepted: false, error: 'not in match' }
+    if (!frame.foulChoice || frame.foulChoice.chooser !== seat) return { accepted: false, error: 'no choice to make' }
+    if (this.simulating || this.awaitingPlayback) return { accepted: false, error: 'wait for the table to settle' }
+    return this.resolveFoulChoice(seat, playAgain === true)
+  }
+
+  /** Applies a foul's choice, tells everyone, and starts the visit it hands to whoever plays next. */
+  private resolveFoulChoice(seat: number, playAgain: boolean): { accepted: boolean; error?: string } {
+    const frame = this.match.currentFrame
+    if (!frame || !applyFoulChoice(frame, seat, playAgain)) return { accepted: false, error: 'no choice to make' }
+    const events: GameUpdateEvent[] = [this.event('FOUL_CHOICE', { bySeat: seat, playAgain, turnSeat: frame.turnIndex })]
+    if (playAgain) events.push(this.event('TURN_CHANGE', { turnSeat: frame.turnIndex }))
+    this.noteDelivered(events)
+    void this.callbacks.persist(events)
+    // A fresh visit for whoever is at the table now, with a full clock.
+    this.armTurnTimer()
+    this.broadcast('game:update', { frame: frameSnapshot(frame), events })
+    this.scheduleBotIfNeeded()
+    return { accepted: true }
+  }
+
   handlePlacementBegin(userId: string): { accepted: boolean; error?: string } {
     const frame = this.match.currentFrame
     if (!frame) return { accepted: false, error: 'frame not running' }
     const seat = this.seatOfUser.get(userId)
     if (seat === undefined) return { accepted: false, error: 'not in match' }
     if (seat !== frame.turnIndex) return { accepted: false, error: 'not your turn' }
+    // Starting to place the ball, like playing a shot, is choosing to play on.
+    if (frame.foulChoice && frame.foulChoice.chooser === seat) applyFoulChoice(frame, seat, false)
     if (this.isBotTurn()) return { accepted: false, error: 'robot is thinking' }
     if (this.simulating || this.awaitingPlayback) return { accepted: false, error: 'wait for the table to settle' }
     if (!frame.cueInHand) return { accepted: false, error: 'cue ball is not in hand' }

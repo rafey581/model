@@ -5,7 +5,7 @@ import { vec, type Vec2 } from '../vec.js'
 import type { FrameState } from '../state.js'
 import type { SimKeyframe } from '../events.js'
 import { buildInitialBalls } from '../state.js'
-import { applyCuePlacement, applyFrameWinner, applyStroke, createFrame, createMatch, frameFromSnapshot, frameSnapshot, framesToWin, matchWinnerIndex, maybeEndFrame } from './frame.js'
+import { applyCuePlacement, applyFoulChoice, applyFrameWinner, applyStroke, createFrame, createMatch, frameFromSnapshot, frameSnapshot, framesToWin, matchWinnerIndex, maybeEndFrame } from './frame.js'
 import { applyResolution, isRedId, resolveStroke, respotBall, applyTimeoutFoul } from './snooker.js'
 
 function stroke(frame: FrameState, shooterIndex: number, pottedIds: number[], cuePotted: boolean, firstContactId: number | null): { frameEnded: boolean; frameWinner: number | null; reason?: string } {
@@ -883,5 +883,71 @@ describe('applyCuePlacement', () => {
       expect(frame.cueInHand).toBe(true)
       expect(applyCuePlacement(frame, IN_D).placed).toEqual(IN_D)
     })
+  })
+})
+describe('the choice after a foul', () => {
+  /** A frame with the cue ball sent away from every ball at a feather: a miss, which is a foul. */
+  const missFrame = (): FrameState => {
+    const frame = createFrame(0)
+    const cue = frame.balls.find((b) => b.id === BALL_IDS.CUE)!
+    cue.potted = false
+    cue.pos = vec(600, 900)
+    frame.cueInHand = false
+    frame.cueInHandInD = false
+    return frame
+  }
+  // Straight back towards the baulk cushion, away from every ball, gently.
+  const missShot = { aimAngle: Math.PI, power: 0.1, spin: { x: 0, y: 0 } }
+
+  it('hands the player fouled against the choice', () => {
+    const frame = missFrame()
+    const outcome = applyStroke(frame, 0, missShot)
+    expect(outcome.resolution.foul).toBe(true)
+    expect(frame.turnIndex).toBe(1)
+    expect(frame.foulChoice).toEqual({ offender: 0, chooser: 1 })
+    expect(frameSnapshot(frame).foulChoice).toEqual({ offender: 0, chooser: 1 })
+    expect(frameFromSnapshot(frameSnapshot(frame)).foulChoice).toEqual({ offender: 0, chooser: 1 })
+  })
+
+  it('puts the offender back at the table when asked to play again', () => {
+    const frame = missFrame()
+    applyStroke(frame, 0, missShot)
+    const scores = { ...frame.scores }
+    expect(applyFoulChoice(frame, 1, true)).toBe(true)
+    expect(frame.turnIndex).toBe(0)
+    expect(frame.foulChoice).toBeNull()
+    // The penalty stands either way.
+    expect(frame.scores).toEqual(scores)
+  })
+
+  it('lets the chooser play on', () => {
+    const frame = missFrame()
+    applyStroke(frame, 0, missShot)
+    expect(applyFoulChoice(frame, 1, false)).toBe(true)
+    expect(frame.turnIndex).toBe(1)
+    expect(frame.foulChoice).toBeNull()
+  })
+
+  it('refuses a choice from the offender, or when none is pending', () => {
+    const frame = missFrame()
+    applyStroke(frame, 0, missShot)
+    expect(applyFoulChoice(frame, 0, true)).toBe(false)
+    expect(frame.turnIndex).toBe(1)
+    expect(applyFoulChoice(frame, 1, false)).toBe(true)
+    expect(applyFoulChoice(frame, 1, true)).toBe(false)
+    expect(frame.turnIndex).toBe(1)
+  })
+
+  it('is settled by the next stroke, and offers nothing after a legal one or a timeout', () => {
+    const frame = missFrame()
+    applyStroke(frame, 0, missShot)
+    expect(frame.foulChoice).not.toBeNull()
+    applyStroke(frame, 1, { aimAngle: 0, power: 0.4, spin: { x: 0, y: 0 } })
+    if (!frame.foulChoice) expect(frame.foulChoice).toBeNull()
+    else expect(frame.foulChoice.offender).toBe(1)
+    const timed = missFrame()
+    applyStroke(timed, 0, missShot)
+    applyTimeoutFoul(timed, 1, 'turn timeout')
+    expect(timed.foulChoice).toBeNull()
   })
 })

@@ -128,6 +128,9 @@ export function applyTimeoutFoul(frame: FrameState, shooterIndex: number, reason
   const onValue = frame.ballOn === 'RED' ? RED_VALUE : requiredColorId >= 0 ? (COLOR_VALUES[requiredColorId] ?? RED_VALUE) : RED_VALUE
   const foulValue = Math.max(4, onValue)
   const opponent = shooterIndex === 0 ? 1 : 0
+  // A visit timed out is not a stroke to be played again: there is no position the
+  // offender made to put them back into, so no choice is offered.
+  frame.foulChoice = null
   if (opponent === 0) frame.scores.player0 += foulValue
   else frame.scores.player1 += foulValue
   frame.breakScore = 0

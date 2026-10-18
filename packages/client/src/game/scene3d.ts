@@ -208,9 +208,10 @@ const STICK_POWER_DRAW = 190
  * The stroke, once the shot is let go: the cue is driven through from where it was drawn
  * back to the ball in this long, gathering pace as a cue arm does, then follows through
  * past where the ball was. The ball sets off at the moment of contact (the replay is held
- * back until then: see `strikeRemainingSeconds`).
+ * back until then: see `strikeRemainingSeconds`). Quick, so the ball is struck as the
+ * slider's cue springs home: the hit lands on the release, not a beat after it.
  */
-const STICK_STROKE_MS = 220
+const STICK_STROKE_MS = 120
 /** How far the tip carries on past the contact, and how long that takes. */
 const STICK_FOLLOW_MM = 24
 const STICK_FOLLOW_MS = 90

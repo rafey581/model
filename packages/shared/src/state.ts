@@ -104,6 +104,18 @@ export interface FrameState {
    */
   cueInHandInD: boolean
   winnerIndex?: number
+  /**
+   * After a foul, the player it was committed against chooses: play on from the position,
+   * or have the offender play again from it (WPBSA rules, section 3). Set by the foul,
+   * cleared by the choice or by the next stroke. Absent or null: no choice is pending.
+   */
+  foulChoice?: FoulChoice | null
+}
+
+/** Who fouled, and who now chooses whether to play on or make them play again. */
+export interface FoulChoice {
+  offender: number
+  chooser: number
 }
 
 export interface MatchState {

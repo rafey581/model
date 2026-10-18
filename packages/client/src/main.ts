@@ -57,6 +57,7 @@ import {
 } from './game/placement.js'
 import { PLAYER_CAMERA_MODES, PLACEMENT_TRANSITION_SECONDS, type PlayerCameraMode } from './game/camera.js'
 import { createRenderScaler } from './game/renderScale.js'
+import { predictShot } from './game/predictShot.js'
 import { createPerfOverlay } from './game/perfOverlay.js'
 import './tournaments.css'
 import { hasWeakGpu } from './game/qualityConfig.js'
@@ -208,6 +209,25 @@ let lastPointerCanvas: { clientX: number; clientY: number } | null = null
 let myTurn = false
 /** Non-null while a streamed shot is replaying; drives what the table shows. */
 let shotPlayer: ShotPlayer | null = null
+/**
+ * The player's own shot, played on this device from the instant it is struck (see
+ * game/predictShot.ts), until the server's recording of it arrives and takes over from
+ * exactly where this one has got to. Null when no shot of mine is waiting on the server.
+ */
+let predictedShot: {
+  player: ShotPlayer
+  playback: ShotPlayback
+  startBalls: FrameSnapshotData['balls']
+  /** Seconds of the stroke still to go before the ball is struck. */
+  preRoll: number
+  /** When it was struck, for the backstop below. */
+  startedAt: number
+} | null = null
+/**
+ * How long past its own end a predicted shot waits for the server before it is dropped.
+ * Only a lost connection gets here; the reconnect brings the true table with it.
+ */
+const PREDICTED_SHOT_BACKSTOP_MS = 12_000
 /** The last shot played in this match and where the balls stood before it, for the end-of-match recap. */
 let lastShotRecap: { playback: ShotPlayback; start: PlaybackBall[] } | null = null
 /** Non-null while the recap of the final shot is on the table. Picture only. */
@@ -1091,7 +1111,7 @@ function updateHud(): void {
   if (!hud) return
   // While a replay is on screen the HUD keeps describing the frame that replay started
   // from, so nothing it shows gives the shot away before it has been watched.
-  hudFrame = frameForHud({ replayRunning: shotPlayer !== null, shown: hudFrame, authoritative: frame })
+  hudFrame = frameForHud({ replayRunning: shotPlayer !== null || predictedShot !== null, shown: hudFrame, authoritative: frame })
   hud.update(
     deriveHudState({
       snapshot: hudFrame,
@@ -1424,6 +1444,7 @@ async function finishPractice(): Promise<void> {
 }
 
 function leaveToLobby(): void {
+  removeFoulChoiceUi()
   leaveGameState()
   clearTournamentTimer()
   removeOverlay()
@@ -1649,7 +1670,7 @@ function tableSettled(): Promise<void> {
   return new Promise((resolve) => {
     const started = performance.now()
     const check = (): void => {
-      if ((shotPlayer === null && queuedUpdate === null) || performance.now() - started > FINAL_SHOT_WAIT_MS) resolve()
+      if ((shotPlayer === null && predictedShot === null && queuedUpdate === null) || performance.now() - started > FINAL_SHOT_WAIT_MS) resolve()
       else window.setTimeout(check, 100)
     }
     check()
@@ -3515,6 +3536,8 @@ function renderGame(): void {
       // The cue goes through the ball on the table at once, while the shot is on its way;
       // the replay waits for the tip to reach the ball (see the pre-roll below).
       scene3d?.strikeCue(shot.power)
+      // And the balls leave as the tip meets the ball, without waiting for the server.
+      predictMyShot(shot)
       // The shot is on its way, so the bar empties for the next one. Eased inside the
       // controller, and it keeps animating on its own frames rather than being driven
       // by a state change that has already happened.
@@ -3615,7 +3638,120 @@ function handleGameUpdate(data: GameUpdatePayload): void {
  * worth of movement in a single frame.
  */
 function isVisitPlayable(): boolean {
-  return myTurn && shotPlayer === null && queuedUpdate === null && !shotInFlight
+  return myTurn && shotPlayer === null && queuedUpdate === null && !shotInFlight && predictedShot === null && !myFoulChoicePending()
+}
+
+/** Whether a foul was just committed against me and the choice of what happens next is mine. */
+function myFoulChoicePending(): boolean {
+  const choice = frame?.foulChoice
+  return !!choice && mySeat !== undefined && choice.chooser === mySeat
+}
+
+/** The foul-choice card and the note shown while the opponent is making theirs. Built once, shown when needed. */
+let foulChoiceCard: HTMLElement | null = null
+let foulChoiceWaitNote: HTMLElement | null = null
+/** Set from the tap until the server's answer arrives, so the choice cannot be sent twice. */
+let foulChoiceSent = false
+
+function ensureFoulChoiceUi(): void {
+  if (foulChoiceCard) return
+  const card = el('div', 'foul-choice')
+  card.setAttribute('role', 'dialog')
+  card.setAttribute('aria-label', 'Foul: your choice')
+  card.hidden = true
+  const head = el('div', 'foul-choice-head')
+  head.appendChild(el('span', 'foul-choice-tag', 'FOUL'))
+  head.appendChild(el('span', 'foul-choice-text', 'Your opponent fouled. Play on, or make them play again?'))
+  card.appendChild(head)
+  const actions = el('div', 'foul-choice-actions')
+  const play = el('button', 'foul-choice-play', 'Play on') as HTMLButtonElement
+  play.type = 'button'
+  const again = el('button', 'ghost foul-choice-again', 'They play again') as HTMLButtonElement
+  again.type = 'button'
+  const send = (playAgain: boolean): void => {
+    if (foulChoiceSent || !activeMatchId || !myFoulChoicePending()) return
+    foulChoiceSent = true
+    play.disabled = true
+    again.disabled = true
+    getSocket().emit('foul:choice', { matchId: activeMatchId, playAgain })
+  }
+  play.onclick = () => send(false)
+  again.onclick = () => send(true)
+  actions.appendChild(play)
+  actions.appendChild(again)
+  card.appendChild(actions)
+  document.body.appendChild(card)
+  foulChoiceCard = card
+  const wait = el('div', 'foul-choice-wait', 'Opponent is choosing: play on, or make you play again')
+  wait.hidden = true
+  document.body.appendChild(wait)
+  foulChoiceWaitNote = wait
+}
+
+/**
+ * Shows the foul-choice card to the player fouled against once the shot has been watched
+ * through, and a short note to the offender while the opponent decides. Safe every frame.
+ */
+function syncFoulChoiceUi(): void {
+  const choice = activeMatchId ? frame?.foulChoice : null
+  const settled = shotPlayer === null && predictedShot === null && queuedUpdate === null && !shotInFlight && recapPlayer === null
+  const mine = !!choice && mySeat !== undefined && choice.chooser === mySeat && settled
+  const theirs = !!choice && mySeat !== undefined && choice.offender === mySeat && settled && !activeMatchIsPractice
+  if (!choice) foulChoiceSent = false
+  if (!mine && !theirs && !foulChoiceCard) return
+  ensureFoulChoiceUi()
+  if (foulChoiceCard && foulChoiceCard.hidden === mine) {
+    foulChoiceCard.hidden = !mine
+    if (mine) {
+      for (const button of foulChoiceCard.querySelectorAll('button')) (button as HTMLButtonElement).disabled = foulChoiceSent
+    }
+  }
+  if (foulChoiceWaitNote && foulChoiceWaitNote.hidden === theirs) foulChoiceWaitNote.hidden = !theirs
+}
+
+/** Takes the foul-choice card down, for leaving a match. */
+function removeFoulChoiceUi(): void {
+  foulChoiceCard?.remove()
+  foulChoiceWaitNote?.remove()
+  foulChoiceCard = null
+  foulChoiceWaitNote = null
+  foulChoiceSent = false
+}
+
+/**
+ * Plays my shot on this device the moment it is struck (see game/predictShot.ts). Only
+ * for a plain shot from a settled table: with the cue ball in hand, or anything still
+ * moving or queued, the server's recording is waited for as before.
+ */
+function predictMyShot(shot: Omit<ShotInput, 'timestamp'>): void {
+  predictedShot = null
+  if (!frame || frame.cueInHand || shotPlayer || queuedUpdate || shotInFlight) return
+  try {
+    const playback = predictShot(frame.balls, { aimAngle: shot.aimAngle, power: shot.power, spin: shot.spin })
+    if (!playback) return
+    const startBalls = frame.balls
+    predictedShot = {
+      player: new ShotPlayer(playback, startBalls as PlaybackBall[]),
+      playback,
+      startBalls,
+      preRoll: scene3d?.strikeRemainingSeconds() ?? 0,
+      startedAt: performance.now()
+    }
+    // The sounds and the camera follow this copy from the start; the server's recording
+    // of the same shot takes them over without starting them again.
+    replaySfx?.shotStarted(playback, startBalls)
+    scene3d?.planShotCamera(playback)
+  } catch {
+    predictedShot = null
+  }
+}
+
+/** Drops my shot's own copy: the server refused the shot, or never answered. The table goes back to the truth. */
+function abandonPredictedShot(): void {
+  if (!predictedShot) return
+  predictedShot = null
+  replaySfx?.shotEnded()
+  scene3d?.planShotCamera(null)
 }
 
 /**
@@ -3641,6 +3777,7 @@ function resetSpin(): void {
  */
 function abandonPlayback(): void {
   shotPlayer = null
+  predictedShot = null
   replaySfx?.shotEnded()
   shotPreRoll = 0
   shotStartBalls = null
@@ -3705,14 +3842,25 @@ function applyGameUpdate(data: GameUpdatePayload): void {
     lastShotRecap = { playback: data.playback, start: (previous.balls as PlaybackBall[]).map((ball) => ({ ...ball })) }
     shotInFlight = true
     const opponentsShot = mySeat !== undefined && previous.turnIndex !== mySeat
-    // The opponent's cue winds up before their replay runs; my own shot's replay waits for
-    // the rest of my stroke, so the ball leaves as the tip meets it, never before.
-    shotPreRoll = opponentsShot ? (scene3d?.opponentShotPreRoll(data.playback) ?? 0) : (scene3d?.strikeRemainingSeconds() ?? 0)
+    // My own shot has been playing on this device since it was struck. The server's
+    // recording is the same shot, so it picks up from exactly where that copy has got to:
+    // no restart, no pause. The sounds and the camera were set up by that copy already.
+    const adopted = !opponentsShot ? predictedShot : null
+    predictedShot = null
     shotStartBalls = previous.balls
-    // Sound only: tells the effects a replay has been set up. Nothing comes back.
-    replaySfx?.shotStarted(data.playback, previous.balls)
-    // Picture only: lets the camera know whether a ball is going to drop, and where.
-    scene3d?.planShotCamera(data.playback)
+    if (adopted) {
+      shotPreRoll = Math.max(0, adopted.preRoll)
+      const reached = adopted.player.time
+      if (reached > 0) shotPlayer.advance(reached / SHOT_PLAYBACK_SPEED)
+    } else {
+      // The opponent's cue winds up before their replay runs; my own shot's replay waits for
+      // the rest of my stroke, so the ball leaves as the tip meets it, never before.
+      shotPreRoll = opponentsShot ? (scene3d?.opponentShotPreRoll(data.playback) ?? 0) : (scene3d?.strikeRemainingSeconds() ?? 0)
+      // Sound only: tells the effects a replay has been set up. Nothing comes back.
+      replaySfx?.shotStarted(data.playback, previous.balls)
+      // Picture only: lets the camera know whether a ball is going to drop, and where.
+      scene3d?.planShotCamera(data.playback)
+    }
   } else if (data.playback) {
     // Playback arrived with no pre-shot snapshot to start from, so there is nothing
     // to animate. Tell the server straight away rather than stalling the visit.
@@ -3941,6 +4089,12 @@ function handleSocketEvents(socket: Socket): void {
     }
   )
   socket.on('error', (data: { code?: string }) => {
+    // A choice the server would not take (the table was not quite settled, say) can be
+    // made again rather than leaving both buttons dead.
+    if (foulChoiceSent && myFoulChoicePending()) foulChoiceSent = false
+    // My shot was refused: the copy already rolling on this device was of a shot that
+    // never happened, so it is taken back and the table shows the truth again.
+    if (predictedShot && !shotPlayer) abandonPredictedShot()
     // A refusal while a placement commit is in flight is the server rejecting the spot.
     // The snapshot then still says the cue ball is in hand, which looks exactly like a
     // commit that is merely slow, so nothing downstream would ever notice the refusal and
@@ -4389,6 +4543,8 @@ function loop(): void {
       // Ball-in-hand placement runs before the camera is set, because it is one
       // of the things that decides what the camera should be doing this frame.
       stepPlacement(canvas)
+      // After a foul: the choice card for the player fouled against, once the shot is over.
+      syncFoulChoiceUi()
       // Aiming is only offered once the table has genuinely settled: no shot still
       // animating, and nothing waiting behind it. Without this the cue stick and the
       // aim guide were drawn while the balls were still moving. The power slider is
@@ -4408,20 +4564,30 @@ function loop(): void {
       const renderOptions = {
         aim: cueController?.aim,
         youSeat: mySeat,
-        immediate: shotPlayer !== null || recapping,
+        immediate: shotPlayer !== null || predictedShot !== null || recapping,
         canAim
       }
       if (scene3d) {
         // The view the player picked, and whether the balls are moving. A shot overrides
         // the view for as long as it lasts, then hands it back.
         scene3d.setCameraMode(cameraMode)
-        scene3d.setTracking(shotPlayer !== null || recapping)
+        scene3d.setTracking(shotPlayer !== null || predictedShot !== null || recapping)
         // How fast the replay runs against real time, so the balls turn at the pace they move.
         scene3d.setReplayRate(recapping ? FINAL_SHOT_SPEED * SHOT_PLAYBACK_SPEED : SHOT_PLAYBACK_SPEED)
         // The replay clock, for the pocket camera. Held at the start through the wind-up
         // before an opponent's shot, when the replay has been set up but is not moving.
         scene3d.setShotTime(
-          recapPlayer ? recapPlayer.time : shotPlayer ? (shotPreRoll > 0 ? 0 : shotPlayer.time) : null
+          recapPlayer
+            ? recapPlayer.time
+            : shotPlayer
+              ? shotPreRoll > 0
+                ? 0
+                : shotPlayer.time
+              : predictedShot
+                ? predictedShot.preRoll > 0
+                  ? 0
+                  : predictedShot.player.time
+                : null
         )
         if (cameraToggleEl) {
           cameraToggleEl.hidden = false
@@ -4491,6 +4657,23 @@ function stepShotPlayback(target: FrameSnapshotData, dtSeconds: number): FrameSn
       // Stand on where it finished for a moment, then hand the table back.
       recapHold += dtSeconds
       if (recapHold > FINAL_SHOT_HOLD_SECONDS) recapDone?.()
+    }
+    return { ...target, balls }
+  }
+  if (!shotPlayer && predictedShot) {
+    const mine = predictedShot
+    if (mine.preRoll > 0) {
+      // The tip is still on its way to the ball.
+      mine.preRoll -= dtSeconds
+      return { ...target, balls: mine.startBalls }
+    }
+    const balls = mine.player.advance(dtSeconds)
+    replaySfx?.tick(mine.player.time, SHOT_PLAYBACK_SPEED, balls, performance.now())
+    // Finished before the server has answered: it stands where it stopped until it does.
+    // Only a lost connection keeps it waiting this long; then the truth is put back.
+    if (mine.player.finished && performance.now() - mine.startedAt > mine.playback.duration * 1000 + PREDICTED_SHOT_BACKSTOP_MS) {
+      abandonPredictedShot()
+      return target
     }
     return { ...target, balls }
   }

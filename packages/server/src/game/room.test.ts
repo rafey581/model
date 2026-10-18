@@ -643,7 +643,14 @@ describe('turn clock', () => {
     const { room, cbs } = startedRoom({ timeoutSec: 1 })
     playBreak(room, cbs)
     expect(room.turnTiming().turnDeadlineAt).not.toBeNull()
+    // If the break was itself a foul, the first expiry only settles the choice it left
+    // (the player plays on, unpunished); the visit that then runs out is the one fouled.
+    const pending = room.match.currentFrame?.foulChoice != null
     vi.advanceTimersByTime(1_500)
+    if (pending) {
+      expect(room.match.currentFrame?.foulChoice ?? null).toBeNull()
+      vi.advanceTimersByTime(1_500)
+    }
     // The expiry foul passed the visit on, so the clock now belongs to the other
     // player and nothing is left of the one that ran out.
     const foul = cbs.broadcasts.some(
@@ -1067,5 +1074,60 @@ it('releases a placement nobody finished, without fouling the player', () => {
     room.handlePlacementBegin('user-a')
     room.dispose()
     expect(room.turnTiming().paused).toBe(false)
+  })
+})
+
+describe('the choice after a foul', () => {
+  /** A room at A's visit with the cue ball down and a foul by A just played and watched. */
+  function afterFoul() {
+    const { room, cbs } = seatedRoom({ connect: ['a', 'b'] })
+    room.tryStart()
+    placeCueIfInHand(room)
+    // Straight back towards the baulk cushion, touching nothing: a miss, which is a foul.
+    expect(room.handleShot('user-a', { aimAngle: Math.PI, power: 0.1, spin: { x: 0, y: 0 } }).accepted).toBe(true)
+    room.noteShotPlayed("user-a", lastToken(cbs), "sock-a")
+    room.noteShotPlayed("user-b", lastToken(cbs), "sock-b")
+    return { room, cbs }
+  }
+
+  it('offers the choice to the player fouled against, and only to them', () => {
+    const { room } = afterFoul()
+    const frame = room.match.currentFrame!
+    expect(frame.turnIndex).toBe(1)
+    expect(frame.foulChoice).toEqual({ offender: 0, chooser: 1 })
+    expect(room.handleFoulChoice('user-a', true).accepted).toBe(false)
+  })
+
+  it('puts the offender back at the table when asked, and tells everyone', () => {
+    const { room, cbs } = afterFoul()
+    expect(room.handleFoulChoice('user-b', true).accepted).toBe(true)
+    const frame = room.match.currentFrame!
+    expect(frame.turnIndex).toBe(0)
+    expect(frame.foulChoice).toBeNull()
+    const update = cbs.broadcasts.filter((b) => b.event === 'game:update').pop()!
+    expect(update.payload.frame.turnIndex).toBe(0)
+    expect(update.payload.frame.foulChoice).toBeNull()
+    expect(update.payload.events.map((e: { type: string }) => e.type)).toContain('FOUL_CHOICE')
+    // It can only be made once.
+    expect(room.handleFoulChoice('user-b', false).accepted).toBe(false)
+  })
+
+  it('lets the chooser play on by choosing it, or just by playing', () => {
+    const chose = afterFoul()
+    expect(chose.room.handleFoulChoice('user-b', false).accepted).toBe(true)
+    expect(chose.room.match.currentFrame!.turnIndex).toBe(1)
+    const played = afterFoul()
+    placeCueIfInHand(played.room)
+    expect(played.room.handleShot('user-b', SHOT).accepted).toBe(true)
+    expect(played.room.match.currentFrame!.foulChoice ?? null).not.toEqual({ offender: 0, chooser: 1 })
+  })
+
+  it('waits for the shot to be watched before it can be made', () => {
+    const { room, cbs } = seatedRoom({ connect: ['a', 'b'] })
+    room.tryStart()
+    placeCueIfInHand(room)
+    room.handleShot('user-a', { aimAngle: Math.PI, power: 0.1, spin: { x: 0, y: 0 } })
+    expect(room.handleFoulChoice('user-b', true).error).toBe('wait for the table to settle')
+    void cbs
   })
 })

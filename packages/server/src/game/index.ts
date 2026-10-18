@@ -372,6 +372,23 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
     // Deliberately not rate limited as a shot. A player searching for a legal spot will
     // send this on every approach to the table, and counting those against the shot
     // flood guard would let a player trip a fraud flag for playing the game correctly.
+    // After a foul, the player it was committed against chooses to play on or to make the
+    // offender play again. One answer, checked by the room; nothing is simulated here.
+    socket.on('foul:choice', (payload: { matchId: string; playAgain: boolean }) => {
+      const { matchId, playAgain } = payload ?? {}
+      if (!matchId || typeof playAgain !== 'boolean') {
+        socket.emit('error', { code: 'bad_request' })
+        return
+      }
+      const room = getOrCreateRoom(matchId)
+      if (!room) {
+        socket.emit('error', { code: 'match_not_found' })
+        return
+      }
+      const result = room.handleFoulChoice(userId, playAgain)
+      if (!result.accepted) socket.emit('error', { code: result.error ?? 'rejected' })
+    })
+
     socket.on('placement:begin', (payload: { matchId: string }) => {
       const { matchId } = payload ?? {}
       if (!matchId) {

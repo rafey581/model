@@ -40,6 +40,8 @@ export function applyStroke(
   simOptions: SimOptions = {}
 ): StrokeOutcome {
   placeCueIfInHand(frame, shot)
+  // A stroke played is the choice made: whoever plays it has chosen to play on.
+  frame.foulChoice = null
   const sim = simulateStroke(frame.balls, shot, simOptions)
   frame.balls = sim.balls
   const redsBefore = frame.remainingReds
@@ -62,8 +64,32 @@ export function applyStroke(
   // itself is still judged against the D.
   frame.cueInHandInD = false
   const end = maybeEndFrame(frame)
+  // A foul hands the opponent the choice of playing on or making the offender play again.
+  if (resolution.foul && !end.frameEnded && frame.turnIndex !== shooterIndex) {
+    frame.foulChoice = { offender: shooterIndex, chooser: frame.turnIndex }
+  }
   alignPlaybackWithFrame(sim, frame)
   return { resolution, sim, frameEnded: end.frameEnded, frameWinner: end.frameWinner, pottedRedsCount }
+}
+
+/**
+ * The player a foul was committed against makes their choice. `playAgain` puts the
+ * offender back at the table to play from the position as it is (with the cue ball in hand
+ * if the foul left it in hand); otherwise the chooser plays on. Either way it is a fresh
+ * visit, and the ball on is the one the foul left.
+ *
+ * Returns false, changing nothing, when there is no choice pending or this is not the
+ * player whose choice it is.
+ */
+export function applyFoulChoice(frame: FrameState, chooser: number, playAgain: boolean): boolean {
+  const choice = frame.foulChoice
+  if (!choice || choice.chooser !== chooser) return false
+  frame.foulChoice = null
+  if (playAgain) {
+    frame.turnIndex = choice.offender
+    frame.breakScore = 0
+  }
+  return true
 }
 
 /**
@@ -382,6 +408,8 @@ export interface FrameSnapshot {
    */
   cueInHandInD?: boolean
   winnerIndex?: number
+  /** A foul's choice still to be made (see FrameState.foulChoice); absent when there is none. */
+  foulChoice?: { offender: number; chooser: number } | null
 }
 
 export function frameSnapshot(frame: FrameState): FrameSnapshot {
@@ -397,7 +425,8 @@ export function frameSnapshot(frame: FrameState): FrameSnapshot {
     colorsRemaining: [...frame.colorsRemaining],
     cueInHand: frame.cueInHand,
     cueInHandInD: frame.cueInHandInD,
-    winnerIndex: frame.winnerIndex
+    winnerIndex: frame.winnerIndex,
+    foulChoice: frame.foulChoice ? { ...frame.foulChoice } : null
   }
 }
 
@@ -427,6 +456,7 @@ export function frameFromSnapshot(snapshot: FrameSnapshot): FrameState {
     colorsRemaining: new Set(snapshot.colorsRemaining),
     cueInHand: snapshot.cueInHand,
     cueInHandInD: snapshot.cueInHandInD ?? false,
+    foulChoice: snapshot.foulChoice ? { ...snapshot.foulChoice } : null,
     winnerIndex: snapshot.winnerIndex ?? undefined
   }
 }
