@@ -541,6 +541,58 @@ const UNDERSIDE = new THREE.MeshBasicMaterial({ name: 'Underside', color: 0x0606
 const MAHOGANY_STAIN = '#7a3519'
 
 /**
+ * The rails as the overhead (opponent's) view shows them: the deep stain and thin satin coat
+ * they had before the polish was raised. From high above, a bright lacquer on a red-brown
+ * stain reads as blotchy streaks along the whole rail; the deep finish reads as wood. The
+ * player's own view keeps the polished finish.
+ */
+const OVERHEAD_RAIL_STAIN = '#5a2c16'
+const OVERHEAD_RAIL_CLEARCOAT = 0.12
+const OVERHEAD_RAIL_CLEARCOAT_ROUGHNESS = 0.3
+const OVERHEAD_RAIL_REFLECTION = 0.85
+
+/**
+ * Puts the rails on their overhead finish, or back on the polished one. Only numbers the
+ * shader already has are changed (colour, coat, reflection), so nothing recompiles.
+ */
+export function setRailFinish(group: THREE.Object3D, overhead: boolean): void {
+  const rail = group.getObjectByName('table:Mahogany') as THREE.Mesh | undefined
+  const material = rail?.material as THREE.MeshPhysicalMaterial | undefined
+  if (!material?.isMeshPhysicalMaterial) return
+  type Finish = { color: THREE.Color; clearcoat: number; clearcoatRoughness: number; env: number }
+  const data = material.userData as { polished?: Finish }
+  if (!data.polished) {
+    data.polished = {
+      color: material.color.clone(),
+      clearcoat: material.clearcoat,
+      clearcoatRoughness: material.clearcoatRoughness,
+      env: material.envMapIntensity
+    }
+  }
+  const polished = data.polished
+  if (!overhead) {
+    material.color.copy(polished.color)
+    material.clearcoat = polished.clearcoat
+    material.clearcoatRoughness = polished.clearcoatRoughness
+    material.envMapIntensity = polished.env
+    return
+  }
+  const deep = new THREE.Color(OVERHEAD_RAIL_STAIN)
+  const now = new THREE.Color(MAHOGANY_STAIN)
+  material.color.setRGB(
+    (polished.color.r * deep.r) / Math.max(1e-4, now.r),
+    (polished.color.g * deep.g) / Math.max(1e-4, now.g),
+    (polished.color.b * deep.b) / Math.max(1e-4, now.b)
+  )
+  // A coat of 0 would compile a different shader; the low level has none to begin with.
+  if (polished.clearcoat > 0) {
+    material.clearcoat = OVERHEAD_RAIL_CLEARCOAT
+    material.clearcoatRoughness = OVERHEAD_RAIL_CLEARCOAT_ROUGHNESS
+  }
+  material.envMapIntensity = OVERHEAD_RAIL_REFLECTION
+}
+
+/**
  * How strongly each of the model's polished materials mirrors the lamps, once the scene hands
  * them its lamp-only reflection map (see {@link dressTableReflections}).
  */

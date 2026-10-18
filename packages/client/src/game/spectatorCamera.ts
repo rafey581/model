@@ -357,33 +357,124 @@ export const POT_CAM = {
   lookAheadMm: 950,
   fovDeg: 46,
   /**
-   * The cut waits until the ball that drops is already close to its pocket, this many mm
-   * from it, and is heading in: that is the moment anyone watching can see it is going in.
-   * Cutting any earlier — the instant the cue ball touched it — made the camera look as if
-   * it had known the result before the shot was played.
+   * The share of shots the pocket camera is used for, pot or no pot: most of them, as a
+   * broadcast does, so the player sees their ball run towards the pocket from early on. It
+   * is not kept for pots alone: a camera that only ever cut when a ball was going in would
+   * give every shot away the moment it cut.
    */
-  approachMm: 900,
-  /** Simulated seconds of the shot it is up for, at most, before the ball drops and after. */
-  leadSeconds: 0.9,
-  tailSeconds: 1.35,
-  /** The ball that drops is watched moving for at least this long from the table view first. */
-  watchFirstSeconds: 0.4,
-  /** A cut that would be up for less than this before the drop is not made at all. */
-  minShowSeconds: 0.2,
-  /**
-   * A ball that drops sooner than this after the strike is not cut to. The picture has
-   * only just cut to the whole table; cutting again a third of a second later, and back
-   * again after that, is three pictures in the time it takes to read one.
-   */
-  earliestPotSeconds: 0.75,
+  showShare: 0.8,
+  /** A ball that misses still gets the pocket camera if it passes this close to a pocket, in mm. */
+  nearMissMm: 260,
+  /** Simulated seconds of the ball's run the camera is up for, at most, before it reaches the pocket. */
+  leadSeconds: 2.6,
+  /** And for how long after: a ball that drops, and one that only went close. */
+  tailSeconds: 1.2,
+  missTailSeconds: 0.8,
+  /** The ball is seen leaving the contact from the table view for this long before the cut. */
+  watchFirstSeconds: 0.12,
+  /** A cut that would be up for less than this before the ball arrives is not made at all. */
+  minShowSeconds: 0.3,
   /**
    * The cut never comes before this much of the shot has been seen from the table view.
-   * The replay clock sits at 0 through the opponent's wind-up, and a ball that dropped
-   * within `leadSeconds` of the strike opened the window at 0 — the camera went to the
-   * pocket before the cue had touched the ball, giving the shot away.
+   * The replay clock sits at 0 through the opponent's wind-up: without this the camera
+   * could go to the pocket before the cue had touched the ball.
    */
-  afterStrikeSeconds: 0.45
+  afterStrikeSeconds: 0.3
 } as const
+
+/** The pocket a shot's camera goes to, in table millimetres, and the stretch of the replay it is up for. */
+export interface PocketShot {
+  pocket: { x: number; y: number }
+  from: number
+  until: number
+}
+
+/** A shot's recording, as much of it as the pocket camera reads. */
+interface PocketShotRecording {
+  keyframes: ReadonlyArray<{ t: number; balls: ReadonlyArray<ReadonlyArray<number>> }>
+  pots?: ReadonlyArray<readonly [number, number]>
+}
+
+/**
+ * Which pocket, if any, a shot is watched from, read off its recording.
+ *
+ * The ball that matters is the first one to drop, or, when nothing drops, the first object
+ * ball the cue ball sent moving, if it runs close to a pocket. The camera is up from just
+ * after that ball starts moving until a little after it reaches the pocket. `roll` is a
+ * number in [0, 1) that decides whether this shot is one of the share that gets the camera;
+ * `always` skips that (a recap's pot is always shown).
+ */
+export function planPocketShot(
+  playback: PocketShotRecording,
+  pockets: ReadonlyArray<{ x: number; y: number }>,
+  cueId: number,
+  roll: number,
+  always = false
+): PocketShot | null {
+  if (!always && roll >= POT_CAM.showShare) return null
+  if (!pockets.length) return null
+  // Each ball's run as the recording has it: only moving balls are sampled, so a run starts
+  // when the ball was set moving.
+  const runs = new Map<number, Array<{ t: number; x: number; y: number }>>()
+  for (const frame of playback.keyframes) {
+    for (const sample of frame.balls) {
+      const id = sample[0]
+      const x = sample[1]
+      const y = sample[2]
+      if (id === undefined || x === undefined || y === undefined) continue
+      let run = runs.get(id)
+      if (!run) {
+        run = []
+        runs.set(id, run)
+      }
+      run.push({ t: frame.t, x, y })
+    }
+  }
+  const nearestPocket = (x: number, y: number): { pocket: { x: number; y: number }; d: number } => {
+    let best = pockets[0]!
+    let bestD = Infinity
+    for (const p of pockets) {
+      const d = Math.hypot(p.x - x, p.y - y)
+      if (d < bestD) {
+        bestD = d
+        best = p
+      }
+    }
+    return { pocket: { x: best.x, y: best.y }, d: bestD }
+  }
+
+  let target: { pocket: { x: number; y: number }; at: number; moving: number; tail: number } | null = null
+  // The first ball to drop.
+  let firstPot: readonly [number, number] | null = null
+  for (const pot of playback.pots ?? []) if (!firstPot || pot[1] < firstPot[1]) firstPot = pot
+  if (firstPot) {
+    const run = runs.get(firstPot[0])
+    const last = run?.[run.length - 1]
+    if (run && last) {
+      target = { pocket: nearestPocket(last.x, last.y).pocket, at: firstPot[1], moving: run[0]!.t, tail: POT_CAM.tailSeconds }
+    }
+  } else {
+    // Nothing dropped: the first object ball, if it went close to a pocket.
+    let first: Array<{ t: number; x: number; y: number }> | null = null
+    for (const [id, run] of runs) {
+      if (id !== cueId && run.length && (!first || run[0]!.t < first[0]!.t)) first = run
+    }
+    if (first) {
+      let closest: { pocket: { x: number; y: number }; d: number; t: number } | null = null
+      for (const s of first) {
+        const near = nearestPocket(s.x, s.y)
+        if (!closest || near.d < closest.d) closest = { pocket: near.pocket, d: near.d, t: s.t }
+      }
+      if (closest && closest.d <= POT_CAM.nearMissMm) {
+        target = { pocket: closest.pocket, at: closest.t, moving: first[0]!.t, tail: POT_CAM.missTailSeconds }
+      }
+    }
+  }
+  if (!target) return null
+  const from = Math.max(POT_CAM.afterStrikeSeconds, target.moving + POT_CAM.watchFirstSeconds, target.at - POT_CAM.leadSeconds)
+  if (target.at - from < POT_CAM.minShowSeconds) return null
+  return { pocket: target.pocket, from, until: target.at + target.tail }
+}
 
 /**
  * The view of a ball going in: from just outside the pocket, low, looking back across the

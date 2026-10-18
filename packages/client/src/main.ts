@@ -366,6 +366,22 @@ const DPR_MOBILE_MAX_EDGE = 820
  * frame rate is no longer worth what it costs.
  */
 const MIN_PIXEL_RATIO = 0.85
+/**
+ * The same floor on a phone, which is higher. A phone's screen has two to three real pixels
+ * to each one the page counts, so the desktop floor there is a third of the screen's own
+ * sharpness: the cloth, the cushions and the balls go soft, which is the part a player is
+ * looking at. A phone gives up its room and its crowd first (see `renderScaler`) and keeps
+ * the table at least this sharp.
+ */
+const MIN_PIXEL_RATIO_PHONE = 1.3
+/**
+ * The most frames a second the game draws. A phone with a 120Hz screen would otherwise draw
+ * twice as many frames as a snooker table needs, run hot, and then slow itself down, which
+ * is the lag a player feels a few minutes into a match.
+ */
+const MAX_FPS = 60
+/** How early, in milliseconds, a frame may come and still be drawn, so a 60Hz screen is never halved. */
+const FRAME_EARLY_MS = 2
 /** The least of its full resolution the High level is ever drawn at, as a fraction. */
 const HIGH_MIN_RENDER_SCALE = 0.82
 /** Where the scale a match settled on is kept, so the next one starts there. */
@@ -383,16 +399,26 @@ let lastFrameTime = 0
  */
 const renderScaler = createRenderScaler({
   cheapen: () => {
-    if (!scene3d?.lowerEnvironmentDetail()) return false
-    try {
-      localStorage.setItem(ENVIRONMENT_LOW_STORAGE_KEY, '1')
-    } catch {
-      // Storage refused. The next match finds out again in its first couple of seconds.
+    if (scene3d?.lowerEnvironmentDetail()) {
+      try {
+        localStorage.setItem(ENVIRONMENT_LOW_STORAGE_KEY, '1')
+      } catch {
+        // Storage refused. The next match finds out again in its first couple of seconds.
+      }
+      toast('Lowered background detail for smoother play', 'info')
+      return true
     }
-    toast('Lowered background detail for smoother play', 'info')
-    return true
+    // The room is already on its cheaper finish (every match starts there): the stands and
+    // the crowd go next, still before a single pixel of the table is given up.
+    if (scene3d?.lowerSurroundingDetail()) {
+      toast('Lowered background detail for smoother play', 'info')
+      return true
+    }
+    return false
   }
 })
+/** When the next frame is due, so the game draws at most MAX_FPS a second. */
+let nextFrameAt = 0
 /** Set once the player has been told the resolution was lowered, so it is said once a match. */
 let renderScaleAnnounced = false
 /**
@@ -1626,7 +1652,7 @@ function playFinalShotRecap(): Promise<void> {
       recapStart = recap.start.map((ball) => ({ ...ball }))
       recapPlayer = new ShotPlayer(recap.playback, recap.start.map((ball) => ({ ...ball })))
       recapHold = FINAL_SHOT_HOLD_SECONDS
-      scene3d?.planShotCamera(recap.playback)
+      scene3d?.planShotCamera(recap.playback, true)
       scene3d?.setRecapCamera(true)
     })
     // Whatever happens to the picture, the result is never held up for long.
@@ -1690,7 +1716,7 @@ function playHighlight(entry: { highlight: Highlight; playback: ShotPlayback; st
     recapStart = entry.start.map((ball) => ({ ...ball }))
     recapPlayer = new ShotPlayer(entry.playback, entry.start.map((ball) => ({ ...ball })))
     recapHold = HIGHLIGHT_HOLD_SECONDS
-    scene3d?.planShotCamera(entry.playback)
+    scene3d?.planShotCamera(entry.playback, true)
     scene3d?.setRecapCamera(true)
   })
 }
@@ -3328,7 +3354,8 @@ function renderGame(): void {
   // who chose High chose sharpness, and on a phone the Auto floor is a third of the pixels
   // the screen was being given — a picture that visibly falls apart. High gives up a fifth
   // of its resolution at the very most, and past that it keeps the picture.
-  const autoFloor = Math.min(1, MIN_PIXEL_RATIO / fullPixelRatio())
+  const phone = Math.min(window.innerWidth, window.innerHeight) <= DPR_MOBILE_MAX_EDGE
+  const autoFloor = Math.min(1, (phone ? MIN_PIXEL_RATIO_PHONE : MIN_PIXEL_RATIO) / fullPixelRatio())
   const scaleFloor = adaptiveQuality ? autoFloor : Math.max(autoFloor, HIGH_MIN_RENDER_SCALE)
   renderScaler.reset(adaptiveQuality ? storedRenderScale() : 1, scaleFloor)
   renderScaleAnnounced = false
@@ -4227,6 +4254,14 @@ const perfOverlay = createPerfOverlay()
 function loop(): void {
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement | null
   try {
+    const frameNow = performance.now()
+    if (canvas && frame && frameNow < nextFrameAt - FRAME_EARLY_MS) {
+      // Too soon: a faster screen than the game needs. Wait for the next one.
+      requestAnimationFrame(loop)
+      return
+    }
+    // The next frame is due one interval on; after a stall it starts counting afresh.
+    nextFrameAt = frameNow - nextFrameAt > 100 ? frameNow + 1000 / MAX_FPS : nextFrameAt + 1000 / MAX_FPS
     if (canvas && frame) {
       const now = performance.now()
       const fdt = Math.min(200, now - lastFrameTime)

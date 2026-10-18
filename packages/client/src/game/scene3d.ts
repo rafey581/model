@@ -102,7 +102,8 @@ import {
   fitSpectatorCamera,
   nextSpectating,
   potCameraPose,
-  POT_CAM,
+  planPocketShot,
+  type PocketShot,
   stepSpectatorTransition
 } from './spectatorCamera.js'
 import {
@@ -134,7 +135,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { buildTableMarkings } from './tableMarkings.js'
 import {
   TABLE_LEGS_SUFFIX, dressTableReflections, instantiateTableModel, instantiateTexturedTable, isTexturedTableModel,
-  tableModelIfReady, type TableMaterials } from './tableModel.js'
+  tableModelIfReady, setRailFinish, type TableMaterials } from './tableModel.js'
 
 const HALF_L = TABLE_LENGTH / 2
 const HALF_W = TABLE_WIDTH / 2
@@ -720,6 +721,20 @@ const POT_MIN_SPEED = 260
 const POT_MAX_SPEED = 4200
 /** How far from the middle of the pocket the ball can travel before it meets the back of it. */
 const POT_BACK_MM = 34
+/**
+ * A pocket's hole as the textured table draws it (see buildPocketBacking): its middle, how
+ * far a ball's centre can be from it inside the leather, and, for the net under it, how far
+ * a ball drops before it lies in the bottom of the net and how far from the middle it can
+ * be down there, where the net has narrowed.
+ */
+interface PocketHole {
+  x: number
+  z: number
+  reach: number
+  depth?: number
+  deepReach?: number
+}
+
 /** What is left of a ball's pace into the back of the pocket when it meets it. */
 const POT_BACK_BOUNCE = 0.18
 /**
@@ -1280,6 +1295,9 @@ export class BallRig {
   sinkReach = POT_BACK_MM
   /** How far from the middle of the hole it was when it went over the edge. */
   sinkStartOff = 0
+  /** How far it drops before it lies in the bottom of the pocket, and how far off the middle it can be there. */
+  sinkDepth = POT_DROP_MM
+  sinkDeepReach = POT_BACK_MM
   rising = false
   riseT = 0
   riseFrom = new THREE.Vector3()
@@ -1400,13 +1418,15 @@ export class BallRig {
     if (this.rollAxis.lengthSq() > 0) this.sphere.rotateOnWorldAxis(this.rollAxis, distance / this.radius)
   }
 
-  startSink(targetX: number, targetZ: number, reach = POT_BACK_MM): void {
+  startSink(targetX: number, targetZ: number, reach = POT_BACK_MM, depth = POT_DROP_MM, deepReach = reach): void {
     this.sinking = true
     this.sinkT = 0
     this.sinkStart.copy(this.group.position)
     this.sinkPos.copy(this.group.position)
     this.sinkTarget.set(targetX, this.group.position.y - 8, targetZ)
     this.sinkReach = reach
+    this.sinkDepth = depth
+    this.sinkDeepReach = deepReach
     this.sinkStartOff = Math.hypot(this.group.position.x - targetX, this.group.position.z - targetZ)
     // The pace it came in with, along the cloth.
     this.sinkVel.set(this.velocity.x, 0, this.velocity.z)
@@ -1605,6 +1625,8 @@ export class Scene3D implements VenueHost {
   private cameraCut = false
   /** True once the surroundings have been put on their cheaper finish for this scene. */
   private environmentLow = false
+  /** Set once the stands and the crowd have been put away to hold the frame rate (see lowerSurroundingDetail). */
+  private surroundingsLow = false
   /** What each swapped mesh was wearing, so teardown can free the originals too. */
   private readonly environmentOriginals: Array<[THREE.Mesh, THREE.Material]> = []
   /**
@@ -1625,13 +1647,14 @@ export class Scene3D implements VenueHost {
    * dropped straight down on the physics' centre fell through the edge of the bed. Null on
    * the other tables, which drop it on the physics' centre as before.
    */
-  private pocketHoles: Array<{ x: number; z: number; reach: number }> | null = null
+  private pocketHoles: PocketHole[] | null = null
   /** When, in the shot being replayed, a ball drops, and into which pocket. Empty when none does. */
   /**
    * The balls the shot on screen pots: when each drops, into which pocket, when it was set
    * moving, and when it came within the pot camera's approach distance of that pocket.
    */
-  private shotPots: Array<{ at: number; pocket: { x: number; y: number }; moving: number; near: number }> = []
+  /** The pocket this shot is watched from, and when (see planPocketShot); null when it is not. */
+  private pocketShot: PocketShot | null = null
   /** How far into its replay the shot on screen is, in simulated seconds, or null with none on screen. */
   private shotTime: number | null = null
   /** The timed move into or out of the spectator view. Never blocks input. */
@@ -2493,7 +2516,7 @@ export class Scene3D implements VenueHost {
     const TOP_Y = -30
     const segments = qualityConfig().name === 'low' ? 20 : 32
     const geoms: THREE.BufferGeometry[] = []
-    const holes: Array<{ x: number; z: number; reach: number }> = []
+    const holes: PocketHole[] = []
     for (const p of POCKETS) {
       const px = tableX(p.x)
       const pz = tableZ(p.y)
@@ -2548,8 +2571,17 @@ export class Scene3D implements VenueHost {
       const lathe = new THREE.LatheGeometry(points, segments)
       lathe.translate(cx, 0, cz)
       geoms.push(lathe)
-      // A ball's centre stays this far inside the leather wall as it goes down.
-      holes.push({ x: cx, z: cz, reach: Math.max(8, Math.min(wall, mouth) - BALL_RADIUS - 3) })
+      // A ball's centre stays this far inside the leather wall as it goes down, and comes to
+      // rest in the bottom of the net, where the net has narrowed round it: it never drops
+      // through the net and out under the table.
+      const bottomRadius = (bins.get(Math.round(bottom / BIN_MM)) ?? mouth) - POCKET_BACKING_GAP_MM
+      holes.push({
+        x: cx,
+        z: cz,
+        reach: Math.max(8, Math.min(wall, mouth) - BALL_RADIUS - 3),
+        depth: Math.max(BALL_RADIUS, -bottom - 1),
+        deepReach: Math.max(2, bottomRadius - BALL_RADIUS - 2)
+      })
     }
     if (geoms.length !== POCKETS.length) return
     const merged = mergeGeometries(geoms, false)
@@ -4492,21 +4524,21 @@ const outerL = APRON_OUTER_L
         let best = Infinity
         let targetX = px
         let targetZ = pz
-        let reach = POT_BACK_MM
+        let target: PocketHole | null = null
         // Into the hole as the table draws it, where it knows; else the physics' pocket.
-        const holes = this.pocketHoles ?? POCKETS.map((p) => ({ x: tableX(p.x), z: tableZ(p.y), reach: POT_BACK_MM }))
+        const holes: PocketHole[] =
+          this.pocketHoles ?? POCKETS.map((p) => ({ x: tableX(p.x), z: tableZ(p.y), reach: POT_BACK_MM }))
         for (const hole of holes) {
           const dx = hole.x - px
           const dz = hole.z - pz
           const d2 = dx * dx + dz * dz
           if (d2 < best) {
             best = d2
-            targetX = hole.x
-            targetZ = hole.z
-            reach = hole.reach
+            target = hole
           }
         }
-        rig.startSink(targetX, targetZ, reach)
+        if (target) rig.startSink(target.x, target.z, target.reach, target.depth, target.deepReach)
+        else rig.startSink(px, pz)
       } else {
         rig.firstSeen = true
       }
@@ -5034,8 +5066,9 @@ const outerL = APRON_OUTER_L
       this.spectatorTransition = stepped.transition
       this.rig = { pose: stepped.pose, yaw: this.rig.yaw }
       this.aimViewSettled = false
-    } else if (this.recapCamera && !this.spectating && this.potCamera()) {
-      // A recap's pot: cut to the pocket, remembering where the picture was.
+    } else if ((this.recapCamera || this.liveReplay) && !this.spectating && this.potCamera()) {
+      // A recap's pot, or a live shot watched from its pocket when the table view is not
+      // up: cut to the pocket, remembering where the picture was.
       if (!this.recapSavedPose) this.recapSavedPose = this.rig.pose
       this.rig = { pose: this.potCamera()!, yaw: this.rig.yaw }
       this.aimViewSettled = false
@@ -5262,6 +5295,28 @@ const outerL = APRON_OUTER_L
     return true
   }
 
+  /**
+   * The second thing given up when frames are short, after the room's cheaper finish and
+   * before any resolution: the stands' seats and the crowd go. They are tens of thousands of
+   * triangles at the edge of the picture, and nobody watching a shot is looking at them. The
+   * table, the cloth, the cushions, the pockets and the balls are not touched, so they stay
+   * as sharp as the screen allows for as long as possible.
+   *
+   * Returns true when it gave something up, false when there was nothing left here.
+   */
+  lowerSurroundingDetail(): boolean {
+    if (this.surroundingsLow) return false
+    this.surroundingsLow = true
+    let hid = false
+    this.venueGroup?.traverse((obj) => {
+      if ((obj.name === 'stand-seats' || obj.name === 'audience') && obj.visible) {
+        obj.visible = false
+        hid = true
+      }
+    })
+    return hid
+  }
+
   /** Whether the surroundings are on their cheaper finish. */
   isEnvironmentDetailLow(): boolean {
     return this.environmentLow
@@ -5280,74 +5335,30 @@ const outerL = APRON_OUTER_L
    * Told about a shot as its replay is set up, so the camera knows whether a ball is going
    * to drop and where. Reads the recording and keeps a few numbers; changes nothing.
    */
-  planShotCamera(playback: ShotPlayback | null): void {
+  planShotCamera(playback: ShotPlayback | null, always = false): void {
     // A shot is being played: the cue ball is no longer just set down.
     const cueRig = this.balls.get(BALL_IDS.CUE)
     if (cueRig && playback) cueRig.fresh = false
-    this.shotPots = []
+    this.pocketShot = null
     this.shotTime = null
     if (!playback) return
-    for (const [id, at] of playback.pots ?? []) {
-      // The ball's run as the recording has it: only moving balls are sampled, so its first
-      // sample is when it was set moving, and its last is the pocket it went into.
-      const run: Array<{ t: number; x: number; y: number }> = []
-      for (const frame of playback.keyframes) {
-        for (const sample of frame.balls) if (sample[0] === id) run.push({ t: frame.t, x: sample[1], y: sample[2] })
-      }
-      const last = run[run.length - 1]
-      if (!last) continue
-      let best: { x: number; y: number } | null = null
-      let bestD = Infinity
-      for (const p of POCKETS) {
-        const d = Math.hypot(p.x - last.x, p.y - last.y)
-        if (d < bestD) {
-          bestD = d
-          best = { x: p.x, y: p.y }
-        }
-      }
-      if (!best) continue
-      // When it got close and stayed close: walked back from the drop to the last sample
-      // that was still outside the approach distance.
-      let near = run[0]!.t
-      for (let i = run.length - 1; i >= 0; i--) {
-        const s = run[i]!
-        if (Math.hypot(best.x - s.x, best.y - s.y) > POT_CAM.approachMm) {
-          near = s.t
-          break
-        }
-      }
-      this.shotPots.push({ at, pocket: best, moving: run[0]!.t, near })
-    }
+    // Most shots, pot or not, are watched from the pocket the ball is heading for (see
+    // planPocketShot); a recap's pot always is.
+    this.pocketShot = planPocketShot(playback, POCKETS, BALL_IDS.CUE, Math.random(), always)
   }
 
   /** How far into its replay the shot on screen is, in simulated seconds; null when there is none. */
   setShotTime(time: number | null): void {
     this.shotTime = time
-    if (time === null) this.shotPots = []
+    if (time === null) this.pocketShot = null
   }
 
-  /** The pocket camera, while a ball is about to drop or has just dropped; otherwise null. */
+  /** The pocket camera, while this shot's ball is on its way to its pocket; otherwise null. */
   private potCamera(): CameraPose | null {
     const t = this.shotTime
-    if (t === null) return null
-    // One pocket a shot, the first ball to go: a shot that pots two is not chased from
-    // pocket to pocket.
-    let first: (typeof this.shotPots)[number] | null = null
-    for (const pot of this.shotPots) {
-      if (pot.at >= POT_CAM.earliestPotSeconds && (!first || pot.at < first.at)) first = pot
-    }
-    if (!first) return null
-    // Only once the ball is seen to be going in: moving for a moment, close to the pocket,
-    // and never long before the drop. A cut that would barely be up before it drops is not
-    // made; the table view shows that pot well enough.
-    const from = Math.max(
-      first.near,
-      first.moving + POT_CAM.watchFirstSeconds,
-      first.at - POT_CAM.leadSeconds,
-      POT_CAM.afterStrikeSeconds
-    )
-    if (first.at - from < POT_CAM.minShowSeconds) return null
-    return t >= from && t <= first.at + POT_CAM.tailSeconds ? potCameraPose(first.pocket) : null
+    const shot = this.pocketShot
+    if (t === null || !shot) return null
+    return t >= shot.from && t <= shot.until ? potCameraPose(shot.pocket) : null
   }
 
   /** The spectator pose for the canvas as it is now, refitted only when its shape changes. */
@@ -5391,6 +5402,8 @@ const outerL = APRON_OUTER_L
     if (next === this.spectating) return
     this.spectating = next
     this.venue?.setSpectator(next, SPECTATOR_CAM.cueThicknessScale, SPECTATOR_CAM.cueAimSeconds)
+    // The rails take their deeper finish while the table is seen from high above.
+    if (this.texturedTable) setRailFinish(this.texturedTable, next)
     if (next) {
       this.spectatorTransition = beginSpectatorTransition(this.rig.pose, this.spectatorPose(), SPECTATOR_CAM.enterSeconds)
       return
@@ -5663,7 +5676,10 @@ const outerL = APRON_OUTER_L
         // Inside the hole once it is over the lip. Caught at the edge, it is brought in as it
         // drops, the way a ball rolls off the edge into the hole, not down through the bed.
         const lip = Math.max(0, 1 - fall / POT_LIP_MM)
-        const reach = rig.sinkReach + Math.max(0, rig.sinkStartOff - rig.sinkReach) * lip
+        // Further down, the net narrows round it towards its bottom.
+        const down = Math.min(1, fall / Math.max(1, rig.sinkDepth))
+        const inner = rig.sinkReach + (rig.sinkDeepReach - rig.sinkReach) * down * down
+        const reach = inner + Math.max(0, rig.sinkStartOff - inner) * lip
         if (off > reach && off > 1e-6) {
           const nx = offX / off
           const nz = offZ / off
@@ -5677,13 +5693,13 @@ const outerL = APRON_OUTER_L
             rig.sinkVel.multiplyScalar(0.55)
           }
         }
-        rig.group.position.set(rig.sinkPos.x, rig.sinkStart.y - Math.min(fall, POT_DROP_MM), rig.sinkPos.z)
+        rig.group.position.set(rig.sinkPos.x, rig.sinkStart.y - Math.min(fall, rig.sinkDepth), rig.sinkPos.z)
         // Still turning as it goes in.
         const travelled = rig.group.position.distanceTo(before)
         if (travelled > 1e-4) rig.spinBy(travelled)
         // Full size all the way down: it is the pocket that hides a ball, not the ball
         // shrinking.
-        if (fall >= POT_DROP_MM || t >= POT_DROP_MAX_SECONDS) {
+        if (fall >= rig.sinkDepth || t >= POT_DROP_MAX_SECONDS) {
           // Gone: the crowd's applause, if this pot earns any, lands now.
           this.venue?.ballSunk()
           rig.sinking = false

@@ -8,7 +8,9 @@ import {
   aimPose
 } from './camera.js'
 import {
+  POT_CAM,
   SPECTATOR_CAM,
+  planPocketShot,
   addressHeading,
   beginSpectatorTransition,
   fitSpectatorCamera,
@@ -313,5 +315,53 @@ describe('the move into and out of the view', () => {
     }
     const { poses } = play(pose, aim, FLY_OUT_SECONDS)
     expect(poses[poses.length - 1]!.height).toBeCloseTo(aim.height, 9)
+  })
+})
+
+describe('which pocket a shot is watched from', () => {
+  const pockets = [
+    { x: 0, y: 0 },
+    { x: TABLE_LENGTH / 2, y: 0 },
+    { x: TABLE_LENGTH, y: 0 },
+    { x: 0, y: TABLE_WIDTH },
+    { x: TABLE_LENGTH / 2, y: TABLE_WIDTH },
+    { x: TABLE_LENGTH, y: TABLE_WIDTH }
+  ]
+  const CUE = 0
+  /** A red sent from the middle towards the top-right pocket, sampled every 0.1s from 0.2s. */
+  const towardsCorner = (endX: number, endY: number, pots?: Array<[number, number]>) => {
+    const keyframes: Array<{ t: number; balls: number[][] }> = [{ t: 0, balls: [[CUE, 800, 900]] }, { t: 0.1, balls: [[CUE, 900, 900]] }]
+    for (let i = 0; i <= 10; i++) {
+      const f = i / 10
+      keyframes.push({ t: 0.2 + i * 0.1, balls: [[1, 1800 + (endX - 1800) * f, 900 + (endY - 900) * f]] })
+    }
+    return { keyframes, pots }
+  }
+
+  it('follows a pot to its pocket from just after the ball starts moving', () => {
+    const shot = planPocketShot(towardsCorner(TABLE_LENGTH - 20, TABLE_WIDTH - 20, [[1, 1.2]]), pockets, CUE, 0)
+    expect(shot).not.toBeNull()
+    expect(shot!.pocket).toEqual({ x: TABLE_LENGTH, y: TABLE_WIDTH })
+    expect(shot!.from).toBeGreaterThanOrEqual(POT_CAM.afterStrikeSeconds)
+    expect(shot!.from).toBeLessThan(0.5)
+    expect(shot!.until).toBeCloseTo(1.2 + POT_CAM.tailSeconds, 6)
+  })
+
+  it('watches a ball that only goes close to a pocket too', () => {
+    const shot = planPocketShot(towardsCorner(TABLE_LENGTH - 150, TABLE_WIDTH - 150), pockets, CUE, 0)
+    expect(shot).not.toBeNull()
+    expect(shot!.pocket).toEqual({ x: TABLE_LENGTH, y: TABLE_WIDTH })
+    expect(shot!.until).toBeCloseTo(1.2 + POT_CAM.missTailSeconds, 6)
+  })
+
+  it('is not used for a ball that goes nowhere near a pocket', () => {
+    expect(planPocketShot(towardsCorner(2600, 1000), pockets, CUE, 0)).toBeNull()
+  })
+
+  it('is used for the planned share of shots only, unless asked always', () => {
+    const recording = towardsCorner(TABLE_LENGTH - 20, TABLE_WIDTH - 20, [[1, 1.2]])
+    expect(planPocketShot(recording, pockets, CUE, POT_CAM.showShare - 0.01)).not.toBeNull()
+    expect(planPocketShot(recording, pockets, CUE, POT_CAM.showShare + 0.01)).toBeNull()
+    expect(planPocketShot(recording, pockets, CUE, 0.99, true)).not.toBeNull()
   })
 })
