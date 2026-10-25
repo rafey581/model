@@ -13,7 +13,52 @@ export interface AdminIdentity {
   status?: string
 }
 
+export interface PeriodTotals {
+  today: number
+  week: number
+  month: number
+  all: number
+}
+
+export type FinancePeriod = keyof PeriodTotals
+
+export interface DashboardFinance {
+  deposits: PeriodTotals & { countAll: number }
+  withdrawals: PeriodTotals & { countAll: number }
+  /** Platform fees from matches. */
+  commission: PeriodTotals
+  /** Welcome balances and referral rewards paid to players. */
+  bonuses: PeriodTotals
+  /** Net effect of staff balance adjustments. */
+  adjustments: PeriodTotals
+  /** commission - bonuses - adjustments. */
+  netProfit: PeriodTotals
+  /** deposits - withdrawals. */
+  netFlow: PeriodTotals
+  /** What players hold right now (available + locked). */
+  playerBalances: number
+}
+
+export interface DashboardUserActivity {
+  total: number
+  activeWeek: number
+  activeToday: number
+  newToday: number
+  suspended: number
+  banned: number
+}
+
+export interface PendingCountsPayload {
+  pendingDeposits: number
+  pendingWithdrawals: number
+  supportAwaiting: number
+}
+
 export interface DashboardStats {
+  /** Optional: absent on a server older than this app. */
+  finance?: DashboardFinance
+  userActivity?: DashboardUserActivity
+  timeZone?: string
   users: number
   activeMatches: number
   completedMatches: number
@@ -34,6 +79,12 @@ export interface AdminUser {
   status: string
   createdAt: string
   wallet: { available: string | number; locked?: string | number } | null | undefined
+  phone?: string | null
+  lastSeenAt?: string | null
+  lastLoginAt?: string | null
+  level?: number
+  totalDeposited?: number
+  totalWithdrawn?: number
 }
 
 export interface AdminMatchPlayer {

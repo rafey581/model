@@ -23,6 +23,7 @@ import { registerDepositRoutes, registerAdminDepositRoutes } from './deposits/ro
 import { registerWithdrawalRoutes, registerAdminWithdrawalRoutes } from './withdrawals/routes.js'
 import { registerSupportRoutes, registerAdminSupportRoutes } from './support/routes.js'
 import { registerProgressRoutes } from './progress/routes.js'
+import { registerAdminDeviceRoutes } from './push/routes.js'
 import { createGameServer, recoverMatchValidity } from './game/index.js'
 import { getPlatformUserId, getBotUserId } from './matches/service.js'
 import { ensureSeedSettings, getSettings, isMaintenance } from './settings/index.js'
@@ -87,6 +88,7 @@ export async function buildApp() {
   await registerSupportRoutes(app)
   await registerAdminSupportRoutes(app)
   await registerProgressRoutes(app)
+  await registerAdminDeviceRoutes(app)
   await registerAdminAuthRoutes(app)
   await registerAdminRoutes(app)
 

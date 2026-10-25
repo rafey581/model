@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { StyleSheet, Text, TextInput, View } from 'react-native'
 import { api } from '@/lib/api'
 import { useAsync } from '@/hooks/useAsync'
-import { formatAmount, formatDate } from '@/lib/format'
+import { formatAmount, formatDate, formatRelative } from '@/lib/format'
+import { deviceTimeZone } from '@/lib/timezone'
 import type { AdminUser, UserRole, UserStatus } from '@/lib/types'
 import { USER_ROLES, USER_STATUSES } from '@/lib/types'
 import { Button, Card, Empty, ErrorState, Loading, Pill, Row, Screen, ScreenTitle } from '@/components/ui'
@@ -12,32 +13,49 @@ import { useDialog } from '@/components/ActionDialog'
 import { useToast } from '@/components/Toast'
 import { colors, radius, spacing } from '@/theme'
 
+type UserFilter = '' | 'today' | 'active' | 'new' | 'suspended' | 'banned' | 'staff'
+
+const FILTERS: Array<{ value: UserFilter; label: string }> = [
+  { value: '', label: 'All' },
+  { value: 'today', label: 'Active today' },
+  { value: 'active', label: 'Active 7d' },
+  { value: 'new', label: 'New today' },
+  { value: 'suspended', label: 'Suspended' },
+  { value: 'banned', label: 'Banned' },
+  { value: 'staff', label: 'Staff' }
+]
+
 /**
  * Player administration.
  *
- * Search runs on the loaded page (the API returns the newest 200) rather than
- * round-tripping per keystroke, which keeps the list responsive and avoids a
- * request per character. Role and status changes confirm first when they are
- * destructive, because suspending the wrong account is worse than a tap.
+ * Search and filters run on the server across every account (by username, email,
+ * phone or id), settling 300 ms after typing stops so a word is one request, not one
+ * per letter. Role and status changes confirm first when they are destructive,
+ * because suspending the wrong account is worse than a tap.
  */
 export default function UsersScreen() {
   const [query, setQuery] = useState('')
+  const [search, setSearch] = useState('')
+  const [filter, setFilter] = useState<UserFilter>('')
   const [walletTarget, setWalletTarget] = useState<AdminUser | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
-  const state = useAsync(() => api<AdminUser[]>('/admin/users'), [])
+  const tz = deviceTimeZone()
+
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(query.trim()), 300)
+    return () => clearTimeout(timer)
+  }, [query])
+
+  const state = useAsync(() => {
+    const params = new URLSearchParams({ tz })
+    if (search) params.set('q', search)
+    if (filter) params.set('filter', filter)
+    return api<AdminUser[]>(`/admin/users?${params.toString()}`)
+  }, [search, filter, tz])
   const dialog = useDialog()
   const toast = useToast()
 
-  const users = state.data ?? []
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    if (!needle) return users
-    return users.filter(
-      (user) =>
-        user.username.toLowerCase().includes(needle) ||
-        (user.email ?? '').toLowerCase().includes(needle)
-    )
-  }, [users, query])
+  const filtered = state.data ?? []
 
   const patch = async (user: AdminUser, change: { status?: UserStatus; role?: UserRole }): Promise<void> => {
     if (change.status === 'BANNED') {
@@ -71,33 +89,43 @@ export default function UsersScreen() {
 
   return (
     <Screen refreshing={state.refreshing} onRefresh={state.reload}>
-      <ScreenTitle title="Users" subtitle={`${users.length} loaded`} />
+      <ScreenTitle
+        title="Users"
+        subtitle={state.data ? `${filtered.length}${filtered.length >= 200 ? '+' : ''} shown` : 'Loading...'}
+      />
       <TextInput
         value={query}
         onChangeText={setQuery}
-        placeholder="Search by username or email"
+        placeholder="Search username, email, phone or id"
         placeholderTextColor={colors.muted}
         autoCapitalize="none"
         autoCorrect={false}
         style={styles.search}
       />
+      <FilterChips value={filter} onChange={setFilter} options={FILTERS} />
 
       {state.loading && !state.data ? <Loading /> : null}
       {state.error && !state.data ? <ErrorState message={state.error} onRetry={state.reload} /> : null}
-      {state.data && filtered.length === 0 ? <Empty label="No players match that search." /> : null}
+      {state.data && filtered.length === 0 ? <Empty label={search || filter ? 'No players match.' : 'No players yet.'} /> : null}
 
       {filtered.map((user) => (
         <Card key={user.id}>
           <View style={styles.headerRow}>
             <View style={styles.flex}>
               <Text style={styles.username}>{user.username}</Text>
-              <Text style={styles.muted}>{user.email ?? 'no email'}</Text>
+              <Text style={styles.muted} selectable>
+                {[user.email ?? 'no email', user.phone].filter(Boolean).join(' - ')}
+              </Text>
             </View>
             <Pill label={user.status} />
           </View>
 
           <Row label="Balance" value={`${formatAmount(user.wallet?.available)} USDT`} />
           {user.wallet?.locked !== undefined ? <Row label="Locked in play" value={`${formatAmount(user.wallet.locked)} USDT`} /> : null}
+          {user.totalDeposited !== undefined ? <Row label="Deposited (approved)" value={`${formatAmount(user.totalDeposited)} USDT`} /> : null}
+          {user.totalWithdrawn !== undefined ? <Row label="Withdrawn (approved)" value={`${formatAmount(user.totalWithdrawn)} USDT`} /> : null}
+          <Row label="Last seen" value={user.lastSeenAt ? formatRelative(user.lastSeenAt) : 'never'} />
+          {user.level !== undefined ? <Row label="Level" value={String(user.level)} /> : null}
           <Row label="Joined" value={formatDate(user.createdAt)} />
 
           <Text style={styles.groupLabel}>Role</Text>

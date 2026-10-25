@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from '@/auth/AuthContext'
 import { ToastProvider } from '@/components/Toast'
 import { DialogProvider } from '@/components/ActionDialog'
 import { PendingCountsProvider } from '@/hooks/usePendingCounts'
+import { PhoneAlerts } from '@/components/PhoneAlerts'
 import { Loading } from '@/components/ui'
 import { colors } from '@/theme'
 
@@ -62,6 +63,7 @@ export default function RootLayout() {
           <DialogProvider>
             <StatusBar style="light" />
             <RootNavigator />
+            <PhoneAlerts />
           </DialogProvider>
         </ToastProvider>
       </PendingCountsProvider>

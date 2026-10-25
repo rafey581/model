@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { api, setTokenProvider } from '@/lib/api'
 import { fetchSession, logout as logoutRequest } from '@/lib/adminAuth'
 import { readToken, writeToken } from '@/lib/tokenStore'
+import { unregisterPush } from '@/lib/push'
 import type { AdminIdentity } from '@/lib/types'
 
 /**
@@ -67,6 +68,8 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactNode {
   }, [])
 
   const signOut = useCallback(async () => {
+    // While the session is still valid: stop this phone ringing for this account.
+    await unregisterPush()
     try {
       await logoutRequest()
     } catch {

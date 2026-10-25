@@ -3,6 +3,7 @@ import { prisma } from '../db/index.js'
 import { config } from '../config.js'
 import { runInTransaction, ledger, round } from '../wallet/service.js'
 import { notify, notifyAdmins } from '../notifications/service.js'
+import { pushToAdmins } from '../push/adminPush.js'
 
 /**
  * Manual USDT (Solana) deposits.
@@ -84,6 +85,19 @@ export async function createDeposit(input: CreateDepositInput): Promise<{ id: st
       'New deposit request',
       `${input.amountUsdt} ${config.DEPOSIT_CURRENCY} (${config.DEPOSIT_NETWORK}) awaits verification`
     )
+    // Ring the staff phones. Not awaited: the player's request is done either way.
+    void prisma.user
+      .findUnique({ where: { id: input.userId }, select: { username: true } })
+      .then((user) =>
+        pushToAdmins({
+          title: `New deposit: ${input.amountUsdt} ${config.DEPOSIT_CURRENCY}`,
+          body: `${user?.username ?? 'A player'} sent ${input.amountUsdt} ${config.DEPOSIT_CURRENCY} on ${config.DEPOSIT_NETWORK}. Verify and approve.`,
+          href: '/deposits',
+          kind: 'DEPOSIT_PENDING',
+          ring: true
+        })
+      )
+      .catch(() => undefined)
     return created
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {

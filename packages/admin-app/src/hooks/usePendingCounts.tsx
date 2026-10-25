@@ -2,12 +2,12 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { AppState } from 'react-native'
 import { useAuth } from '@/auth/AuthContext'
 import { api } from '@/lib/api'
-import type { DashboardStats } from '@/lib/types'
+import type { PendingCountsPayload } from '@/lib/types'
 
 /**
  * What is waiting on staff, for the tab badges.
  *
- * One poll of /admin/stats for the whole app, every 30 seconds while signed in and
+ * One poll of /admin/pending for the whole app, every 30 seconds while signed in and
  * in the foreground, plus an immediate re-read whenever a screen finishes an action
  * (approve, reject, reply) so a badge never lags the work just done.
  */
@@ -35,7 +35,7 @@ export function PendingCountsProvider({ children }: { children: ReactNode }): Re
   const refresh = useCallback(() => {
     if (!token || inFlight.current) return
     inFlight.current = true
-    api<DashboardStats>('/admin/stats')
+    api<PendingCountsPayload>('/admin/pending')
       .then((stats) =>
         setCounts({
           deposits: stats.pendingDeposits,

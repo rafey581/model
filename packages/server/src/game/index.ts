@@ -16,6 +16,7 @@ import { PRACTICE_DAILY_FREE_LIMIT } from '@snooker/shared'
 import type { PracticeAiLevel } from '@snooker/shared'
 import { isMatchChatPhrase, MATCH_CHAT_COOLDOWN_MS } from '@snooker/shared'
 import type { Prisma } from '@prisma/client'
+import { touchLastSeen } from '../users/activity.js'
 
 export interface GameServerContext {
   io: Server
@@ -170,6 +171,7 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
       return
     }
     socket.data.userId = user.id
+    touchLastSeen(user)
     next()
   })
 

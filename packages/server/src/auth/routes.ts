@@ -227,6 +227,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         failedLoginAttempts: 0,
         lockedUntil: null,
         lastLoginAt: new Date(),
+        lastSeenAt: new Date(),
         lastLoginIp: request.ip
       }
     })

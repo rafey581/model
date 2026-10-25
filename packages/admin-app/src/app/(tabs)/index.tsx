@@ -1,24 +1,44 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { useAuth } from '@/auth/AuthContext'
 import { api } from '@/lib/api'
 import { useAsync } from '@/hooks/useAsync'
-import type { DashboardStats } from '@/lib/types'
-import { Card, ErrorState, Loading, Row, Screen, ScreenTitle, StatCard } from '@/components/ui'
+import { deviceTimeZone } from '@/lib/timezone'
+import type { DashboardStats, FinancePeriod } from '@/lib/types'
+import { Card, ErrorState, Loading, Row, Screen, ScreenTitle, SectionTitle, StatCard } from '@/components/ui'
+import { FilterChips } from '@/components/FilterChips'
 import { colors, spacing } from '@/theme'
 import { formatAmount, formatSignedAmount } from '@/lib/format'
 
+const PERIODS: Array<{ value: FinancePeriod; label: string }> = [
+  { value: 'today', label: 'Today' },
+  { value: 'week', label: '7 days' },
+  { value: 'month', label: '30 days' },
+  { value: 'all', label: 'All time' }
+]
+
+const PERIOD_NOUN: Record<FinancePeriod, string> = {
+  today: 'today',
+  week: 'in the last 7 days',
+  month: 'in the last 30 days',
+  all: 'all time'
+}
+
 /**
- * The first thing an admin sees: the numbers that decide what to do next.
+ * The first thing an admin sees: what is waiting, where the money stands, and who
+ * is playing.
  *
- * Deposits and withdrawals that need review are surfaced as their own cards, not
- * buried, because a pending payout is a person waiting on their money.
+ * Money is shown for one period at a time (today by default, since that is the
+ * question asked most), and "today" is the staff member's own day: the app sends
+ * its timezone and the server counts from local midnight.
  */
 export default function DashboardScreen() {
   const { admin } = useAuth()
   const router = useRouter()
-  const state = useAsync(() => api<DashboardStats>('/admin/stats'), [])
+  const [period, setPeriod] = useState<FinancePeriod>('today')
+  const tz = deviceTimeZone()
+  const state = useAsync(() => api<DashboardStats>(`/admin/stats?tz=${encodeURIComponent(tz)}`), [tz])
 
   // The numbers move while staff work in the other tabs; re-read on the way back.
   useFocusEffect(
@@ -47,12 +67,13 @@ export default function DashboardScreen() {
     { count: support, label: 'player(s) waiting on support', href: '/support' }
   ].filter((w) => w.count > 0)
 
+  const finance = stats.finance
+  const people = stats.userActivity
+  const money = (n: number) => `${formatAmount(n)} USDT`
+
   return (
     <Screen refreshing={state.refreshing} onRefresh={state.reload}>
-      <ScreenTitle
-        title={`Hello, ${admin?.username ?? 'admin'}`}
-        subtitle="Platform overview"
-      />
+      <ScreenTitle title={`Hello, ${admin?.username ?? 'admin'}`} subtitle={`Platform overview - ${stats.timeZone ?? tz}`} />
 
       {waiting.length > 0 ? (
         <Card style={styles.attention}>
@@ -67,23 +88,65 @@ export default function DashboardScreen() {
         </Card>
       ) : null}
 
-      <View style={styles.grid}>
-        <StatCard label="Registered users" value={String(stats.users)} />
-        <StatCard label="Platform revenue (USDT)" value={formatAmount(stats.platformRevenue)} tone="WIN" />
-        <StatCard label="Pending deposits" value={String(stats.pendingDeposits)} tone={stats.pendingDeposits > 0 ? 'PENDING' : undefined} />
-        <StatCard label="Pending payouts" value={String(stats.pendingWithdrawals)} tone={stats.pendingWithdrawals > 0 ? 'PENDING' : undefined} />
-        <StatCard label="Support awaiting reply" value={String(support)} tone={support > 0 ? 'PENDING' : undefined} />
-        <StatCard label="Live matches" value={String(stats.activeMatches)} />
-        <StatCard label="Completed matches" value={String(stats.completedMatches)} />
-        <StatCard label="Deposits (all time)" value={String(stats.deposits)} />
-        <StatCard label="Withdrawals (all time)" value={String(stats.withdrawals)} />
-      </View>
+      <SectionTitle>Finance</SectionTitle>
+      {finance ? (
+        <>
+          <FilterChips value={period} onChange={setPeriod} options={PERIODS} />
+          <View style={styles.grid}>
+            <StatCard label={`Deposits ${PERIOD_NOUN[period]}`} value={money(finance.deposits[period])} tone="WIN" />
+            <StatCard label={`Withdrawals ${PERIOD_NOUN[period]}`} value={money(finance.withdrawals[period])} tone="LOSS" />
+          </View>
+          <Card style={finance.netProfit[period] >= 0 ? styles.profitUp : styles.profitDown}>
+            <Text style={styles.profitLabel}>Net profit {PERIOD_NOUN[period]}</Text>
+            <Text style={[styles.profitValue, { color: finance.netProfit[period] >= 0 ? colors.positive : colors.negative }]}>
+              {formatSignedAmount(finance.netProfit[period])} USDT
+            </Text>
+            <Row label="Commission earned" value={`+${formatAmount(finance.commission[period])} USDT`} />
+            <Row label="Bonuses paid (welcome, referral)" value={`-${formatAmount(finance.bonuses[period])} USDT`} />
+            {finance.adjustments[period] !== 0 ? (
+              <Row label="Staff balance adjustments" value={`${formatSignedAmount(-finance.adjustments[period])} USDT`} />
+            ) : null}
+          </Card>
+          <Card>
+            <Row label="Net cash flow (deposits - withdrawals)" value={`${formatSignedAmount(finance.netFlow[period])} USDT`} />
+            <Row label="Held by players now" value={money(finance.playerBalances)} />
+            <Row label="Approved deposits (all time)" value={String(finance.deposits.countAll)} />
+            <Row label="Approved payouts (all time)" value={String(finance.withdrawals.countAll)} />
+          </Card>
+        </>
+      ) : (
+        <Card>
+          <Row label="Platform revenue" value={`${formatSignedAmount(stats.platformRevenue)} USDT`} />
+          <Text style={styles.note}>Update the server for deposit, withdrawal and profit totals.</Text>
+        </Card>
+      )}
 
-      <Card>
-        <Row label="Revenue" value={`${formatSignedAmount(stats.platformRevenue)} USDT`} />
-        <Row label="Live now" value={`${stats.activeMatches} match(es)`} />
-        <Row label="Completed" value={`${stats.completedMatches} match(es)`} />
-      </Card>
+      <SectionTitle>Players</SectionTitle>
+      <View style={styles.grid}>
+        <StatCard label="Total players" value={String(people?.total ?? stats.users)} />
+        {people ? (
+          <>
+            <StatCard label="Active today" value={String(people.activeToday)} tone={people.activeToday > 0 ? 'WIN' : undefined} />
+            <StatCard label="Active in 7 days" value={String(people.activeWeek)} />
+            <StatCard label="New today" value={String(people.newToday)} />
+          </>
+        ) : null}
+      </View>
+      {people && (people.suspended > 0 || people.banned > 0) ? (
+        <Card>
+          <Row label="Suspended" value={String(people.suspended)} />
+          <Row label="Banned" value={String(people.banned)} />
+        </Card>
+      ) : null}
+      <Pressable accessibilityRole="link" onPress={() => router.push('/users' as never)}>
+        <Text style={styles.link}>Open players</Text>
+      </Pressable>
+
+      <SectionTitle>Matches</SectionTitle>
+      <View style={styles.grid}>
+        <StatCard label="Live now" value={String(stats.activeMatches)} />
+        <StatCard label="Completed" value={String(stats.completedMatches)} />
+      </View>
     </Screen>
   )
 }
@@ -94,5 +157,11 @@ const styles = StyleSheet.create({
   attentionTitle: { color: colors.warning, fontSize: 15, fontWeight: '700' },
   attentionBody: { color: colors.text, fontSize: 13, paddingVertical: 2 },
   attentionCount: { fontWeight: '700' },
-  attentionLink: { color: colors.info, fontWeight: '600' }
+  attentionLink: { color: colors.info, fontWeight: '600' },
+  profitUp: { borderColor: colors.positive },
+  profitDown: { borderColor: colors.negative },
+  profitLabel: { color: colors.muted, fontSize: 12, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
+  profitValue: { fontSize: 28, fontWeight: '800', marginBottom: spacing.xs },
+  note: { color: colors.muted, fontSize: 12 },
+  link: { color: colors.info, fontSize: 13, fontWeight: '600', textAlign: 'right' }
 })

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import jwt from 'jsonwebtoken'
 import { prisma } from '../db/index.js'
 import { config } from '../config.js'
+import { touchLastSeen } from '../users/activity.js'
 
 export interface AuthUser {
   id: string
@@ -60,6 +61,7 @@ export async function registerAuthHooks(app: FastifyInstance): Promise<void> {
       return
     }
     request.authUser = { id: user.id, username: user.username, role: user.role, status: user.status }
+    touchLastSeen(user)
   })
 }
 

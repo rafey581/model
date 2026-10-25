@@ -1,5 +1,6 @@
 import { prisma } from '../db/index.js'
 import { notify, notifyAdmins } from '../notifications/service.js'
+import { pushToAdmins } from '../push/adminPush.js'
 
 /**
  * Customer support: one conversation per player, answered by staff from the admin app.
@@ -59,6 +60,8 @@ export async function postPlayerMessage(userId: string, body: string) {
   if (!wasWaiting) {
     const preview = body.length > 80 ? `${body.slice(0, 77)}...` : body
     void notifyAdmins('SUPPORT_MESSAGE', `Support message from ${username}`, preview).catch(() => undefined)
+    // A normal notification, not a ring: support is not money waiting.
+    void pushToAdmins({ title: `Support: ${username}`, body: preview, href: `/support/${message.threadId}`, kind: 'SUPPORT_MESSAGE', ring: false })
   }
   return message
 }

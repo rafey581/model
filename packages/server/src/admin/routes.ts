@@ -6,6 +6,7 @@ import { requireAdminSession } from './auth.js'
 import { runInTransaction, ledger } from '../wallet/service.js'
 import { invalidateSettingsCache } from '../settings/index.js'
 import { listFraudFlags, checkLedgerInvariance } from '../fraud/index.js'
+import { dashboardStats, safeTimeZone, startOfDay } from './stats.js'
 import { threadsAwaitingReply } from '../support/service.js'
 
 const adjustSchema = z.object({
@@ -37,52 +38,85 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
    */
   const adminGuard = requireAdminSession
 
-  app.get('/api/admin/stats', { config: { public: true }, preHandler: adminGuard }, async (_request, reply) => {
-    const [users, matches, completed, deposits, withdrawals, pendingDeposits, pendingWithdrawals, supportAwaiting] = await Promise.all([
-      prisma.user.count(),
-      prisma.match.count({ where: { status: { in: ['MATCH_STARTED', 'MATCH_IN_PROGRESS'] } } }),
-      prisma.match.count({ where: { status: 'PRIZE_SETTLED' } }),
-      prisma.walletTransaction.count({ where: { type: 'DEPOSIT' } }),
-      prisma.walletTransaction.count({ where: { type: 'WITHDRAWAL' } }),
+  /** Just what is waiting on staff, for the app's tab badges (polled; kept cheap). */
+  app.get('/api/admin/pending', { config: { public: true }, preHandler: adminGuard }, async (_request, reply) => {
+    const [pendingDeposits, pendingWithdrawals, supportAwaiting] = await Promise.all([
       prisma.cryptoDeposit.count({ where: { status: 'PENDING' } }),
       prisma.cryptoWithdrawal.count({ where: { status: 'PENDING' } }),
       threadsAwaitingReply()
     ])
-    const revenue = await prisma.walletTransaction.aggregate({
-      where: { type: 'PLATFORM_FEE' },
-      _sum: { amount: true }
-    })
-    return reply.send({
-      ok: true,
-      data: {
-        users,
-        activeMatches: matches,
-        completedMatches: completed,
-        deposits,
-        withdrawals,
-        pendingDeposits,
-        pendingWithdrawals,
-        supportAwaiting,
-        platformRevenue: revenue._sum.amount ? Number(revenue._sum.amount) : 0
-      }
-    })
+    return reply.send({ ok: true, data: { pendingDeposits, pendingWithdrawals, supportAwaiting } })
   })
 
-  app.get('/api/admin/users', { config: { public: true }, preHandler: adminGuard }, async (_request, reply) => {
-    const users = await prisma.user.findMany({
-      select: {
-        id: true,
-        username: true,
-        email: true,
-        role: true,
-        status: true,
-        createdAt: true,
-        wallet: true
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 200
+  app.get('/api/admin/stats', { config: { public: true }, preHandler: adminGuard }, async (request, reply) => {
+    const tz = new URL(request.url, 'http://localhost').searchParams.get('tz')
+    return reply.send({ ok: true, data: await dashboardStats(tz) })
+  })
+
+  /**
+   * Players for the admin app. Search and filters run in the database, so a player
+   * outside the newest page can still be found. Each row carries last-seen activity
+   * and lifetime approved deposits/withdrawals, the two numbers staff ask first.
+   */
+  app.get('/api/admin/users', { config: { public: true }, preHandler: adminGuard }, async (request, reply) => {
+    const params = new URL(request.url, 'http://localhost').searchParams
+    const q = (params.get('q') ?? '').trim().slice(0, 80)
+    const filter = params.get('filter') ?? ''
+    const tz = safeTimeZone(params.get('tz'))
+    const today = startOfDay(tz)
+    const week = startOfDay(tz, new Date(), 6)
+
+    const where: Prisma.UserWhereInput = {}
+    if (q) {
+      where.OR = [
+        { username: { contains: q, mode: 'insensitive' } },
+        { email: { contains: q, mode: 'insensitive' } },
+        { phone: { contains: q } },
+        { id: q }
+      ]
+    }
+    if (filter === 'active') where.lastSeenAt = { gte: week }
+    else if (filter === 'today') where.lastSeenAt = { gte: today }
+    else if (filter === 'new') where.createdAt = { gte: today }
+    else if (filter === 'suspended') where.status = 'SUSPENDED'
+    else if (filter === 'banned') where.status = 'BANNED'
+    else if (filter === 'staff') where.role = { in: ['ADMIN', 'SUPERADMIN'] }
+
+    const orderBy: Prisma.UserOrderByWithRelationInput[] =
+      filter === 'active' || filter === 'today' ? [{ lastSeenAt: 'desc' }] : [{ createdAt: 'desc' }]
+    const [users, total] = await Promise.all([
+      prisma.user.findMany({
+        where,
+        select: {
+          id: true,
+          username: true,
+          email: true,
+          phone: true,
+          role: true,
+          status: true,
+          createdAt: true,
+          lastSeenAt: true,
+          lastLoginAt: true,
+          level: true,
+          wallet: true
+        },
+        orderBy,
+        take: 200
+      }),
+      prisma.user.count({ where })
+    ])
+    const ids = users.map((u) => u.id)
+    const [dep, wd] = await Promise.all([
+      prisma.cryptoDeposit.groupBy({ by: ['userId'], where: { userId: { in: ids }, status: 'APPROVED' }, _sum: { creditedAmount: true } }),
+      prisma.cryptoWithdrawal.groupBy({ by: ['userId'], where: { userId: { in: ids }, status: 'APPROVED' }, _sum: { deducted: true } })
+    ])
+    const deposited = new Map(dep.map((d) => [d.userId, Number(d._sum.creditedAmount ?? 0)]))
+    const withdrawn = new Map(wd.map((w) => [w.userId, Number(w._sum.deducted ?? 0)]))
+    reply.header('x-total-count', String(total))
+    return reply.send({
+      ok: true,
+      data: users.map((u) => ({ ...u, totalDeposited: deposited.get(u.id) ?? 0, totalWithdrawn: withdrawn.get(u.id) ?? 0 }))
     })
-    return reply.send({ ok: true, data: users })
   })
 
   app.patch('/api/admin/users', { config: { public: true }, preHandler: adminGuard }, async (request, reply) => {

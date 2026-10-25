@@ -1,10 +1,13 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { useEffect, useState } from 'react'
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import { useAuth } from '@/auth/AuthContext'
 import { apiBaseUrl } from '@/lib/config'
 import { Button, Card, Row, Screen, ScreenTitle } from '@/components/ui'
 import { useDialog } from '@/components/ActionDialog'
+import { useToast } from '@/components/Toast'
+import { pushStatus, registerForPush, sendTestRing, type PushStatus } from '@/lib/push'
 import { colors, radius, spacing } from '@/theme'
 
 /**
@@ -27,6 +30,33 @@ export default function MoreScreen() {
   const router = useRouter()
   const { admin, signOut } = useAuth()
   const dialog = useDialog()
+  const toast = useToast()
+  const [alerts, setAlerts] = useState<PushStatus | null>(pushStatus())
+  const [alertsBusy, setAlertsBusy] = useState(false)
+
+  useEffect(() => {
+    // Registration starts at sign-in; pick up its result if it finished after mount.
+    const timer = setInterval(() => setAlerts(pushStatus()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const enableAlerts = async (): Promise<void> => {
+    setAlertsBusy(true)
+    setAlerts(await registerForPush())
+    setAlertsBusy(false)
+  }
+
+  const testRing = async (): Promise<void> => {
+    setAlertsBusy(true)
+    try {
+      const result = await sendTestRing()
+      toast.show(result.accepted > 0 ? 'Test sent. Your phone should ring now.' : 'Expo did not accept the test; check the server logs.', result.accepted > 0 ? 'success' : 'error')
+    } catch (caught) {
+      toast.show((caught as Error).message, 'error')
+    } finally {
+      setAlertsBusy(false)
+    }
+  }
 
   const confirmSignOut = async (): Promise<void> => {
     const result = await dialog.confirm({
@@ -46,6 +76,27 @@ export default function MoreScreen() {
         <Row label="Signed in as" value={admin?.username ?? '-'} />
         <Row label="Role" value={admin?.role ?? '-'} />
         <Row label="Server" value={apiBaseUrl()} />
+      </Card>
+
+      <Card>
+        <Text style={styles.cardTitle}>Phone alerts</Text>
+        <Text style={styles.rowDescription}>
+          New deposit and withdrawal requests ring this phone like a call, even when the app is closed.
+        </Text>
+        <Row label="Status" value={alertsLabel(alerts)} />
+        {alerts?.state === 'denied' ? (
+          <Text style={styles.hint}>Notifications are blocked. Allow them for Snooker Admin in the phone settings, then tap Turn on.</Text>
+        ) : null}
+        {alerts?.state === 'error' || alerts?.state === 'unsupported' ? <Text style={styles.hint}>{alerts.reason}</Text> : null}
+        {Platform.OS !== 'web' ? (
+          <View style={styles.alertActions}>
+            {alerts?.state !== 'registered' ? (
+              <Button label="Turn on" variant="primary" onPress={() => void enableAlerts()} loading={alertsBusy} style={styles.flex} />
+            ) : (
+              <Button label="Send test ring" variant="subtle" onPress={() => void testRing()} loading={alertsBusy} style={styles.flex} />
+            )}
+          </View>
+        ) : null}
       </Card>
 
       <View style={styles.list}>
@@ -73,7 +124,24 @@ export default function MoreScreen() {
   )
 }
 
+function alertsLabel(status: PushStatus | null): string {
+  if (!status) return Platform.OS === 'web' ? 'Not available on web' : 'Setting up...'
+  switch (status.state) {
+    case 'registered':
+      return 'On for this phone'
+    case 'denied':
+      return 'Blocked in phone settings'
+    case 'unsupported':
+      return 'Not available here'
+    case 'error':
+      return 'Could not turn on'
+  }
+}
+
 const styles = StyleSheet.create({
+  cardTitle: { color: colors.text, fontSize: 15, fontWeight: '700' },
+  hint: { color: colors.warning, fontSize: 12, lineHeight: 17 },
+  alertActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
   flex: { flex: 1 },
   list: { gap: spacing.sm },
   row: {

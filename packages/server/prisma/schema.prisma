@@ -33,6 +33,9 @@ model User {
   lockedUntil         DateTime?
   lastLoginIp         String?
   lastLoginAt         DateTime?
+  // Last authenticated request or game connection, refreshed at most every few
+  // minutes. Drives the "active users" counts on the admin dashboard.
+  lastSeenAt          DateTime?
   // Player progression. `xp` is lifetime total XP; `level` is derived from it
   // (@snooker/shared progression) and stored so leaderboards can sort on it.
   level         Int      @default(1)
@@ -70,9 +73,11 @@ model User {
   supportMessages    SupportMessage[]
   assignedSupportThreads SupportThread[] @relation("SupportAssigned")
   badges             UserBadge[]
+  adminDevices       AdminDevice[]
 
   @@index([referredById])
   @@index([level, xp])
+  @@index([lastSeenAt])
 }
 
 /// One in-flight OTP, keyed on the address being verified.
@@ -322,6 +327,20 @@ model KycRecord {
   submittedAt DateTime?
   reviewedAt  DateTime?
   result      Json?
+}
+
+/// A staff phone registered for push alerts (Expo push token). Deposit and
+/// withdrawal requests ring every registered device of every active admin.
+model AdminDevice {
+  id         String   @id @default(cuid())
+  userId     String
+  token      String   @unique
+  platform   String
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model AdminAction {

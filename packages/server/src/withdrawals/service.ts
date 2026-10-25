@@ -4,6 +4,7 @@ import { config } from '../config.js'
 import { runInTransaction, ledger, round, InsufficientBalanceError } from '../wallet/service.js'
 import type { Tx } from '../wallet/service.js'
 import { notify, notifyAdmins } from '../notifications/service.js'
+import { pushToAdmins } from '../push/adminPush.js'
 
 /**
  * Manual USDT (Solana) withdrawals.
@@ -169,6 +170,19 @@ export async function createWithdrawal(input: CreateWithdrawalInput): Promise<{ 
     'New withdrawal request',
     `${input.amountUsdt} ${config.WITHDRAW_CURRENCY} (${config.WITHDRAW_NETWORK}) awaits verification`
   )
+  // Ring the staff phones. Not awaited: the player's request is done either way.
+  void prisma.user
+    .findUnique({ where: { id: input.userId }, select: { username: true } })
+    .then((user) =>
+      pushToAdmins({
+        title: `New withdrawal: ${input.amountUsdt} ${config.WITHDRAW_CURRENCY}`,
+        body: `${user?.username ?? 'A player'} wants ${input.amountUsdt} ${config.WITHDRAW_CURRENCY} paid out. Review the request.`,
+        href: '/withdrawals',
+        kind: 'WITHDRAW_PENDING',
+        ring: true
+      })
+    )
+    .catch(() => undefined)
   return created
 }
 
