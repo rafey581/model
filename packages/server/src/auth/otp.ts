@@ -4,7 +4,7 @@ import { prisma } from '../db/index.js'
 import { config } from '../config.js'
 
 /**
- * One-time codes for verifying an email address or WhatsApp number.
+ * One-time codes for verifying a player's email address.
  *
  * A code is short and short-lived, and the only thing standing between a stranger and
  * someone else's inbox is the window it is valid for and the number of guesses allowed.
@@ -15,7 +15,6 @@ import { config } from '../config.js'
 
 export const OTP_LENGTH = 6
 
-export type OtpChannel = 'EMAIL' | 'WHATSAPP'
 export type OtpPurpose = 'SIGNUP' | 'PASSWORD_RESET'
 
 /** Six digits, zero-padded, drawn from a CSPRNG. */
@@ -37,41 +36,25 @@ function hashesEqual(a: string, b: string): boolean {
 
 // --- identifier normalisation ----------------------------------------------
 // The stored value and the value a code is sent to have to be the same string, or a
-// code minted for "+1 555 0100" would not verify against the stored "+15550100".
+// code minted for "Alex@Example.com " would not verify against "alex@example.com".
 
 export function normalizeEmail(value: string): string {
   return value.trim().toLowerCase()
-}
-
-/** Digits with an optional single leading `+`. Spaces, dashes and brackets are dropped. */
-export function normalizePhone(value: string): string {
-  const trimmed = value.trim()
-  const digits = trimmed.replace(/[^0-9]/g, '')
-  return trimmed.startsWith('+') ? `+${digits}` : digits
 }
 
 export function isEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
 }
 
-export function isPhone(value: string): boolean {
-  const digits = value.replace(/[^0-9]/g, '')
-  return digits.length >= 8 && digits.length <= 15
-}
-
 /** A hint of where the code went, without echoing the whole address back. */
-export function maskIdentifier(identifier: string): string {
-  if (identifier.includes('@')) {
-    const [user = '', domain = ''] = identifier.split('@')
-    const head = user.slice(0, 2)
-    return `${head}${'*'.repeat(Math.max(user.length - head.length, 1))}@${domain}`
-  }
-  return identifier.length > 4 ? `${'*'.repeat(identifier.length - 4)}${identifier.slice(-4)}` : identifier
+export function maskIdentifier(email: string): string {
+  const [user = '', domain = ''] = email.split('@')
+  const head = user.slice(0, 2)
+  return `${head}${'*'.repeat(Math.max(user.length - head.length, 1))}@${domain}`
 }
 
 export interface CreateOtpInput {
   identifier: string
-  channel: OtpChannel
   purpose: OtpPurpose
   payload?: Prisma.InputJsonValue
 }
@@ -88,7 +71,8 @@ export async function createOtpChallenge(input: CreateOtpInput): Promise<{ chall
   const challenge = await prisma.otpChallenge.create({
     data: {
       identifier: input.identifier,
-      channel: input.channel,
+      // `OtpChallenge.channel` is a required legacy column; email is the only channel.
+      channel: 'EMAIL',
       purpose: input.purpose,
       codeHash: hashCode(code),
       payload: input.payload ?? Prisma.JsonNull,

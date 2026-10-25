@@ -4,32 +4,20 @@ import type { AdminIdentity } from './types'
 /**
  * The admin auth calls, typed once.
  *
- * The flow is three steps and the middle one happens only the first time an
- * account signs in: email + password, then (if the server says so) an
- * authenticator enrollment, then the session is issued. Both a fresh enrollment
- * and a normal sign-in end with a `token`, which is what the app stores.
+ * Sign-in is a single step: email + password, then the session is issued. The app
+ * stores the `token` (there is no cookie jar on a phone) and sends it as a bearer
+ * token on every request.
  */
 export interface LoginResult {
   user?: AdminIdentity
   expiresAt?: string
   token?: string
-  requiresTotp?: boolean
-  enrollToken?: string
-  secret?: string
-  otpauth?: string
 }
 
-export function login(email: string, password: string, totp?: string): Promise<LoginResult> {
+export function login(email: string, password: string): Promise<LoginResult> {
   return api<LoginResult>('/admin/auth/login', {
     method: 'POST',
-    body: { email, password, ...(totp ? { totp } : {}) }
-  })
-}
-
-export function activateTotp(enrollToken: string, totp: string): Promise<LoginResult> {
-  return api<LoginResult>('/admin/auth/totp/activate', {
-    method: 'POST',
-    body: { enrollToken, totp }
+    body: { email, password }
   })
 }
 

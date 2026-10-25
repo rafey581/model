@@ -1,14 +1,13 @@
 /**
  * Throwaway end-to-end check for the manual withdrawal flow, run against the dev
  * server on :4000. Creates its own admin + player + opponent, drives the whole
- * thing over HTTP (admin TOTP enrollment included), then deletes every row it
+ * thing over HTTP, then deletes every row it
  * made.
  *
  * Run: pnpm --filter @snooker/server exec tsx scripts/verify-withdraw.ts
  */
 import bcrypt from 'bcryptjs'
 import { prisma } from '../src/db/index.js'
-import { currentCode } from '../src/auth/totp.js'
 
 const BASE = 'http://localhost:4000'
 const TAG = `wdv${Date.now() % 1000000}`
@@ -137,20 +136,13 @@ async function main(): Promise<void> {
   const playerJar: CookieJar = new Map()
 
   try {
-    // ── Admin login incl. first-time TOTP enrollment ───────────────────────
+    // ── Admin login ────────────────────────────────────────────────────────
     const adminLogin = await req('/api/admin/auth/login', {
       method: 'POST',
       body: { email: admin.email, password: 'verify-admin-pass' }
     })
     assert(adminLogin.status === 200 && adminLogin.json?.ok, 'admin login failed')
-    assert(adminLogin.json.data?.requiresTotp === true, 'expected first-time TOTP enrollment')
-    const { enrollToken, secret } = adminLogin.json.data
-    const activate = await req('/api/admin/auth/totp/activate', {
-      method: 'POST',
-      body: { enrollToken, totp: currentCode(secret) }
-    })
-    assert(activate.status === 200 && activate.json?.ok, 'admin TOTP activation failed')
-    absorb(adminJar, activate.setCookies)
+    absorb(adminJar, adminLogin.setCookies)
     assert(adminJar.has('admin_session'), 'admin session cookie not set')
 
     // ── Player login ───────────────────────────────────────────────────────

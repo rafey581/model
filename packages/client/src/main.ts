@@ -1,5 +1,6 @@
 import './styles.css'
 import { api, connectSocket, getSocket, makeToast } from './game/network.js'
+import { openSupportChat } from './support.js'
 import { drawTable, resetTableAnimation } from './game/renderer.js'
 import { Scene3D } from './game/scene3d.js'
 import { preloadTableModel } from './game/tableModel.js'
@@ -545,6 +546,13 @@ function header(_options: { home?: boolean } = {}): HTMLElement {
     walletChip.title = 'Account balance'
     walletChip.appendChild(el('span', 'wallet-amount', formatCash(wallet.balance)))
     right.appendChild(walletChip)
+
+    const supportBtn = el('button', 'icon-btn support-btn') as HTMLButtonElement
+    supportBtn.type = 'button'
+    supportBtn.title = 'Customer Support'
+    supportBtn.textContent = '💬'
+    supportBtn.onclick = () => openSupportChat()
+    right.appendChild(supportBtn)
 
     right.appendChild(renderBell())
 

@@ -108,9 +108,8 @@ const envSchema = z.object({
 
   // --- Admin access -------------------------------------------------------
   // Admin signs in with email + password on a route that is not linked from the
-  // public UI, never with Google. TOTP is on by default; turning it off is an
-  // explicit, logged decision rather than the absence of one.
-  ADMIN_REQUIRE_TOTP: boolFlag(true),
+  // public UI, never with Google. There is no second factor: the account's
+  // defence is the password, the per-account/per-IP lockout and the audit trail.
   // Comma-separated allowlist of CIDR-less IP prefixes. Empty means "anywhere",
   // which is the right answer for local dev and a mistake in production, so boot
   // logs a warning when it is empty.
@@ -125,8 +124,7 @@ const envSchema = z.object({
   ADMIN_APP_ORIGINS: z.string().default('http://localhost:8081,http://localhost:19006'),
 
   // The internal direct-registration path, used by tests, e2e and the seed. It creates
-  // an account with no OTP step, so it is off in any real deployment; players are
-  // expected to go through the OTP signup flow.
+  // an account directly with no OTP step.
   AUTH_ALLOW_DIRECT_REGISTER: boolFlag(true),
 
   // Temporary guest play while the game is being built: one tap makes a throwaway
@@ -135,11 +133,11 @@ const envSchema = z.object({
   // the OTP signup is live on the phone.
   AUTH_ALLOW_GUEST: boolFlag(true),
 
-  // --- OTP (email / WhatsApp verification) --------------------------------
-  // A one-time code proves the player owns the email or WhatsApp number they signed
-  // up with. The code is short and lives briefly, so the window and the attempt cap
-  // are the whole defence; both are configurable so a real deployment can tighten
-  // them without a code change.
+  // --- OTP (email verification) --------------------------------------------
+  // A one-time code proves the player owns the email address they signed up with.
+  // The code is short and lives briefly, so the window and the attempt cap are the
+  // whole defence; both are configurable so a real deployment can tighten them
+  // without a code change.
   OTP_TTL_SEC: z.coerce.number().default(300),
   OTP_MAX_ATTEMPTS: z.coerce.number().default(5),
   OTP_RESEND_COOLDOWN_SEC: z.coerce.number().default(30),
@@ -152,13 +150,6 @@ const envSchema = z.object({
   SMTP_USER: z.string().default(''),
   SMTP_PASS: z.string().default(''),
   SMTP_FROM: z.string().default('Snooker Arena <no-reply@snooker.test>'),
-
-  // WhatsApp delivery. `none` logs to the console; `twilio` posts to the Twilio
-  // WhatsApp API, which is the only widely available channel for this.
-  WHATSAPP_PROVIDER: z.enum(['none', 'twilio']).default('none'),
-  TWILIO_ACCOUNT_SID: z.string().default(''),
-  TWILIO_AUTH_TOKEN: z.string().default(''),
-  TWILIO_WHATSAPP_FROM: z.string().default(''),
 
   REAL_MONEY_ENABLED: z
     .preprocess((v) => {
@@ -193,14 +184,4 @@ export function adminAppOrigins(): string[] {
 /** True when a real SMTP server is configured; otherwise email OTP stays on console. */
 export function isEmailDeliveryConfigured(): boolean {
   return config.SMTP_HOST.trim().length > 0
-}
-
-/** True when WhatsApp delivery is fully configured; otherwise it stays on console. */
-export function isWhatsAppDeliveryConfigured(): boolean {
-  return (
-    config.WHATSAPP_PROVIDER === 'twilio' &&
-    config.TWILIO_ACCOUNT_SID.trim() !== '' &&
-    config.TWILIO_AUTH_TOKEN.trim() !== '' &&
-    config.TWILIO_WHATSAPP_FROM.trim() !== ''
-  )
 }

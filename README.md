@@ -55,8 +55,8 @@ either way the inviter is recorded on the new account.
   live list of invited players (signed up → first match played), plus the USDT
   earned so far.
 - Anti-abuse: codes are unique, self-referral is refused, bad codes are answered
-  with an error at signup, and signup already demands a unique email + WhatsApp
-  number verified by OTP.
+  with an error at signup, and signup already demands a unique email address
+  verified by an emailed one-time code.
 
 ## Quick Start
 
@@ -84,8 +84,7 @@ audit log.
 pnpm --filter @snooker/admin-app start   # then press i / a, or scan with Expo Go
 ```
 
-The app signs in with the admin email + password (and an authenticator code once
-enrolled; the first sign-in walks through enrollment). It talks to the server on
+The app signs in with the admin email + password. It talks to the server on
 port 4000: by default it reuses the Expo dev server's host, so a phone on the same
 network needs nothing configured. Point it elsewhere with
 `EXPO_PUBLIC_API_URL=http://host:4000/api` in `packages/admin-app/.env`. The

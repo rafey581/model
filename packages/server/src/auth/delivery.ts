@@ -1,15 +1,14 @@
 import nodemailer from 'nodemailer'
-import { config, isEmailDeliveryConfigured, isWhatsAppDeliveryConfigured } from '../config.js'
-import type { OtpChannel, OtpPurpose } from './otp.js'
+import { config, isEmailDeliveryConfigured } from '../config.js'
+import type { OtpPurpose } from './otp.js'
 
 /**
- * Delivering an OTP over email or WhatsApp.
+ * Delivering an OTP over email.
  *
- * Both channels have a real path (SMTP for email, the Twilio REST API for WhatsApp)
- * and a dev path. When a channel is not configured the code is written to the server
- * log instead of sent, so a fresh checkout can register and sign in with no third-party
- * account - and never with a silent failure, because the log line says exactly that no
- * message went out.
+ * SMTP has a real path and a dev path. When SMTP is not configured the code is written
+ * to the server log instead of sent, so a fresh checkout can register and sign in with
+ * no third-party account - and never with a silent failure, because the log line says
+ * exactly that no message went out.
  *
  * Delivery failures are surfaced, not swallowed: the caller must not tell the player
  * "code sent" when the send threw.
@@ -81,49 +80,11 @@ async function sendEmail(to: string, code: string, purpose: OtpPurpose, log: Del
   })
 }
 
-async function sendWhatsApp(to: string, code: string, purpose: OtpPurpose, log: DeliveryLog): Promise<void> {
-  if (!isWhatsAppDeliveryConfigured()) {
-    log.warn(
-      { to, dev: true },
-      `WhatsApp is not configured - OTP code for ${to} is ${code} (dev only, nothing was sent)`
-    )
-    return
-  }
-  const from = config.TWILIO_WHATSAPP_FROM.startsWith('whatsapp:')
-    ? config.TWILIO_WHATSAPP_FROM
-    : `whatsapp:${config.TWILIO_WHATSAPP_FROM}`
-  const body = new URLSearchParams({
-    From: from,
-    To: `whatsapp:${to}`,
-    Body: bodyFor(code, purpose)
-  })
-  const response = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${config.TWILIO_ACCOUNT_SID}/Messages.json`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${config.TWILIO_ACCOUNT_SID}:${config.TWILIO_AUTH_TOKEN}`).toString('base64')}`,
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body
-    }
-  )
-  if (!response.ok) {
-    throw new Error(`WhatsApp delivery failed (Twilio ${response.status})`)
-  }
-}
-
 export async function sendOtpCode(opts: {
-  channel: OtpChannel
   identifier: string
   code: string
   purpose: OtpPurpose
   log?: DeliveryLog
 }): Promise<void> {
-  const log = opts.log ?? consoleLog
-  if (opts.channel === 'EMAIL') {
-    await sendEmail(opts.identifier, opts.code, opts.purpose, log)
-    return
-  }
-  await sendWhatsApp(opts.identifier, opts.code, opts.purpose, log)
+  await sendEmail(opts.identifier, opts.code, opts.purpose, opts.log ?? consoleLog)
 }

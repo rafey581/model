@@ -249,7 +249,7 @@ If you outgrow free tier: next step is `t3.small` (~$15/mo) + RDS or keep Docker
 | CORS errors | `CLIENT_ORIGIN` doesn't exactly match the Vercel URL |
 | WS fails from Vercel | Vercel rewrite doesn't forward upgrade → use EC2-hosted frontend (§3) |
 | Admin cookie not sent | `NODE_ENV=production` not set (needs `secure: true` behind HTTPS) |
-| Verification codes not arriving | Neither SMTP nor Twilio is configured, so codes go to the server log — set `SMTP_HOST` and/or `WHATSAPP_PROVIDER=twilio` |
+| Verification codes not arriving | SMTP is not configured, so codes go to the server log — set `SMTP_HOST` (plus `SMTP_USER`/`SMTP_PASS`/`SMTP_FROM`) |
 | Anyone can register without a code | `AUTH_ALLOW_DIRECT_REGISTER` is `true` — set it to `false` in production |
 | DB down | `curl /api/ready` → 503; `docker compose ps`; check `pgdata` volume |
 | Migrations stale | `pnpm db:deploy` + `pnpm db:status` |

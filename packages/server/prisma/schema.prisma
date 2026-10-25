@@ -12,18 +12,15 @@ model User {
   // The name the player typed at signup. A display name, not an identifier: it may
   // repeat, and it is never used to look anyone up.
   name String?
-  // Email and phone are both captured at signup and are both unique - a second
-  // account may not reuse either. Either one can be the address the player chooses
-  // to verify over OTP (email or WhatsApp); the other stays on file unverified.
+  // Email is used as the game login identifier. Phone is required for identity
+  // verification on password recovery.
   email String? @unique
   phone String? @unique
   emailVerified Boolean @default(false)
   phoneVerified Boolean @default(false)
   dateOfBirth   DateTime?
   passwordHash String?
-  // How this account authenticates. Local accounts (the only kind now) are
-  // PASSWORD; the column is kept so operators can tell accounts apart if a second
-  // method is ever added.
+  // How this account authenticates. Local accounts are PASSWORD.
   authProvider String @default("PASSWORD")
   // TOTP second factor. Only ever populated for admin roles.
   totpSecret String?
@@ -31,6 +28,14 @@ model User {
   username     String                 @unique
   role         String                 @default("PLAYER")
   status       String                 @default("ACTIVE")
+  // Login security
+  failedLoginAttempts Int      @default(0)
+  lockedUntil         DateTime?
+  lastLoginIp         String?
+  lastLoginAt         DateTime?
+  // Player progression
+  level       Int      @default(1)
+  xp          Int      @default(0)
   jgCheck      Json?
   createdAt    DateTime               @default(now())
   updatedAt    DateTime               @updatedAt
@@ -51,15 +56,17 @@ model User {
   challengesMade     MatchChallenge[] @relation("ChallengeChallenger")
   challengesReceived MatchChallenge[] @relation("ChallengeTarget")
   challengesAnswered MatchChallenge[] @relation("ChallengeResponder")
-  // Invitations. Every account gets one unique, shareable code. `referredById`
-  // names the inviter who is owed the reward; `referralRewardedAt` is stamped the
-  // first time this player finishes a real match, which is what pays the inviter
-  // (once — the stamp is the idempotency key).
+  // Invitations. Every account gets one unique, shareable code.
   referralCode       String?   @unique
   referredById       String?
   referredBy         User?     @relation("UserReferrals", fields: [referredById], references: [id], onDelete: SetNull)
   referrals          User[]    @relation("UserReferrals")
   referralRewardedAt DateTime?
+  // Support chat
+  supportThread      SupportThread?
+  supportMessages    SupportMessage[]
+  assignedSupportThreads SupportThread[] @relation("SupportAssigned")
+  badges             UserBadge[]
 
   @@index([referredById])
 }
@@ -73,7 +80,7 @@ model User {
 model OtpChallenge {
   id         String   @id @default(cuid())
   identifier String
-  // EMAIL | WHATSAPP - which channel the code went out on.
+  // EMAIL is the only channel; the column is kept as a string for legacy rows.
   channel    String
   // SIGNUP | PASSWORD_RESET - what the code is allowed to unlock.
   purpose    String
@@ -399,4 +406,59 @@ model MatchChallenge {
   @@index([status, createdAt])
   @@index([targetUserId, status])
   @@index([challengerId, status])
+}
+
+/// Support thread between a player and admin
+model SupportThread {
+  id           String           @id @default(cuid())
+  userId       String           @unique
+  status       String           @default("OPEN") // OPEN | CLOSED
+  assignedToId String?
+  lastMessageAt DateTime        @default(now())
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignedTo   User?            @relation("SupportAssigned", fields: [assignedToId], references: [id], onDelete: SetNull)
+  messages     SupportMessage[]
+
+  @@index([status, lastMessageAt])
+}
+
+/// Support message
+model SupportMessage {
+  id        String        @id @default(cuid())
+  threadId  String
+  senderId  String
+  senderRole String       // USER | ADMIN
+  body      String        @db.Text
+  read      Boolean       @default(false)
+  createdAt DateTime      @default(now())
+  thread    SupportThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  sender    User          @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+}
+
+/// Badge definition
+model Badge {
+  id          String      @id @default(cuid())
+  code        String      @unique
+  name        String
+  description String?
+  icon        String?
+  rarity      String      @default("COMMON")
+  createdAt   DateTime    @default(now())
+  users       UserBadge[]
+}
+
+/// User earned badges
+model UserBadge {
+  id        String   @id @default(cuid())
+  userId    String
+  badgeId   String
+  earnedAt  DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badge     Badge    @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, badgeId])
 }

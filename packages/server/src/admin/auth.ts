@@ -1,13 +1,11 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import bcrypt from 'bcryptjs'
-import { SignJWT, jwtVerify } from 'jose'
 import { prisma } from '../db/index.js'
 import { adminAllowedIps, config } from '../config.js'
-import { verifyCode } from '../auth/totp.js'
 
 /**
- * Admin authentication: email + password + TOTP, on a route the public app never
+ * Admin authentication: email + password, on a route the public app never
  * links to, backed by a revocable server-side session.
  *
  * This is deliberately a different system from the player login rather than a
@@ -24,7 +22,7 @@ import { verifyCode } from '../auth/totp.js'
  *     is stored, so a database leak yields nothing that can be replayed.
  *  4. **Brute-force resistant.** Failures are counted per account *and* per IP with
  *     a lockout, so neither spraying one account from many IPs nor one IP against
- *     many accounts gets an unlimited number of TOTP guesses.
+ *     many accounts gets an unlimited number of password guesses.
  *  5. **Audited.** Every attempt, successful or not, lands in `AdminAction`.
  */
 
@@ -240,7 +238,6 @@ export interface AdminLoginResult {
   failure?: AdminLoginFailure
   retryAfterSec?: number
   user?: AdminSessionUser
-  requiresTotp?: boolean
 }
 
 async function audit(
@@ -268,14 +265,13 @@ async function audit(
  * Authenticates an admin.
  *
  * Every failure path returns the same `invalid` reason. Distinguishing "no such
- * account" from "wrong password" from "wrong TOTP" would let an attacker confirm
- * the first two, which is most of the work of an online attack.
+ * account" from "wrong password" would let an attacker confirm the first, which
+ * is most of the work of an online attack.
  */
 export async function loginAdmin(
   request: FastifyRequest,
   email: string,
-  password: string,
-  totp: string | undefined
+  password: string
 ): Promise<AdminLoginResult> {
   const ip = normalizeIp(request.ip)
   const key = email.trim().toLowerCase()
@@ -305,78 +301,13 @@ export async function loginAdmin(
     return { ok: false, failure: 'invalid' }
   }
 
-  // TOTP is required unless an operator has explicitly turned it off. When it is
-  // on but not yet enrolled, the caller is told to enrol rather than being let in
-  // with a password alone - otherwise a fresh admin account would silently be the
-  // weakest account on the platform.
-  if (config.ADMIN_REQUIRE_TOTP) {
-    if (!user.totpEnabled || !user.totpSecret) {
-      await audit(request, 'admin.login.totp_enrollment_required', key, {})
-      return { ok: false, failure: 'invalid', requiresTotp: true }
-    }
-    if (!totp || !verifyCode(user.totpSecret, totp)) {
-      recordFailure(key, byAccount, config.ADMIN_MAX_FAILED_ATTEMPTS)
-      recordFailure(ip, byIp, ipThreshold())
-      await audit(request, 'admin.login.failed', key, { reason: 'totp' })
-      return { ok: false, failure: 'invalid' }
-    }
-  }
-
+  // Password verified and the account is active: that is the whole check.
   clearFailures(key, byAccount)
   clearFailures(ip, byIp)
   await audit(request, 'admin.login.success', key, { userId: user.id })
   return {
     ok: true,
     user: { id: user.id, username: user.username, role: user.role, status: user.status }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// TOTP enrollment bootstrap
-// ---------------------------------------------------------------------------
-
-const ENROLL_TTL_SEC = 300
-
-/**
- * A password-verified but not yet second-factor-verified admin.
- *
- * This token is what makes "password in, TOTP out" safe. It is issued only after a
- * correct password, it lives five minutes, and it is signed over a *newly
- * generated* secret that exists nowhere in the database yet. So it can enable TOTP
- * and nothing else, and the stored secret is only ever written after a code for it
- * comes back - which is what proves the admin actually has the authenticator.
- */
-export interface EnrollGrant {
-  userId: string
-  email: string
-  secret: string
-}
-
-export async function signEnrollGrant(grant: EnrollGrant): Promise<string> {
-  return new SignJWT({
-    aud: 'admin-totp-enroll',
-    sub: grant.userId,
-    email: grant.email,
-    secret: grant.secret
-  })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setExpirationTime(`${ENROLL_TTL_SEC}s`)
-    .sign(Buffer.from(config.JWT_SECRET, 'utf8'))
-}
-
-export async function verifyEnrollGrant(token: string): Promise<EnrollGrant | null> {
-  try {
-    const { payload } = await jwtVerify(token, Buffer.from(config.JWT_SECRET, 'utf8'), {
-      audience: 'admin-totp-enroll'
-    })
-    const userId = payload.sub
-    const email = payload.email
-    const secret = payload.secret
-    if (typeof userId !== 'string' || typeof email !== 'string' || typeof secret !== 'string') return null
-    return { userId, email, secret }
-  } catch {
-    return null
   }
 }
 

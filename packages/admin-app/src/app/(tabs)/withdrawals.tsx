@@ -15,10 +15,11 @@ type Filter = '' | ReviewStatus
 /**
  * Payout review.
  *
- * A withdrawal left the player's balance when it was requested, so approving it
- * only marks the transfer done, while rejecting it puts the money back. The match
- * history is shown inline because a first payout is the moment a mismatched win
- * loss record is worth noticing.
+ * Nothing is debited when the player asks: the balance is only checked, then
+ * charged when an admin approves the payout (so the money leaves the wallet at
+ * the same moment the transfer is marked done). Rejecting therefore moves no
+ * money - it only closes the request. The match history is shown inline because
+ * a first payout is the moment a mismatched win/loss record is worth noticing.
  */
 export default function WithdrawalsScreen() {
   const [filter, setFilter] = useState<Filter>('PENDING')
@@ -52,7 +53,7 @@ export default function WithdrawalsScreen() {
   const reject = async (item: AdminWithdrawal): Promise<void> => {
     const result = await dialog.confirm({
       title: 'Reject payout?',
-      message: `${formatAmount(item.amount)} ${item.currency} will be returned to ${item.user.username}'s balance.`,
+      message: `The request will be closed and ${item.user.username} will be told why. No balance is returned because nothing was debited when it was requested.`,
       confirmLabel: 'Reject',
       destructive: true,
       withReason: true,
@@ -65,7 +66,7 @@ export default function WithdrawalsScreen() {
         method: 'POST',
         body: result.reason ? { reason: result.reason } : {}
       })
-      toast.show('Payout rejected and refunded', 'info')
+      toast.show('Payout rejected', 'info')
       state.reload()
     } catch (caught) {
       toast.show((caught as Error).message, 'error')
@@ -110,7 +111,7 @@ export default function WithdrawalsScreen() {
           <Row label="Amount" value={`${formatAmount(item.amount)} ${item.currency}`} />
           <Row label="Network" value={item.network} />
           <Row label="Send to" value={item.address} />
-          {item.deducted !== null ? <Row label="Returned on reject" value={`${formatAmount(item.deducted)} USDT`} /> : null}
+          {item.deducted !== null ? <Row label="Deducted on approval" value={`${formatAmount(item.deducted)} USDT`} /> : null}
           <Row label="Requested" value={formatDateTime(item.createdAt)} />
           {item.reviewedAt ? <Row label="Reviewed" value={`${formatDateTime(item.reviewedAt)}${item.reviewedBy ? ` by ${item.reviewedBy.username}` : ''}`} /> : null}
           {item.rejectReason ? <Row label="Reason" value={item.rejectReason} /> : null}

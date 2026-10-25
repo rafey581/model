@@ -3,7 +3,6 @@ import bcrypt from 'bcryptjs'
 import type { FastifyInstance } from 'fastify'
 import { prisma } from '../db/index.js'
 import { buildApp } from '../app.js'
-import { currentCode } from '../auth/totp.js'
 import { resetLockouts, revokeAllAdminSessions } from './auth.js'
 
 /**
@@ -79,59 +78,29 @@ afterAll(async () => {
 })
 
 /**
- * Obtains an admin session, whichever state the account is in, returning both the
- * cookie and the bearer token the response carries.
+ * Logs in over HTTP and returns both credentials the response carries.
  *
- * The account is unenrolled to begin with, so the first call walks the enrollment
- * bootstrap. Once a test has activated TOTP, the account is enrolled and a
- * password-only login is correctly refused - so the helper falls back to a full
- * password + TOTP login. Encoding both paths here is what keeps the session tests
- * independent of the order the login tests happened to run in.
+ * The mobile app has no cookie jar, so it keeps the `token` from the body and
+ * sends it as `Authorization: Bearer`; a browser would keep the cookie. Both are
+ * the same revocable session row.
  */
 async function loginForSession(
   email = ADMIN_EMAIL,
   password = ADMIN_PASSWORD
 ): Promise<{ cookie: string | null; token: string | null }> {
-  const start = await app.inject({ method: 'POST', url: '/api/admin/auth/login', payload: { email, password } })
-  if (start.statusCode === 200) {
-    const body = start.json() as {
-      data?: { requiresTotp?: boolean; enrollToken?: string; secret?: string; token?: string }
-    }
-    if (!body.data?.requiresTotp || !body.data.enrollToken || !body.data.secret) {
-      return { cookie: cookieFrom(start, 'admin_session'), token: body.data?.token ?? null }
-    }
-    const activate = await app.inject({
-      method: 'POST',
-      url: '/api/admin/auth/totp/activate',
-      payload: { enrollToken: body.data.enrollToken, totp: currentCode(body.data.secret) }
-    })
-    if (activate.statusCode !== 200) return { cookie: null, token: null }
-    return {
-      cookie: cookieFrom(activate, 'admin_session'),
-      token: (activate.json() as { data: { token?: string } }).data.token ?? null
-    }
-  }
-
-  // Already enrolled: log in with a live code.
-  const row = await prisma.user.findUnique({ where: { id: adminId }, select: { totpSecret: true } })
-  if (!row?.totpSecret) return { cookie: null, token: null }
-  const full = await app.inject({
-    method: 'POST',
-    url: '/api/admin/auth/login',
-    payload: { email, password, totp: currentCode(row.totpSecret) }
-  })
-  if (full.statusCode !== 200) return { cookie: null, token: null }
+  const res = await app.inject({ method: 'POST', url: '/api/admin/auth/login', payload: { email, password } })
+  if (res.statusCode !== 200) return { cookie: null, token: null }
   return {
-    cookie: cookieFrom(full, 'admin_session'),
-    token: (full.json() as { data: { token?: string } }).data.token ?? null
+    cookie: cookieFrom(res, 'admin_session'),
+    token: (res.json() as { data: { token?: string } }).data.token ?? null
   }
 }
 
-async function enrollAndLogin(email = ADMIN_EMAIL, password = ADMIN_PASSWORD): Promise<string | null> {
-  return (await loginForSession(email, password)).cookie
+async function adminCookie(): Promise<string | null> {
+  return (await loginForSession()).cookie
 }
 
-async function enrollAndLoginToken(): Promise<string | null> {
+async function adminToken(): Promise<string | null> {
   return (await loginForSession()).token
 }
 
@@ -153,82 +122,29 @@ describe('admin login', () => {
     expect(wrongPassword.json()).toEqual(noSuchAccount.json())
   })
 
-  it('does not hand out a session to a password-only admin - it demands TOTP enrollment', async () => {
+  it('issues a session for the correct email and password, with no second factor', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/admin/auth/login',
       payload: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD }
     })
     expect(res.statusCode).toBe(200)
-    const data = (res.json() as { data: Record<string, unknown> }).data
-    expect(data.requiresTotp).toBe(true)
-    // The critical assertion: no session cookie, only an enrollment grant.
-    expect(cookieFrom(res, 'admin_session')).toBeNull()
-    expect(data.enrollToken).toBeTruthy()
-    expect(data.secret).toBeTruthy()
-  })
-
-  it('refuses to activate with a wrong TOTP code', async () => {
-    const start = await app.inject({
-      method: 'POST',
-      url: '/api/admin/auth/login',
-      payload: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD }
-    })
-    const { enrollToken } = (start.json() as { data: { enrollToken: string } }).data
-    const bad = await app.inject({
-      method: 'POST',
-      url: '/api/admin/auth/totp/activate',
-      payload: { enrollToken, totp: '000000' }
-    })
-    expect(bad.statusCode).toBe(401)
-    // And nothing was committed: the admin is still unenrolled.
-    const row = await prisma.user.findUnique({ where: { id: adminId }, select: { totpEnabled: true } })
-    expect(row?.totpEnabled).toBe(false)
-  })
-
-  it('activates TOTP and issues a session in one step', async () => {
-    const start = await app.inject({
-      method: 'POST',
-      url: '/api/admin/auth/login',
-      payload: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD }
-    })
-    const { enrollToken, secret } = (start.json() as { data: { enrollToken: string; secret: string } }).data
-    const ok = await app.inject({
-      method: 'POST',
-      url: '/api/admin/auth/totp/activate',
-      payload: { enrollToken, totp: currentCode(secret) }
-    })
-    expect(ok.statusCode).toBe(200)
-    expect(cookieFrom(ok, 'admin_session')).toBeTruthy()
-    const row = await prisma.user.findUnique({ where: { id: adminId }, select: { totpEnabled: true, totpSecret: true } })
-    expect(row?.totpEnabled).toBe(true)
-    expect(row?.totpSecret).toBe(secret)
-  })
-
-  it('now requires the TOTP code on subsequent logins', async () => {
-    const noCode = await app.inject({
-      method: 'POST',
-      url: '/api/admin/auth/login',
-      payload: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD }
-    })
-    expect(noCode.statusCode).toBe(401)
-    const badCode = await app.inject({
-      method: 'POST',
-      url: '/api/admin/auth/login',
-      payload: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD, totp: '000000' }
-    })
-    expect(badCode.statusCode).toBe(401)
-  })
-
-  it('accepts the correct password and TOTP together', async () => {
-    const row = await prisma.user.findUnique({ where: { id: adminId }, select: { totpSecret: true } })
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/admin/auth/login',
-      payload: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD, totp: currentCode(row!.totpSecret!) }
-    })
-    expect(res.statusCode).toBe(200)
+    const body = res.json() as { data: { user?: { id: string }; token?: string } }
+    expect(body.data.user?.id).toBe(adminId)
+    expect(body.data.token).toBeTruthy()
     expect(cookieFrom(res, 'admin_session')).toBeTruthy()
+  })
+
+  it('has no authenticator enrollment endpoint left to call', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/auth/totp/activate',
+      payload: { enrollToken: 'x'.repeat(20), totp: '000000' }
+    })
+    // The route is gone. The global auth hook answers before the router's 404, so
+    // the exact code is 401 - what matters is that it does not hand out a session.
+    expect(res.statusCode).not.toBe(200)
+    expect(cookieFrom(res, 'admin_session')).toBeNull()
   })
 })
 
@@ -263,7 +179,7 @@ describe('session enforcement', () => {
   })
 
   it('admits a valid admin session', async () => {
-    const cookie = await enrollAndLogin()
+    const cookie = await adminCookie()
     expect(cookie).toBeTruthy()
     const res = await app.inject({
       method: 'GET',
@@ -298,11 +214,10 @@ describe('session enforcement', () => {
   })
 
   it('refuses the player login route for an admin account, even with the right password', async () => {
-    const row = await prisma.user.findUnique({ where: { id: adminId }, select: { totpSecret: true } })
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/login',
-      payload: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD, totp: currentCode(row!.totpSecret!) }
+      payload: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD }
     })
     expect(res.statusCode).toBe(403)
     expect((res.json() as { error: string }).error).toMatch(/admin sign-in/i)
@@ -310,7 +225,7 @@ describe('session enforcement', () => {
   })
 
   it('revokes a session immediately when the row is deleted', async () => {
-    const cookie = await enrollAndLogin()
+    const cookie = await adminCookie()
     expect(cookie).toBeTruthy()
     const before = await app.inject({ method: 'GET', url: '/api/admin/stats', headers: { cookie: cookie! } })
     expect(before.statusCode).toBe(200)
@@ -323,7 +238,7 @@ describe('session enforcement', () => {
   })
 
   it('ends a single session on logout', async () => {
-    const cookie = await enrollAndLogin()
+    const cookie = await adminCookie()
     const out = await app.inject({ method: 'POST', url: '/api/admin/auth/logout', headers: { cookie: cookie! } })
     expect(out.statusCode).toBe(200)
     const after = await app.inject({ method: 'GET', url: '/api/admin/stats', headers: { cookie: cookie! } })
@@ -331,7 +246,7 @@ describe('session enforcement', () => {
   })
 
   it('honours suspension immediately, without waiting for expiry', async () => {
-    const cookie = await enrollAndLogin()
+    const cookie = await adminCookie()
     const ok = await app.inject({ method: 'GET', url: '/api/admin/stats', headers: { cookie: cookie! } })
     expect(ok.statusCode).toBe(200)
 
@@ -348,7 +263,7 @@ describe('mobile admin app bearer auth', () => {
   // bearer token; these tests pin the two halves the app depends on: the token is
   // issued, and it is the same revocable session the cookie would have carried.
   it('issues a bearer token that the admin API accepts', async () => {
-    const token = await enrollAndLoginToken()
+    const token = await adminToken()
     expect(token).toBeTruthy()
     const res = await app.inject({
       method: 'GET',
@@ -359,7 +274,7 @@ describe('mobile admin app bearer auth', () => {
   })
 
   it('revokes the session when logout is called with the bearer token', async () => {
-    const token = await enrollAndLoginToken()
+    const token = await adminToken()
     expect(token).toBeTruthy()
     const before = await app.inject({
       method: 'GET',

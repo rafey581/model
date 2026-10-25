@@ -1,5 +1,5 @@
 /**
- * Operator tool: set an admin's password, and clear its TOTP enrolment.
+ * Operator tool: set an admin's password.
  *
  * Why this exists. `prisma/seed.ts` takes the password from `SEED_ADMIN_PASSWORD`
  * and the seed uses `update: {}`, so re-seeding cannot change a password that was
@@ -13,9 +13,6 @@
  *
  *   # generate a strong password instead of typing one
  *   pnpm exec tsx scripts/set-admin-password.ts --email admin@snooker.test --generate
- *
- *   # also clear an enrolled second factor (needed if the authenticator was lost)
- *   pnpm exec tsx scripts/set-admin-password.ts --email admin@snooker.test --generate --reset-totp
  *
  * Deliberately not a general "edit any user" tool: it refuses non-admin accounts
  * and refuses to touch roles or balances, so it cannot be repurposed into a way of
@@ -31,11 +28,10 @@ interface Args {
   email: string | null
   password: string | null
   generate: boolean
-  resetTotp: boolean
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { email: null, password: null, generate: false, resetTotp: false }
+  const args: Args = { email: null, password: null, generate: false }
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i]
     const next = (): string => {
@@ -49,7 +45,6 @@ function parseArgs(argv: string[]): Args {
     if (flag === '--email') args.email = next()
     else if (flag === '--password') args.password = next()
     else if (flag === '--generate') args.generate = true
-    else if (flag === '--reset-totp') args.resetTotp = true
     else if (flag === '--help' || flag === '-h') {
       printUsage()
       process.exit(0)
@@ -62,13 +57,11 @@ function parseArgs(argv: string[]): Args {
 
 function printUsage(): void {
   console.log(`
-Set an admin password (and optionally clear TOTP enrolment).
+Set an admin password.
 
   --email <address>     the admin account to update (required)
   --password <value>    the new password; omit to use --generate
   --generate            generate a strong password and print it once
-  --reset-totp          clear an enrolled second factor, forcing re-enrolment
-                        on next login. Use this if the authenticator is lost.
 `)
 }
 
@@ -119,13 +112,8 @@ async function main(): Promise<void> {
   const password = args.generate ? generatePassword() : (args.password as string)
   const passwordHash = bcrypt.hashSync(password, 10)
 
-  // TOTP is cleared only when asked. Resetting the password should not silently
-  // downgrade a second factor - those are two separate recoveries and an operator
-  // losing an authenticator needs to be a deliberate decision.
-  const totp = args.resetTotp ? { totpSecret: null, totpEnabled: false } : {}
-
   await prisma.$transaction(async (tx) => {
-    await tx.user.update({ where: { id: existing.id }, data: { passwordHash, ...totp } })
+    await tx.user.update({ where: { id: existing.id }, data: { passwordHash } })
     await tx.adminAction.create({
       data: {
         adminId: existing.id,
@@ -134,7 +122,6 @@ async function main(): Promise<void> {
         targetId: existing.id,
         meta: {
           email,
-          totpCleared: args.resetTotp,
           // Deliberately no password or hash in the audit trail.
           via: 'scripts/set-admin-password.ts'
         }
@@ -143,18 +130,11 @@ async function main(): Promise<void> {
   })
 
   console.log(`updated ${email} (${existing.username}, ${existing.role})`)
-  if (args.resetTotp) {
-    console.log('TOTP enrolment cleared - the next login will require enrolling again')
-  } else if (existing.totpEnabled) {
-    console.log('TOTP left in place - the next login needs email, password and code')
-  } else {
-    console.log('TOTP not enrolled - the next login will require enrolling a second factor')
-  }
   if (args.generate) {
     console.log('\n  password (shown once, not stored anywhere):')
     console.log(`  ${password}\n`)
   }
-  console.log('sign in at http://localhost:5173/admin')
+  console.log('sign in from the admin app with this email and password')
 
   await prisma.$disconnect()
 }

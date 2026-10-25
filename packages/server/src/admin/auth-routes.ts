@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../db/index.js'
-import { config } from '../config.js'
 import {
   ADMIN_COOKIE,
   createAdminSession,
@@ -11,11 +10,8 @@ import {
   resolveAdminSession,
   revokeAdminSession,
   revokeAllAdminSessions,
-  setAdminCookie,
-  signEnrollGrant,
-  verifyEnrollGrant
+  setAdminCookie
 } from './auth.js'
-import { generateSecret, otpauthUri, verifyCode } from '../auth/totp.js'
 import { authConfigWarnings } from '../auth/warnings.js'
 
 /**
@@ -28,45 +24,28 @@ import { authConfigWarnings } from '../auth/warnings.js'
 
 const loginSchema = z.object({
   email: z.string().email().max(320),
-  password: z.string().min(1).max(200),
-  totp: z.string().regex(/^\d{6}$/).optional()
-})
-
-const activateSchema = z.object({
-  enrollToken: z.string().min(10).max(4000),
-  totp: z.string().regex(/^\d{6}$/)
+  password: z.string().min(1).max(200)
 })
 
 export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<void> {
   /**
    * GET /api/admin/auth/config
    *
-   * Enough for the admin page to render itself: whether TOTP is mandatory, and
-   * whether the caller's IP is on the allowlist. Deliberately reveals nothing about
-   * which accounts exist.
+   * Enough for the admin app to render itself: whether the caller's IP is on the
+   * allowlist. Deliberately reveals nothing about which accounts exist.
    */
   app.get('/api/admin/auth/config', { config: { public: true } }, async (request, reply) => {
     if (!isIpAllowed(request.ip)) {
       return reply.code(403).send({ ok: false, error: 'not allowed from this address' })
     }
-    return reply.send({
-      ok: true,
-      data: {
-        requireTotp: config.ADMIN_REQUIRE_TOTP,
-        totpEnrolled: false,
-        ipAllowed: true
-      }
-    })
+    return reply.send({ ok: true, data: { ipAllowed: true } })
   })
 
   /**
    * POST /api/admin/auth/login
    *
-   * Three outcomes, deliberately hard to tell apart from the outside:
-   *   - success            -> a session cookie
-   *   - password ok but no
-   *     TOTP enrolled yet   -> an enrollment grant (requiresTotp)
-   *   - anything else       -> "invalid credentials"
+   * Email + password, and nothing else. Every failure is reported as the same
+   * "invalid credentials" so the endpoint cannot be used to enumerate accounts.
    */
   app.post('/api/admin/auth/login', { config: { public: true } }, async (request, reply) => {
     const parsed = loginSchema.safeParse(request.body)
@@ -74,9 +53,9 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
       // Not audited: a malformed body is noise, not an attack worth a row.
       return reply.code(400).send({ ok: false, error: 'invalid request' })
     }
-    const { email, password, totp } = parsed.data
+    const { email, password } = parsed.data
 
-    const result = await loginAdmin(request, email, password, totp)
+    const result = await loginAdmin(request, email, password)
 
     if (result.ok && result.user) {
       const session = await createAdminSession(result.user.id, request.ip, request.headers['user-agent'])
@@ -90,31 +69,6 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
       })
     }
 
-    if (result.requiresTotp) {
-      // `loginAdmin` reached this branch only after a correct password, so
-      // re-resolving the id here cannot leak account existence: an unknown address
-      // or a wrong password never gets here. The secret is NOT written to the user
-      // row yet - activation is what commits it.
-      const user = await prisma.user.findFirst({
-        where: { email: email.trim().toLowerCase(), role: { in: ['ADMIN', 'SUPERADMIN'] } },
-        select: { id: true }
-      })
-      if (!user) return reply.code(401).send({ ok: false, error: 'invalid credentials' })
-
-      const normalizedEmail = email.trim().toLowerCase()
-      const secret = generateSecret()
-      const real = await signEnrollGrant({ userId: user.id, email: normalizedEmail, secret })
-      return reply.send({
-        ok: true,
-        data: {
-          requiresTotp: true,
-          enrollToken: real,
-          secret,
-          otpauth: otpauthUri(secret, normalizedEmail, 'Snooker Arena Admin')
-        }
-      })
-    }
-
     if (result.failure === 'locked') {
       return reply
         .code(429)
@@ -125,56 +79,6 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
       return reply.code(403).send({ ok: false, error: 'not allowed from this address' })
     }
     return reply.code(401).send({ ok: false, error: 'invalid credentials' })
-  })
-
-  /**
-   * POST /api/admin/auth/totp/activate
-   *
-   * Commits the enrollment: proves the caller holds the authenticator by returning
-   * a live code, then enables TOTP and issues the session in the same request. So
-   * the admin is never left in a half-enrolled state.
-   */
-  app.post('/api/admin/auth/totp/activate', { config: { public: true } }, async (request, reply) => {
-    const parsed = activateSchema.safeParse(request.body)
-    if (!parsed.success) return reply.code(400).send({ ok: false, error: 'invalid request' })
-    const { enrollToken, totp } = parsed.data
-
-    const grant = await verifyEnrollGrant(enrollToken)
-    if (!grant) return reply.code(401).send({ ok: false, error: 'invalid credentials' })
-
-    if (!verifyCode(grant.secret, totp)) {
-      return reply.code(401).send({ ok: false, error: 'invalid credentials' })
-    }
-
-    const user = await prisma.user.findUnique({ where: { id: grant.userId } })
-    if (!user || user.role !== 'ADMIN' && user.role !== 'SUPERADMIN' || user.status !== 'ACTIVE') {
-      return reply.code(403).send({ ok: false, error: 'forbidden' })
-    }
-
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { totpSecret: grant.secret, totpEnabled: true }
-    })
-    await prisma.adminAction.create({
-      data: {
-        adminId: user.id,
-        action: 'admin.totp.enrolled',
-        targetType: 'AdminAuth',
-        targetId: user.id,
-        meta: { ip: request.ip }
-      }
-    })
-
-    const session = await createAdminSession(user.id, request.ip, request.headers['user-agent'])
-    setAdminCookie(reply, session.token)
-    return reply.send({
-      ok: true,
-      data: {
-        user: { id: user.id, username: user.username, role: user.role, status: user.status },
-        expiresAt: session.expiresAt,
-        token: session.token
-      }
-    })
   })
 
   /** GET /api/admin/auth/session - who am I, and is this session still good. */
@@ -203,7 +107,7 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
    * The panic button. Every admin session for the account is destroyed, which is
    * what you need if a laptop was stolen and you cannot tell which session was live.
    */
-  app.post('/api/admin/auth/logout-all', { config: { public: true, admin: true } }, async (request, reply) => {
+  app.post('/api/admin/auth/logout-all', { config: { public: true, admin: true }, preHandler: requireAdminSession }, async (request, reply) => {
     const user = request.authUser
     if (!user) return reply.code(401).send({ ok: false, error: 'unauthorized' })
     await revokeAllAdminSessions(user.id)
@@ -224,8 +128,8 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
    * GET /api/admin/auth/warnings
    *
    * Operator-facing misconfiguration notices, shown on the admin screen. An empty
-   * IP allowlist or a disabled second factor is the kind of thing that gets set
-   * once during setup and then forgotten for the life of the deployment.
+   * IP allowlist is the kind of thing that gets set once during setup and then
+   * forgotten for the life of the deployment.
    */
   app.get('/api/admin/auth/warnings', { config: { public: true, admin: true }, preHandler: requireAdminSession }, async (_request, reply) => {
     return reply.send({ ok: true, data: { warnings: authConfigWarnings() } })

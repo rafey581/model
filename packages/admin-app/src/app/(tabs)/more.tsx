@@ -12,7 +12,7 @@ import { colors, radius, spacing } from '@/theme'
  *
  * Matches, settings, fraud and the audit log are occasional visits, so they live
  * here rather than competing for thumb space with the money screens. Sign-out is
- * confirmed because losing the authenticator prompt mid-review is annoying.
+ * confirmed because an accidental tap mid-review costs the whole session.
  */
 type IconName = keyof typeof Ionicons.glyphMap
 
@@ -31,7 +31,7 @@ export default function MoreScreen() {
   const confirmSignOut = async (): Promise<void> => {
     const result = await dialog.confirm({
       title: 'Sign out?',
-      message: 'You will need your password and authenticator code to sign back in.',
+      message: 'You will need your email and password to sign back in.',
       confirmLabel: 'Sign out',
       destructive: true
     })
