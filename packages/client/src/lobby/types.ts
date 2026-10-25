@@ -1,4 +1,4 @@
-import type { MatchFormat, PracticeAiLevel } from '@snooker/shared'
+import type { BadgeDef, MatchFormat, PracticeAiLevel, RankDef } from '@snooker/shared'
 
 /** Screens owned entirely by the new lobby view (not AppScreen). */
 export type LobbyView =
@@ -34,6 +34,20 @@ export interface LobbyProfileStats {
   highestBreak: number
 }
 
+/** GET /api/progress/me */
+export interface LobbyProgress {
+  level: number
+  totalXp: number
+  levelXp: number
+  levelXpNeeded: number
+  percent: number
+  rank: RankDef
+  nextRank: RankDef | null
+  winStreak: number
+  bestWinStreak: number
+  badges: Array<BadgeDef & { earnedAt: string | null }>
+}
+
 export interface LobbyHistoryMatch {
   id: string
   format: string
@@ -59,6 +73,8 @@ export interface LobbyBridge {
   refreshWallet: () => Promise<void>
   fetchProfileStats: () => Promise<LobbyProfileStats | null>
   fetchMatchHistory: () => Promise<LobbyHistoryMatch[]>
+  /** Level, rank, XP and badges; null when it cannot be loaded. */
+  fetchProgress: () => Promise<LobbyProgress | null>
   startPractice: (aiLevel: PracticeAiLevel) => Promise<void>
   /**
    * Opens an online table as a challenge: a public broadcast anyone may accept

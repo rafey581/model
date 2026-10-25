@@ -16,7 +16,6 @@ import { PRACTICE_DAILY_FREE_LIMIT } from '@snooker/shared'
 import type { PracticeAiLevel } from '@snooker/shared'
 import { isMatchChatPhrase, MATCH_CHAT_COOLDOWN_MS } from '@snooker/shared'
 import type { Prisma } from '@prisma/client'
-import { awardMatchXp } from '../progress/service.js'
 
 export interface GameServerContext {
   io: Server

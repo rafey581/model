@@ -13,7 +13,7 @@ import { frameForHud } from './game/hudFrame.js'
 import { createShotTimer } from './game/shotTimerView.js'
 import type { TurnTiming } from './game/shotTimer.js'
 import type { ShotInput, ShotPlayback } from '@snooker/shared'
-import { APP_TITLE, STAKE_TIERS, COLOR_VALUES, MATCH_CHAT_PHRASES, MATCH_CHAT_MAX_LOG, matchChatPhraseText } from '@snooker/shared'
+import { APP_TITLE, STAKE_TIERS, COLOR_VALUES, MATCH_CHAT_PHRASES, MATCH_CHAT_MAX_LOG, matchChatPhraseText, xpForMatch } from '@snooker/shared'
 import type { MatchFormat, PracticeAiLevel } from '@snooker/shared'
 import { createAvatarBadge } from './game/avatar.js'
 import {
@@ -46,6 +46,8 @@ import type { PlaybackBall } from './game/playback.js'
 import { rateShot, type Highlight } from './game/highlight.js'
 import { playRecapWipe } from './game/recapWipe.js'
 import { fillBalance } from './lobby/casino.js'
+import { xpBar } from './lobby/progress.js'
+import type { LobbyProgress } from './lobby/types.js'
 import { renderAuthScreen } from './auth.js'
 import {
   confirmPlacement,
@@ -309,6 +311,8 @@ let tournamentTimer: number | undefined
  * DOM without `destroy()` would leave one set behind per home ↔ tournaments round trip.
  */
 let lobbySession: LobbySession | null = null
+/** Lifetime XP as last read from the server; the end screen waits for it to move. */
+let lastKnownTotalXp: number | null = null
 let maintenanceMode = false
 let maintenanceEl: HTMLElement | null = null
 let opponentGone = false
@@ -1881,11 +1885,51 @@ async function finishMatch(winnerSeat: number, reason?: string): Promise<void> {
       actions.appendChild(rematchBtn)
     }
   }
+  if (!watching) box.appendChild(endScreenXp(xpForMatch({ won: iWon, practice: activeMatchIsPractice, reason })))
+
   const backBtn = el('button', undefined, activeTournamentId ? 'Back to tournament' : 'Back to home')
   backBtn.onclick = () => leaveToLobby()
   actions.appendChild(backBtn)
   box.appendChild(actions)
   showOverlay(box)
+}
+
+async function fetchProgress(): Promise<LobbyProgress | null> {
+  try {
+    const progress = await api<LobbyProgress>('/progress/me')
+    lastKnownTotalXp = progress.totalXp
+    return progress
+  } catch {
+    return null
+  }
+}
+
+/**
+ * "+50 XP" and the level bar on the result card. The gain is the shared rule applied
+ * to what the client saw; the bar is the server's, read once the settlement has landed
+ * (it can trail the match:end message by a moment, so the read is retried briefly).
+ */
+function endScreenXp(gain: number): HTMLElement {
+  const wrap = el('div', 'end-xp')
+  const row = el('div', 'end-xp__row')
+  const level = el('span', undefined, '')
+  row.append(el('span', 'end-xp__gain', `+${gain} XP`), level)
+  const bar = xpBar(0)
+  wrap.append(row, bar)
+  const before = lastKnownTotalXp
+  void (async () => {
+    let progress: LobbyProgress | null = null
+    for (let attempt = 0; attempt < 4; attempt++) {
+      progress = await fetchProgress()
+      if (!progress || before === null || gain === 0 || progress.totalXp >= before + gain) break
+      await new Promise((resolve) => setTimeout(resolve, 700))
+    }
+    if (!progress || !wrap.isConnected) return
+    level.textContent = `Level ${progress.level} · ${progress.rank.name}`
+    level.style.color = progress.rank.color
+    bar.replaceWith(xpBar(progress.percent))
+  })()
+  return wrap
 }
 
 /**
@@ -1997,6 +2041,7 @@ function createLobbyBridge(): LobbyBridge {
         return []
       }
     },
+    fetchProgress,
     startPractice: async (aiLevel) => {
       practiceDifficulty = aiLevel
       if (!USE_LOADING_SCREEN) {
@@ -4139,6 +4184,7 @@ function handleSocketEvents(socket: Socket): void {
     if (panelOpen) panelEl?.classList.remove('open')
     toast(`${n.title}${n.body && n.body !== n.title ? ' — ' + n.body : ''}`)
     refreshBell()
+    if (n.kind === 'LEVEL_UP' || n.kind === 'RANK_UP' || n.kind === 'BADGE_EARNED') void lobbySession?.refreshProgress()
   })
 }
 

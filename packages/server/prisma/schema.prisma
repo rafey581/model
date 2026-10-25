@@ -33,9 +33,12 @@ model User {
   lockedUntil         DateTime?
   lastLoginIp         String?
   lastLoginAt         DateTime?
-  // Player progression
-  level       Int      @default(1)
-  xp          Int      @default(0)
+  // Player progression. `xp` is lifetime total XP; `level` is derived from it
+  // (@snooker/shared progression) and stored so leaderboards can sort on it.
+  level         Int      @default(1)
+  xp            Int      @default(0)
+  winStreak     Int      @default(0)
+  bestWinStreak Int      @default(0)
   jgCheck      Json?
   createdAt    DateTime               @default(now())
   updatedAt    DateTime               @updatedAt
@@ -69,6 +72,7 @@ model User {
   badges             UserBadge[]
 
   @@index([referredById])
+  @@index([level, xp])
 }
 
 /// One in-flight OTP, keyed on the address being verified.
@@ -461,4 +465,5 @@ model UserBadge {
   badge     Badge    @relation(fields: [badgeId], references: [id], onDelete: Cascade)
 
   @@unique([userId, badgeId])
+  @@index([userId])
 }

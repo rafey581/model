@@ -2,7 +2,8 @@ import { APP_TITLE } from '@snooker/shared'
 import './casino.css'
 import { el } from './dom.js'
 import { ICONS } from './icons.js'
-import type { LobbyBridge, LobbyHistoryMatch, LobbyView } from './types.js'
+import { fillLevelChip } from './progress.js'
+import type { LobbyBridge, LobbyHistoryMatch, LobbyProgress, LobbyView } from './types.js'
 
 /**
  * The desktop lobby: a sidebar, a top bar, and the home page laid out like a games hall.
@@ -205,7 +206,8 @@ function activeDestination(view: LobbyView): CasinoDestination {
 export function createCasinoShell(
   bridge: LobbyBridge,
   view: LobbyView,
-  handlers: CasinoShellHandlers
+  handlers: CasinoShellHandlers,
+  progress: LobbyProgress | null = null
 ): { root: HTMLElement; main: HTMLElement } {
   const root = el('div', 'gl-root cx-root')
   root.appendChild(el('div', 'cx-backdrop'))
@@ -313,11 +315,9 @@ export function createCasinoShell(
   // On a phone the balance sits under the name, in place of the separate wallet pill.
   const balanceLine = el('span', 'cx-profile__balance')
   fillBalance(balanceLine, bridge.formatCash(bridge.walletBalance))
-  who.append(
-    el('span', 'cx-profile__name', bridge.username),
-    el('span', 'cx-profile__level', 'Player'),
-    balanceLine
-  )
+  const levelChip = el('span', 'cx-profile__level')
+  fillLevelChip(levelChip, progress)
+  who.append(el('span', 'cx-profile__name', bridge.username), levelChip, balanceLine)
   profile.append(avatar, who)
   profile.onclick = handlers.onProfile
 

@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 import { MatchError, assertNotBot } from '../matches/service.js'
 import { TOURNAMENT_SIZE } from '@snooker/shared'
 import { notify } from '../notifications/service.js'
+import { applyTournamentChampion, notifyProgress } from '../progress/service.js'
 
 export interface BracketSlot {
   seeds: number[]
@@ -155,6 +156,11 @@ export async function advanceTournamentAfterMatch(matchId: string, winnerUserId:
         'You are the champion!',
         `${tournament.name} complete — ${tournament.players.length} players, you took the crown.`
       )
+      try {
+        notifyProgress(await applyTournamentChampion(championPlayer.userId))
+      } catch {
+        // The title is already recorded; a missed XP bonus must not undo the bracket.
+      }
     }
   }
 }

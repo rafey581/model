@@ -8,6 +8,8 @@ import { notify } from '../notifications/service.js'
 import { config } from '../config.js'
 import { rewardReferralForFirstMatch } from '../referrals/service.js'
 import type { ReferralReward } from '../referrals/service.js'
+import { applyMatchProgress, notifyProgress } from '../progress/service.js'
+import type { ProgressOutcome } from '../progress/service.js'
 
 export const PLATFORM_USER_EMAIL = 'platform@snooker.internal'
 export const BOT_USER_EMAIL = 'bot@snooker.internal'
@@ -159,7 +161,15 @@ export interface Settlement {
 
 export async function settleMatch(settlement: Settlement): Promise<void> {
   const outcome = await runInTransaction(
-    async (tx): Promise<{ winnerId: string; loserId: string; stake: number; prize: number; reason: string; referralRewards: ReferralReward[] } | null> => {
+    async (tx): Promise<{
+      winnerId: string
+      loserId: string
+      stake: number
+      prize: number
+      reason: string
+      referralRewards: ReferralReward[]
+      progress: Array<ProgressOutcome | null>
+    } | null> => {
       const match = await tx.match.findUnique({ where: { id: settlement.matchId }, include: { players: true } })
       if (!match) throw new MatchError('match not found')
       if (match.status === 'PRIZE_SETTLED' || match.status === 'REFUNDED') return null
@@ -224,7 +234,14 @@ export async function settleMatch(settlement: Settlement): Promise<void> {
           if (reward) referralRewards.push(reward)
         }
       }
-      return { winnerId: winner.userId, loserId: loser.userId, stake, prize, reason: settlement.reason, referralRewards }
+
+      // Levels, ranks and badges: written with the result so they award exactly once.
+      const practice = match.matchType === 'PRACTICE'
+      const progress = [
+        await applyMatchProgress(tx, { userId: winner.userId, won: true, practice, reason: settlement.reason, aiLevel: match.aiLevel }),
+        await applyMatchProgress(tx, { userId: loser.userId, won: false, practice, reason: settlement.reason, aiLevel: match.aiLevel })
+      ]
+      return { winnerId: winner.userId, loserId: loser.userId, stake, prize, reason: settlement.reason, referralRewards, progress }
     }
   )
   if (outcome) {
@@ -246,6 +263,7 @@ export async function settleMatch(settlement: Settlement): Promise<void> {
       void notify(outcome.winnerId, 'MATCH_RESULT', 'You won the match', `vs ${loserName} — ${how}`)
       void notify(outcome.loserId, 'MATCH_RESULT', 'You lost the match', `vs ${winnerName} — ${how}`)
     }
+    for (const progress of outcome.progress) notifyProgress(progress)
     for (const reward of outcome.referralRewards) {
       void notify(
         reward.referrerId,

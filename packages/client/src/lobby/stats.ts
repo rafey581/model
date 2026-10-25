@@ -1,7 +1,8 @@
 import { STATS_COPY } from './content.js'
 import { accentHeadline, el } from './dom.js'
 import { brandText } from './shell.js'
-import type { LobbyBridge, LobbyHistoryMatch, LobbyProfileStats, StatsMode } from './types.js'
+import { renderProgressPanel } from './progress.js'
+import type { LobbyBridge, LobbyHistoryMatch, LobbyProfileStats, LobbyProgress, StatsMode } from './types.js'
 
 const RECORD_KEYS = [
   ['Completed', 'matches'],
@@ -27,7 +28,8 @@ export function renderStatistics(
   mode: StatsMode,
   profile: LobbyProfileStats | null,
   history: LobbyHistoryMatch[],
-  actions: StatsActions
+  actions: StatsActions,
+  progress: LobbyProgress | null = null
 ): HTMLElement {
   const screen = el('div', 'gl-screen')
   screen.dataset.view = 'statistics'
@@ -55,6 +57,7 @@ export function renderStatistics(
   )
   head.append(left, score)
   screen.appendChild(head)
+  screen.appendChild(renderProgressPanel(progress))
 
   const sw = el('div', 'gl-switch')
   sw.setAttribute('role', 'tablist')

@@ -15,11 +15,13 @@ import { createShell, syncTabIndicator, tabToView, viewToTab } from './shell.js'
 import { createCasinoShell, renderCasinoHome, wantsCasinoLobby, type CasinoDestination } from './casino.js'
 import { defaultSetupState, renderSetup } from './setup.js'
 import { renderStatistics } from './stats.js'
+import { fillLevelChip } from './progress.js'
 import type {
   InfoSection,
   LobbyBridge,
   LobbyHistoryMatch,
   LobbyProfileStats,
+  LobbyProgress,
   LobbyTab,
   LobbyView,
   PlayMode,
@@ -29,6 +31,8 @@ import type {
 
 export interface LobbySession {
   destroy: () => void
+  /** Re-reads level, rank and badges (after a level-up or a new badge arrives). */
+  refreshProgress: () => Promise<void>
 }
 
 interface SessionState {
@@ -38,6 +42,7 @@ interface SessionState {
   statsMode: StatsMode
   profile: LobbyProfileStats | null
   history: LobbyHistoryMatch[]
+  progress: LobbyProgress | null
   statsStatus: string
   starting: boolean
   deposit: DepositViewData | null
@@ -59,6 +64,7 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
     statsMode: 'online',
     profile: null,
     history: [],
+    progress: null,
     statsStatus: HOME_COPY.statsEmpty,
     starting: false,
     deposit: null,
@@ -156,7 +162,7 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
           state.view = 'settings'
           paint()
         }
-      })
+      }, state.progress)
       root = shell.root
       host.appendChild(root)
       shell.main.appendChild(buildScreen())
@@ -303,7 +309,7 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
           state.statsMode = mode
           paint()
         }
-      })
+      }, state.progress)
     }
     if (state.view === 'info') {
       return renderInfo(state.infoSection, {
@@ -445,9 +451,14 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
 
   const loadStats = async (): Promise<void> => {
     try {
-      const [profile, history] = await Promise.all([bridge.fetchProfileStats(), bridge.fetchMatchHistory()])
+      const [profile, history, progress] = await Promise.all([
+        bridge.fetchProfileStats(),
+        bridge.fetchMatchHistory(),
+        bridge.fetchProgress()
+      ])
       state.profile = profile
       state.history = history
+      state.progress = progress
       state.statsStatus =
         profile && profile.matches > 0 ? `${profile.wins}W · ${profile.losses}L` : HOME_COPY.statsEmpty
     } catch {
@@ -524,7 +535,20 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
   })
   paint()
 
+  const refreshProgress = async (): Promise<void> => {
+    state.progress = await bridge.fetchProgress()
+    if (!root || !host.contains(root)) return
+    // Repainting would throw away a half-filled form, so only My Games (which draws the
+    // whole panel) is repainted; elsewhere the chip in the top bar is patched in place.
+    if (state.view === 'statistics') {
+      paint()
+      return
+    }
+    for (const node of root.querySelectorAll<HTMLElement>('.cx-profile__level')) fillLevelChip(node, state.progress)
+  }
+
   return {
+    refreshProgress,
     destroy: () => {
       if (escHandler) document.removeEventListener('keydown', escHandler)
       if (fullscreenHandler) document.removeEventListener('fullscreenchange', fullscreenHandler)

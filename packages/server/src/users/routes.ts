@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
+import { summarizeProgress } from '@snooker/shared'
 import { prisma } from '../db/index.js'
 import { getUserStats, getLeaderboard, type LeaderboardPeriod } from './stats.js'
 
@@ -14,13 +15,16 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         username: true,
         createdAt: true,
         profile: true,
+        xp: true,
         wallet: { select: { available: true } }
       }
     })
     if (!user) return reply.code(404).send({ ok: false, error: 'user not found' })
     const stats = await getUserStats(user.id)
     const available = Number(user.wallet?.available ?? 0)
-    return reply.send({ ok: true, data: { user: { ...user, wallet: { available } }, stats } })
+    const { xp, ...rest } = user
+    const { level, rank } = summarizeProgress(xp)
+    return reply.send({ ok: true, data: { user: { ...rest, wallet: { available } }, stats, progress: { level, rank } } })
   })
 
   app.get('/api/leaderboard', async (request, reply) => {
