@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native'
+import { Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native'
 import { api } from '@/lib/api'
 import { useAsync } from '@/hooks/useAsync'
+import { usePendingCounts } from '@/hooks/usePendingCounts'
 import { formatAmount, formatDateTime, shortId } from '@/lib/format'
 import type { AdminDeposit, AdminDepositsPayload, ReviewStatus } from '@/lib/types'
 import { Button, Card, Empty, ErrorState, Loading, Pill, Row, Screen, ScreenTitle, SectionTitle } from '@/components/ui'
@@ -29,6 +30,7 @@ export default function DepositsScreen() {
   )
   const dialog = useDialog()
   const toast = useToast()
+  const pending = usePendingCounts()
 
   const approve = async (item: AdminDeposit): Promise<void> => {
     const result = await dialog.confirm({
@@ -42,6 +44,7 @@ export default function DepositsScreen() {
       const approved = await api<{ credited: number }>(`/admin/deposits/${item.id}/approve`, { method: 'POST', body: {} })
       toast.show(`Credited ${formatAmount(approved.credited)} USDT to ${item.user.username}`, 'success')
       state.reload()
+      pending.refresh()
     } catch (caught) {
       toast.show((caught as Error).message, 'error')
     } finally {
@@ -67,6 +70,7 @@ export default function DepositsScreen() {
       })
       toast.show('Deposit rejected', 'info')
       state.reload()
+      pending.refresh()
     } catch (caught) {
       toast.show((caught as Error).message, 'error')
     } finally {
@@ -109,8 +113,8 @@ export default function DepositsScreen() {
 
           <Row label="Amount" value={`${formatAmount(item.amount)} ${item.currency}`} />
           <Row label="Network" value={item.network} />
-          <Row label="Address" value={shortId(item.address, 14)} />
-          {item.txHash ? <Row label="Tx hash" value={shortId(item.txHash, 18)} /> : null}
+          <Row label="Paid to" value={item.address} />
+          {item.txHash ? <Row label="Tx id" value={item.txHash} valueStyle={styles.mono} /> : null}
           {item.creditedAmount !== null ? <Row label="Credited" value={`${formatAmount(item.creditedAmount)} USDT`} /> : null}
           <Row label="Submitted" value={formatDateTime(item.createdAt)} />
           {item.reviewedAt ? <Row label="Reviewed" value={`${formatDateTime(item.reviewedAt)}${item.reviewedBy ? ` by ${item.reviewedBy.username}` : ''}`} /> : null}
@@ -151,8 +155,9 @@ export default function DepositsScreen() {
       <SectionTitle>Notes</SectionTitle>
       <Card>
         <Text style={styles.notes}>
-          The screenshot is the player's proof of transfer. Cross-check the amount against the amount you
-          see in the wallet before approving.
+          The screenshot is the player's proof of transfer. Look the tx id up on the network explorer (press and
+          hold it to copy) and check the amount and the receiving address match before approving.
+          A tx id can only be submitted once.
         </Text>
       </Card>
     </Screen>
@@ -173,5 +178,6 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm
   },
   actions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
-  notes: { color: colors.muted, fontSize: 12, lineHeight: 18 }
+  notes: { color: colors.muted, fontSize: 12, lineHeight: 18 },
+  mono: { fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }), fontSize: 12 }
 })

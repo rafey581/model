@@ -114,10 +114,15 @@ function round8(value: number): number {
 }
 
 export async function checkLedgerInvariance(): Promise<LedgerInvarianceResult> {
-  const [wallets, txns] = await Promise.all([
-    prisma.wallet.findMany({ select: { userId: true, available: true, locked: true } }),
-    prisma.walletTransaction.findMany({ select: { userId: true, balanceBefore: true, balanceAfter: true, meta: true } })
-  ])
+  // Both reads come from one snapshot. Read separately, a match or payout committing
+  // between them shows up as a false violation (wallet moved, entry not yet seen).
+  const [wallets, txns] = await prisma.$transaction(
+    [
+      prisma.wallet.findMany({ select: { userId: true, available: true, locked: true } }),
+      prisma.walletTransaction.findMany({ select: { userId: true, balanceBefore: true, balanceAfter: true, meta: true } })
+    ],
+    { isolationLevel: 'RepeatableRead' }
+  )
   const deltas = new Map<string, number>()
   for (const t of txns) {
     const deltaAvailable = t.balanceAfter.toNumber() - t.balanceBefore.toNumber()

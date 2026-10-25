@@ -2,12 +2,14 @@ import { Tabs } from 'expo-router/js-tabs'
 import { Ionicons } from '@expo/vector-icons'
 import type { ColorValue } from 'react-native'
 import { colors } from '@/theme'
+import { badge, usePendingCounts } from '@/hooks/usePendingCounts'
 
 /**
- * The five things an admin does most, one tap apart.
+ * The things an admin does most, one tap apart.
  *
- * Deposits and withdrawals are their own tabs because approving money is the job;
- * everything rarer (matches, settings, fraud, audit, sign out) lives behind More.
+ * Deposits, withdrawals and support are their own tabs because money and people
+ * waiting are the job, and each carries a badge with what is waiting; everything
+ * rarer (matches, settings, fraud, audit, sign out) lives behind More.
  */
 type IconName = keyof typeof Ionicons.glyphMap
 
@@ -17,6 +19,8 @@ const icon = (name: IconName, focusedName: IconName) =>
   }
 
 export default function TabsLayout() {
+  const { counts } = usePendingCounts()
+  const badgeStyle = { backgroundColor: colors.accent, color: '#10141c', fontSize: 10, fontWeight: '700' as const }
   return (
     <Tabs
       screenOptions={{
@@ -32,15 +36,34 @@ export default function TabsLayout() {
     >
       <Tabs.Screen
         name="index"
-        options={{ title: 'Dashboard', tabBarIcon: icon('grid-outline', 'grid') }}
+        options={{ title: 'Home', tabBarIcon: icon('grid-outline', 'grid') }}
       />
       <Tabs.Screen
         name="deposits"
-        options={{ title: 'Deposits', tabBarIcon: icon('arrow-down-circle-outline', 'arrow-down-circle') }}
+        options={{
+          title: 'Deposits',
+          tabBarIcon: icon('arrow-down-circle-outline', 'arrow-down-circle'),
+          tabBarBadge: badge(counts.deposits),
+          tabBarBadgeStyle: badgeStyle
+        }}
       />
       <Tabs.Screen
         name="withdrawals"
-        options={{ title: 'Withdrawals', tabBarIcon: icon('arrow-up-circle-outline', 'arrow-up-circle') }}
+        options={{
+          title: 'Payouts',
+          tabBarIcon: icon('arrow-up-circle-outline', 'arrow-up-circle'),
+          tabBarBadge: badge(counts.withdrawals),
+          tabBarBadgeStyle: badgeStyle
+        }}
+      />
+      <Tabs.Screen
+        name="support"
+        options={{
+          title: 'Support',
+          tabBarIcon: icon('chatbubbles-outline', 'chatbubbles'),
+          tabBarBadge: badge(counts.support),
+          tabBarBadgeStyle: badgeStyle
+        }}
       />
       <Tabs.Screen
         name="users"

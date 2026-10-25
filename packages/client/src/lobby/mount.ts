@@ -143,6 +143,9 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
         state.view = 'settings'
         paint()
         return
+      case 'support':
+        bridge.openSupport()
+        return
     }
   }
 
@@ -344,8 +347,8 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
           paint()
         },
         onSubmitted: () => {
-          void bridge.refreshWallet()
-          void loadWithdrawView().then(paint)
+          // Both before the repaint: the balance shown must already include the hold.
+          void Promise.all([bridge.refreshWallet(), loadWithdrawView()]).then(paint)
         },
         toast: (message, kind) => bridge.toast(message, kind)
       }))

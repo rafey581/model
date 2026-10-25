@@ -2,24 +2,26 @@ import { useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
 import { api } from '@/lib/api'
 import { useAsync } from '@/hooks/useAsync'
+import { usePendingCounts } from '@/hooks/usePendingCounts'
 import { formatAmount, formatDateTime, shortId } from '@/lib/format'
-import type { AdminWithdrawal, AdminWithdrawalsPayload, AdminWithdrawalMatch, ReviewStatus } from '@/lib/types'
+import type { AdminWithdrawal, AdminWithdrawalsPayload, AdminWithdrawalMatch, WithdrawalStatus } from '@/lib/types'
 import { Button, Card, Divider, Empty, ErrorState, Loading, Pill, Row, Screen, ScreenTitle } from '@/components/ui'
 import { FilterChips } from '@/components/FilterChips'
 import { useDialog } from '@/components/ActionDialog'
 import { useToast } from '@/components/Toast'
 import { colors, spacing } from '@/theme'
 
-type Filter = '' | ReviewStatus
+type Filter = '' | WithdrawalStatus
 
 /**
  * Payout review.
  *
- * Nothing is debited when the player asks: the balance is only checked, then
- * charged when an admin approves the payout (so the money leaves the wallet at
- * the same moment the transfer is marked done). Rejecting therefore moves no
- * money - it only closes the request. The match history is shown inline because
- * a first payout is the moment a mismatched win/loss record is worth noticing.
+ * The amount is set aside from the player's balance when they ask, so it cannot be
+ * staked or requested twice while it waits here. Approving takes that held amount
+ * for good, and only then should staff send the USDT: approve first, pay second, so
+ * a payout is never sent for money the platform failed to take. Rejecting returns
+ * the hold to the player. The match history is shown inline because a first payout
+ * is the moment a mismatched win/loss record is worth noticing.
  */
 export default function WithdrawalsScreen() {
   const [filter, setFilter] = useState<Filter>('PENDING')
@@ -30,19 +32,23 @@ export default function WithdrawalsScreen() {
   )
   const dialog = useDialog()
   const toast = useToast()
+  const pending = usePendingCounts()
 
   const approve = async (item: AdminWithdrawal): Promise<void> => {
     const result = await dialog.confirm({
       title: 'Approve payout?',
-      message: `Send ${formatAmount(item.amount)} ${item.currency} to ${item.address}. Confirm you have paid the player.`,
-      confirmLabel: 'Approve'
+      message:
+        `${formatAmount(item.amount)} ${item.currency} will be taken from ${item.user.username}'s balance now. ` +
+        `After approving, send exactly that amount to ${item.address} on ${item.network}.`,
+      confirmLabel: 'Approve, then pay'
     })
     if (!result.confirmed) return
     setBusyId(item.id)
     try {
       const approved = await api<{ deducted: number }>(`/admin/withdrawals/${item.id}/approve`, { method: 'POST', body: {} })
-      toast.show(`Payout of ${formatAmount(approved.deducted)} USDT marked complete`, 'success')
+      toast.show(`Approved. Now send ${formatAmount(approved.deducted)} USDT to ${item.user.username}.`, 'success')
       state.reload()
+      pending.refresh()
     } catch (caught) {
       toast.show((caught as Error).message, 'error')
     } finally {
@@ -53,7 +59,10 @@ export default function WithdrawalsScreen() {
   const reject = async (item: AdminWithdrawal): Promise<void> => {
     const result = await dialog.confirm({
       title: 'Reject payout?',
-      message: `The request will be closed and ${item.user.username} will be told why. No balance is returned because nothing was debited when it was requested.`,
+      message:
+        item.heldAmount !== null
+          ? `The request will be closed, the ${formatAmount(item.heldAmount)} USDT held for it goes back to ${item.user.username}'s balance, and they will be told why.`
+          : `The request will be closed and ${item.user.username} will be told why. Nothing was held for this older request, so no balance moves.`,
       confirmLabel: 'Reject',
       destructive: true,
       withReason: true,
@@ -68,6 +77,7 @@ export default function WithdrawalsScreen() {
       })
       toast.show('Payout rejected', 'info')
       state.reload()
+      pending.refresh()
     } catch (caught) {
       toast.show((caught as Error).message, 'error')
     } finally {
@@ -88,6 +98,7 @@ export default function WithdrawalsScreen() {
           { value: 'PENDING', label: 'Pending' },
           { value: 'APPROVED', label: 'Approved' },
           { value: 'REJECTED', label: 'Rejected' },
+          { value: 'CANCELLED', label: 'Cancelled' },
           { value: '', label: 'All' }
         ]}
       />
@@ -111,7 +122,14 @@ export default function WithdrawalsScreen() {
           <Row label="Amount" value={`${formatAmount(item.amount)} ${item.currency}`} />
           <Row label="Network" value={item.network} />
           <Row label="Send to" value={item.address} />
-          {item.deducted !== null ? <Row label="Deducted on approval" value={`${formatAmount(item.deducted)} USDT`} /> : null}
+          {item.status === 'PENDING' ? (
+            <Row
+              label="Held from balance"
+              value={item.heldAmount !== null ? `${formatAmount(item.heldAmount)} USDT` : 'Nothing held (older request)'}
+            />
+          ) : null}
+          {item.deducted !== null ? <Row label="Taken on approval" value={`${formatAmount(item.deducted)} USDT`} /> : null}
+          {item.cancelledAt ? <Row label="Cancelled by player" value={formatDateTime(item.cancelledAt)} /> : null}
           <Row label="Requested" value={formatDateTime(item.createdAt)} />
           {item.reviewedAt ? <Row label="Reviewed" value={`${formatDateTime(item.reviewedAt)}${item.reviewedBy ? ` by ${item.reviewedBy.username}` : ''}`} /> : null}
           {item.rejectReason ? <Row label="Reason" value={item.rejectReason} /> : null}

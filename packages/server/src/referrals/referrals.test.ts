@@ -17,30 +17,34 @@ const MATCH_IDS: string[] = []
 
 async function createUser(opts: { balance?: number; referredById?: string } = {}): Promise<string> {
   const balance = opts.balance ?? 0
-  const user = await prisma.user.create({
-    data: {
-      email: `${TAG}-${USERS.length}@test.local`,
-      username: `r${USERS.length}-${TAG}`,
-      passwordHash: '!',
-      role: 'PLAYER',
-      status: 'ACTIVE',
-      referredById: opts.referredById ?? null,
-      wallet: { create: { available: balance } }
-    }
-  })
-  if (balance > 0) {
-    await prisma.walletTransaction.create({
+  // Wallet and its backing entry in one transaction (see ledger.test.ts).
+  const user = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.create({
       data: {
-        userId: user.id,
-        type: 'START_BALANCE',
-        amount: balance,
-        status: 'COMPLETED',
-        balanceBefore: 0,
-        balanceAfter: balance,
-        meta: { description: 'test welcome balance' }
+        email: `${TAG}-${USERS.length}@test.local`,
+        username: `r${USERS.length}-${TAG}`,
+        passwordHash: '!',
+        role: 'PLAYER',
+        status: 'ACTIVE',
+        referredById: opts.referredById ?? null,
+        wallet: { create: { available: balance } }
       }
     })
-  }
+    if (balance > 0) {
+        await tx.walletTransaction.create({
+          data: {
+            userId: user.id,
+            type: 'START_BALANCE',
+            amount: balance,
+            status: 'COMPLETED',
+            balanceBefore: 0,
+            balanceAfter: balance,
+            meta: { description: 'test welcome balance' }
+          }
+        })
+    }
+    return user
+  })
   USERS.push(user.id)
   return user.id
 }

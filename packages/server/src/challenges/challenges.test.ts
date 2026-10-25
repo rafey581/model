@@ -17,15 +17,32 @@ const MATCHES: string[] = []
 
 async function createUser(balance = 10): Promise<{ id: string; username: string }> {
   const username = `c${USERS.length}-${TAG}`
-  const user = await prisma.user.create({
-    data: {
-      email: `${TAG}-${USERS.length}@test.local`,
-      username,
-      passwordHash: '!',
-      role: 'PLAYER',
-      status: 'ACTIVE',
-      wallet: { create: { available: balance } }
+  // Wallet and its backing entry in one transaction (see ledger.test.ts).
+  const user = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.create({
+      data: {
+        email: `${TAG}-${USERS.length}@test.local`,
+        username,
+        passwordHash: '!',
+        role: 'PLAYER',
+        status: 'ACTIVE',
+        wallet: { create: { available: balance } }
+      }
+    })
+    if (balance > 0) {
+        await tx.walletTransaction.create({
+          data: {
+            userId: user.id,
+            type: 'START_BALANCE',
+            amount: balance,
+            status: 'COMPLETED',
+            balanceBefore: 0,
+            balanceAfter: balance,
+            meta: { description: 'test welcome balance' }
+          }
+        })
     }
+    return user
   })
   USERS.push(user.id)
   return { id: user.id, username }

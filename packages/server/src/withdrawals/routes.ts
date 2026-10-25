@@ -7,6 +7,8 @@ import {
   createWithdrawal,
   approveWithdrawal,
   rejectWithdrawal,
+  cancelWithdrawal,
+  WithdrawalNotCancellableError,
   WithdrawalNotFoundError,
   WithdrawalAlreadyReviewedError,
   InsufficientWithdrawBalanceError,
@@ -65,8 +67,22 @@ export async function registerWithdrawalRoutes(app: FastifyInstance): Promise<vo
       if (error instanceof InsufficientWithdrawBalanceError) {
         return reply.code(400).send({
           ok: false,
-          error: `you need ${error.requiredUsdt} USDT to withdraw ${amountUsdt} ${info.currency}, but your balance is ${error.availableUsdt} USDT`
+          error: `you need ${error.requiredUsdt} USDT to withdraw ${amountUsdt} ${info.currency}, but your available balance is ${error.availableUsdt} USDT`
         })
+      }
+      throw error
+    }
+  })
+
+  app.post('/api/withdrawals/:id/cancel', async (request, reply) => {
+    const id = (request.params as { id: string }).id
+    try {
+      const result = await cancelWithdrawal(id, request.authUser!.id)
+      return reply.send({ ok: true, data: result })
+    } catch (error) {
+      if (error instanceof WithdrawalNotFoundError) return reply.code(404).send({ ok: false, error: 'withdrawal not found' })
+      if (error instanceof WithdrawalNotCancellableError) {
+        return reply.code(400).send({ ok: false, error: 'this request has already been reviewed and can no longer be cancelled' })
       }
       throw error
     }
@@ -109,7 +125,7 @@ export async function registerAdminWithdrawalRoutes(app: FastifyInstance): Promi
     const status = url.searchParams.get('status') ?? undefined
     const { take } = pagination(request)
 
-    const where = status && ['PENDING', 'APPROVED', 'REJECTED'].includes(status) ? { status } : {}
+    const where = status && ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'].includes(status) ? { status } : {}
     const items = await prisma.cryptoWithdrawal.findMany({
       where,
       include: {

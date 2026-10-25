@@ -1,6 +1,6 @@
 import './styles.css'
 import { api, connectSocket, getSocket, makeToast } from './game/network.js'
-import { openSupportChat } from './support.js'
+import { openSupportChat, refreshSupportChat } from './support.js'
 import { drawTable, resetTableAnimation } from './game/renderer.js'
 import { Scene3D } from './game/scene3d.js'
 import { preloadTableModel } from './game/tableModel.js'
@@ -2075,7 +2075,8 @@ function createLobbyBridge(): LobbyBridge {
     openTournaments: () => {
       activeScreen = 'tournaments'
       render()
-    }
+    },
+    openSupport: () => openSupportChat()
   }
 }
 
@@ -4185,6 +4186,7 @@ function handleSocketEvents(socket: Socket): void {
     toast(`${n.title}${n.body && n.body !== n.title ? ' — ' + n.body : ''}`)
     refreshBell()
     if (n.kind === 'LEVEL_UP' || n.kind === 'RANK_UP' || n.kind === 'BADGE_EARNED') void lobbySession?.refreshProgress()
+    if (n.kind === 'SUPPORT_REPLY') refreshSupportChat()
   })
 }
 

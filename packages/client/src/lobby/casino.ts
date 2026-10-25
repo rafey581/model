@@ -30,6 +30,7 @@ export type CasinoDestination =
   | 'invite'
   | 'settings'
   | 'rules'
+  | 'support'
 
 export interface CasinoShellHandlers {
   go: (where: CasinoDestination) => void
@@ -81,6 +82,7 @@ const ICON = {
   phone: svg('<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/>'),
   discord: svg('<path d="M8 8c2.6-1 5.4-1 8 0l1 1c1.2 2 1.8 4.2 1.8 6.5-1.3 1-2.7 1.6-4.1 2l-.8-1.3M8 8l-1 1c-1.2 2-1.8 4.2-1.8 6.5 1.3 1 2.7 1.6 4.1 2l.8-1.3"/><circle cx="9.8" cy="13" r="1"/><circle cx="14.2" cy="13" r="1"/>'),
   telegram: svg('<path d="M21 4 3 11l6 2 2 6 3-4 4 3z"/><path d="m9 13 8-6"/>'),
+  chat: svg('<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/>'),
   youtube: svg('<rect x="3" y="6" width="18" height="12" rx="4"/><path d="M10 9.5v5l4.5-2.5z" fill="currentColor"/>')
 }
 
@@ -143,6 +145,7 @@ const NAV: Array<{ id: CasinoDestination; label: string; icon: string }> = [
   { id: 'friends', label: 'Friends', icon: ICONS.friends },
   { id: 'invite', label: 'Invite & Earn', icon: ICONS.invite },
   { id: 'rules', label: 'Rules', icon: ICONS.rules },
+  { id: 'support', label: 'Support', icon: ICON.chat },
   { id: 'settings', label: 'Settings', icon: ICONS.gear }
 ]
 

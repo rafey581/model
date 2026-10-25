@@ -93,6 +93,11 @@ function closeSupportChat(): void {
   supportLayer?.classList.remove('open')
 }
 
+/** Re-reads the thread when staff reply while the chat is open; otherwise the next open picks it up. */
+export function refreshSupportChat(): void {
+  if (supportLayer?.classList.contains('open')) void loadThread()
+}
+
 async function loadThread(): Promise<void> {
   try {
     const res = await api<SupportThread>('/support/thread')

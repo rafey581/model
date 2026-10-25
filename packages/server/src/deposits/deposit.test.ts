@@ -8,15 +8,32 @@ const USERS: string[] = []
 
 async function createUser(role = 'PLAYER', balance = 0): Promise<string> {
   const email = `${TAG}-${USERS.length}@test.local`
-  const user = await prisma.user.create({
-    data: {
-      email,
-      username: `d${USERS.length}-${TAG}`,
-      passwordHash: '!',
-      role,
-      status: 'ACTIVE',
-      wallet: { create: { available: balance } }
+  // Wallet and its backing entry in one transaction (see ledger.test.ts).
+  const user = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.create({
+      data: {
+        email,
+        username: `d${USERS.length}-${TAG}`,
+        passwordHash: '!',
+        role,
+        status: 'ACTIVE',
+        wallet: { create: { available: balance } }
+      }
+    })
+    if (balance > 0) {
+      await tx.walletTransaction.create({
+        data: {
+          userId: user.id,
+          type: 'START_BALANCE',
+          amount: balance,
+          status: 'COMPLETED',
+          balanceBefore: 0,
+          balanceAfter: balance,
+          meta: { description: 'test welcome balance' }
+        }
+      })
     }
+    return user
   })
   USERS.push(user.id)
   return user.id

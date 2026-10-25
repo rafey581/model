@@ -1,170 +1,96 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply } from 'fastify'
 import { z } from 'zod'
-import { prisma } from '../db/index.js'
 import { requireAdminSession } from '../admin/auth.js'
+import {
+  SUPPORT_STATUSES,
+  SupportThreadNotFoundError,
+  getPlayerThread,
+  getThreadForAdmin,
+  listThreads,
+  playerUnreadCount,
+  postAdminReply,
+  postPlayerMessage,
+  setThreadStatus
+} from './service.js'
 
+const messageSchema = z.object({ body: z.string().trim().min(1, 'message is required').max(2000, 'message is too long (2000 characters max)') })
+const statusQuery = z.enum(SUPPORT_STATUSES).optional()
+
+function notFound(error: unknown, reply: FastifyReply) {
+  if (error instanceof SupportThreadNotFoundError) return reply.code(404).send({ ok: false, error: 'support thread not found' })
+  throw error
+}
+
+/** Player-facing support routes (authed player path). */
 export async function registerSupportRoutes(app: FastifyInstance): Promise<void> {
-  // Get or create user's support thread
-  app.get('/api/support/thread', async (request: any, reply) => {
-    const userId = request.user.id
-    let thread = await prisma.supportThread.findUnique({
-      where: { userId },
-      include: {
-        messages: {
-          orderBy: { createdAt: 'asc' },
-          include: { sender: { select: { id: true, username: true, role: true } } }
-        }
-      }
-    })
-    if (!thread) {
-      thread = await prisma.supportThread.create({
-        data: { userId },
-        include: {
-          messages: {
-            orderBy: { createdAt: 'asc' },
-            include: { sender: { select: { id: true, username: true, role: true } } }
-          }
-        }
-      })
-    }
-    // Mark admin messages as read
-    await prisma.supportMessage.updateMany({
-      where: { threadId: thread.id, senderRole: 'ADMIN', read: false },
-      data: { read: true }
-    })
+  app.get('/api/support/thread', async (request, reply) => {
+    const thread = await getPlayerThread(request.authUser!.id)
     return reply.send({ ok: true, data: thread })
   })
 
-  // Send message as user
-  app.post('/api/support/message', async (request: any, reply) => {
-    const userId = request.user.id
-    const schema = z.object({ body: z.string().trim().min(1).max(2000) })
-    const parsed = schema.safeParse(request.body)
-    if (!parsed.success) return reply.code(400).send({ ok: false, error: 'Message is required' })
+  app.get('/api/support/unread', async (request, reply) => {
+    return reply.send({ ok: true, data: { unread: await playerUnreadCount(request.authUser!.id) } })
+  })
 
-    let thread = await prisma.supportThread.findUnique({ where: { userId } })
-    if (!thread) {
-      thread = await prisma.supportThread.create({ data: { userId } })
-    }
-
-    const message = await prisma.supportMessage.create({
-      data: {
-        threadId: thread.id,
-        senderId: userId,
-        senderRole: 'USER',
-        body: parsed.data.body
-      },
-      include: { sender: { select: { id: true, username: true, role: true } } }
-    })
-
-    await prisma.supportThread.update({
-      where: { id: thread.id },
-      data: { lastMessageAt: new Date(), status: 'OPEN' }
-    })
-
-    return reply.send({ ok: true, data: message })
+  app.post('/api/support/message', async (request, reply) => {
+    const parsed = messageSchema.safeParse(request.body)
+    if (!parsed.success) return reply.code(400).send({ ok: false, error: parsed.error.issues[0]?.message ?? 'message is required' })
+    const message = await postPlayerMessage(request.authUser!.id, parsed.data.body)
+    return reply.code(201).send({ ok: true, data: message })
   })
 }
 
+/**
+ * Admin support routes. Same gating contract as the rest of the admin API: public at
+ * the player-auth hook (an admin session is not a player token), guarded by the
+ * revocable admin session.
+ */
 export async function registerAdminSupportRoutes(app: FastifyInstance): Promise<void> {
-  // List all support threads
-  app.get('/api/admin/support/threads', { preHandler: requireAdminSession }, async (_request, reply) => {
-    const threads = await prisma.supportThread.findMany({
-      orderBy: { lastMessageAt: 'desc' },
-      include: {
-        user: { select: { id: true, username: true, email: true } },
-        assignedTo: { select: { id: true, username: true } },
-        messages: {
-          orderBy: { createdAt: 'desc' },
-          take: 1
-        }
-      }
-    })
-    // Count unread messages from users
-    const threadsWithUnread = await Promise.all(
-      threads.map(async (thread) => {
-        const unreadCount = await prisma.supportMessage.count({
-          where: { threadId: thread.id, senderRole: 'USER', read: false }
-        })
-        return { ...thread, unreadCount }
-      })
-    )
-    return reply.send({ ok: true, data: threadsWithUnread })
+  const guarded = { config: { public: true, admin: true }, preHandler: requireAdminSession }
+
+  app.get('/api/admin/support/threads', guarded, async (request, reply) => {
+    const url = new URL(request.url, 'http://localhost')
+    const status = statusQuery.safeParse(url.searchParams.get('status') ?? undefined)
+    const threads = await listThreads({ status: status.success ? status.data : undefined })
+    return reply.send({ ok: true, data: threads })
   })
 
-  // Get thread with messages
-  app.get('/api/admin/support/thread/:id', { preHandler: requireAdminSession }, async (request: any, reply) => {
-    const { id } = request.params
-    const thread = await prisma.supportThread.findUnique({
-      where: { id },
-      include: {
-        user: { select: { id: true, username: true, email: true, phone: true } },
-        assignedTo: { select: { id: true, username: true } },
-        messages: {
-          orderBy: { createdAt: 'asc' },
-          include: { sender: { select: { id: true, username: true, role: true } } }
-        }
-      }
-    })
-    if (!thread) return reply.code(404).send({ ok: false, error: 'Thread not found' })
-    
-    // Mark user messages as read
-    await prisma.supportMessage.updateMany({
-      where: { threadId: thread.id, senderRole: 'USER', read: false },
-      data: { read: true }
-    })
-    
-    return reply.send({ ok: true, data: thread })
+  app.get('/api/admin/support/thread/:id', guarded, async (request, reply) => {
+    const { id } = request.params as { id: string }
+    try {
+      return reply.send({ ok: true, data: await getThreadForAdmin(id) })
+    } catch (error) {
+      return notFound(error, reply)
+    }
   })
 
-  // Reply as admin
-  app.post('/api/admin/support/thread/:id/reply', { preHandler: requireAdminSession }, async (request: any, reply) => {
-    const { id } = request.params
-    const schema = z.object({ body: z.string().trim().min(1).max(2000) })
-    const parsed = schema.safeParse(request.body)
-    if (!parsed.success) return reply.code(400).send({ ok: false, error: 'Message is required' })
-
-    const thread = await prisma.supportThread.findUnique({ where: { id } })
-    if (!thread) return reply.code(404).send({ ok: false, error: 'Thread not found' })
-
-    const message = await prisma.supportMessage.create({
-      data: {
-        threadId: thread.id,
-        senderId: request.admin.id,
-        senderRole: 'ADMIN',
-        body: parsed.data.body
-      },
-      include: { sender: { select: { id: true, username: true, role: true } } }
-    })
-
-    await prisma.supportThread.update({
-      where: { id: thread.id },
-      data: { 
-        lastMessageAt: new Date(),
-        assignedToId: thread.assignedToId || request.admin.id
-      }
-    })
-
-    // Notify user
-    await prisma.notification.create({
-      data: {
-        userId: thread.userId,
-        kind: 'SUPPORT_REPLY',
-        title: 'Support reply',
-        body: 'You have a new reply from support.'
-      }
-    })
-
-    return reply.send({ ok: true, data: message })
+  app.post('/api/admin/support/thread/:id/reply', guarded, async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const parsed = messageSchema.safeParse(request.body)
+    if (!parsed.success) return reply.code(400).send({ ok: false, error: parsed.error.issues[0]?.message ?? 'message is required' })
+    try {
+      const message = await postAdminReply(id, request.authUser!.id, parsed.data.body)
+      return reply.code(201).send({ ok: true, data: message })
+    } catch (error) {
+      return notFound(error, reply)
+    }
   })
 
-  // Close thread
-  app.post('/api/admin/support/thread/:id/close', { preHandler: requireAdminSession }, async (request: any, reply) => {
-    const { id } = request.params
-    await prisma.supportThread.update({
-      where: { id },
-      data: { status: 'CLOSED' }
-    })
-    return reply.send({ ok: true })
+  app.post('/api/admin/support/thread/:id/close', guarded, async (request, reply) => {
+    const { id } = request.params as { id: string }
+    try {
+      return reply.send({ ok: true, data: await setThreadStatus(id, request.authUser!.id, 'CLOSED') })
+    } catch (error) {
+      return notFound(error, reply)
+    }
+  })
+
+  app.post('/api/admin/support/thread/:id/reopen', guarded, async (request, reply) => {
+    const { id } = request.params as { id: string }
+    try {
+      return reply.send({ ok: true, data: await setThreadStatus(id, request.authUser!.id, 'OPEN') })
+    } catch (error) {
+      return notFound(error, reply)
+    }
   })
 }

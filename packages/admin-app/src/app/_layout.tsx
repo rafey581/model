@@ -4,6 +4,7 @@ import { View, StyleSheet } from 'react-native'
 import { AuthProvider, useAuth } from '@/auth/AuthContext'
 import { ToastProvider } from '@/components/Toast'
 import { DialogProvider } from '@/components/ActionDialog'
+import { PendingCountsProvider } from '@/hooks/usePendingCounts'
 import { Loading } from '@/components/ui'
 import { colors } from '@/theme'
 
@@ -44,6 +45,7 @@ function RootNavigator() {
         <Stack.Screen name="settings" options={{ headerShown: true, title: 'Settings' }} />
         <Stack.Screen name="fraud" options={{ headerShown: true, title: 'Fraud and ledger' }} />
         <Stack.Screen name="audit" options={{ headerShown: true, title: 'Admin audit log' }} />
+        <Stack.Screen name="support/[id]" options={{ headerShown: true, title: 'Conversation' }} />
       </Stack.Protected>
       <Stack.Protected guard={token === null}>
         <Stack.Screen name="login" />
@@ -55,12 +57,14 @@ function RootNavigator() {
 export default function RootLayout() {
   return (
     <AuthProvider>
-      <ToastProvider>
-        <DialogProvider>
-          <StatusBar style="light" />
-          <RootNavigator />
-        </DialogProvider>
-      </ToastProvider>
+      <PendingCountsProvider>
+        <ToastProvider>
+          <DialogProvider>
+            <StatusBar style="light" />
+            <RootNavigator />
+          </DialogProvider>
+        </ToastProvider>
+      </PendingCountsProvider>
     </AuthProvider>
   )
 }

@@ -5,9 +5,10 @@ import { api } from '../game/network.js'
 
 /**
  * The withdraw screen: the player picks a USDT amount and their own Solana
- * address. The request travels to the admins with a snapshot of the player's
- * recent matches; on approval the same USDT amount is debited from the wallet
- * and the operator pays the USDT out of band.
+ * address. The amount is held from the balance at once, and the request travels
+ * to the admins with a snapshot of the player's recent matches. On approval the
+ * held amount is taken and the operator pays the USDT out of band; a rejection,
+ * or the player cancelling a pending request, returns it.
  */
 
 export interface WithdrawInfo {
@@ -27,6 +28,8 @@ export interface WithdrawRow {
   status: string
   address: string
   deducted: string | number | null
+  /** Set aside when the request was made; null on requests from before holds. */
+  heldAmount: string | number | null
   rejectReason: string | null
   createdAt: string
 }
@@ -57,6 +60,26 @@ function statusPill(status: string): HTMLElement {
   const pill = el('span', `gl-deposit-pill gl-deposit-pill--${status.toLowerCase()}`)
   pill.textContent = status
   return pill
+}
+
+function cancelButton(row: WithdrawRow, actions: WithdrawActions): HTMLButtonElement {
+  const btn = el('button', 'gl-link-back gl-withdraw-cancel', WITHDRAW_COPY.cancel) as HTMLButtonElement
+  btn.type = 'button'
+  btn.onclick = async () => {
+    if (!window.confirm(WITHDRAW_COPY.cancelConfirm)) return
+    btn.disabled = true
+    btn.textContent = WITHDRAW_COPY.cancelling
+    try {
+      await api<{ id: string; released: number }>(`/withdrawals/${row.id}/cancel`, { method: 'POST', body: {} })
+      actions.toast(WITHDRAW_COPY.cancelled)
+      actions.onSubmitted()
+    } catch (error) {
+      actions.toast((error as Error).message, 'error')
+      btn.disabled = false
+      btn.textContent = WITHDRAW_COPY.cancel
+    }
+  }
+  return btn
 }
 
 function fmtDate(iso: string): string {
@@ -94,7 +117,7 @@ export function renderWithdraw(data: WithdrawViewData | null, actions: WithdrawA
 
   const grid = el('div', 'gl-deposit')
   grid.appendChild(renderForm(data.info, actions))
-  grid.appendChild(renderHistory(data.history))
+  grid.appendChild(renderHistory(data.history, actions))
   screen.appendChild(grid)
 
   return screen
@@ -182,7 +205,7 @@ function renderForm(info: WithdrawInfo, actions: WithdrawActions): HTMLElement {
   return panel
 }
 
-function renderHistory(rows: WithdrawRow[]): HTMLElement {
+function renderHistory(rows: WithdrawRow[], actions: WithdrawActions): HTMLElement {
   const panel = el('div', 'gl-panel gl-deposit-history')
   panel.appendChild(el('div', 'gl-deposit-label', WITHDRAW_COPY.historyTitle))
 
@@ -209,6 +232,18 @@ function renderHistory(rows: WithdrawRow[]): HTMLElement {
     }
     if (row.status === 'REJECTED' && row.rejectReason) {
       details.appendChild(el('div', 'gl-deposit-item-reject', `${WITHDRAW_COPY.rejectedPrefix}${row.rejectReason}`))
+      if (row.heldAmount !== null && row.heldAmount !== undefined) {
+        details.appendChild(el('div', 'gl-deposit-item-meta', WITHDRAW_COPY.rejectedReturned))
+      }
+    }
+    if (row.status === 'CANCELLED') {
+      details.appendChild(el('div', 'gl-deposit-item-meta', WITHDRAW_COPY.cancelledNote))
+    }
+    if (row.status === 'PENDING') {
+      if (row.heldAmount !== null && row.heldAmount !== undefined) {
+        details.appendChild(el('div', 'gl-deposit-item-meta', WITHDRAW_COPY.held(Number(row.heldAmount))))
+      }
+      details.appendChild(cancelButton(row, actions))
     }
     item.append(head, details)
     panel.appendChild(item)

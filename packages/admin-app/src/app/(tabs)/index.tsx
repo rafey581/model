@@ -1,4 +1,6 @@
-import { StyleSheet, Text, View } from 'react-native'
+import { useCallback } from 'react'
+import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { useFocusEffect, useRouter } from 'expo-router'
 import { useAuth } from '@/auth/AuthContext'
 import { api } from '@/lib/api'
 import { useAsync } from '@/hooks/useAsync'
@@ -15,7 +17,16 @@ import { formatAmount, formatSignedAmount } from '@/lib/format'
  */
 export default function DashboardScreen() {
   const { admin } = useAuth()
+  const router = useRouter()
   const state = useAsync(() => api<DashboardStats>('/admin/stats'), [])
+
+  // The numbers move while staff work in the other tabs; re-read on the way back.
+  useFocusEffect(
+    useCallback(() => {
+      state.reload()
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+  )
 
   if (state.loading && !state.data) return <Screen scroll={false}><Loading /></Screen>
   if (state.error && !state.data) {
@@ -29,7 +40,12 @@ export default function DashboardScreen() {
   const stats = state.data
   if (!stats) return <Screen scroll={false}><Loading /></Screen>
 
-  const needsReview = stats.pendingDeposits > 0 || stats.pendingWithdrawals > 0
+  const support = stats.supportAwaiting ?? 0
+  const waiting: Array<{ count: number; label: string; href: string }> = [
+    { count: stats.pendingDeposits, label: 'deposit(s) to verify', href: '/deposits' },
+    { count: stats.pendingWithdrawals, label: 'payout(s) to review', href: '/withdrawals' },
+    { count: support, label: 'player(s) waiting on support', href: '/support' }
+  ].filter((w) => w.count > 0)
 
   return (
     <Screen refreshing={state.refreshing} onRefresh={state.reload}>
@@ -38,12 +54,16 @@ export default function DashboardScreen() {
         subtitle="Platform overview"
       />
 
-      {needsReview ? (
+      {waiting.length > 0 ? (
         <Card style={styles.attention}>
           <Text style={styles.attentionTitle}>Needs your attention</Text>
-          <Text style={styles.attentionBody}>
-            {stats.pendingDeposits} deposit(s) and {stats.pendingWithdrawals} withdrawal(s) are waiting.
-          </Text>
+          {waiting.map((w) => (
+            <Pressable key={w.href} accessibilityRole="link" onPress={() => router.push(w.href as never)}>
+              <Text style={styles.attentionBody}>
+                <Text style={styles.attentionCount}>{w.count}</Text> {w.label} <Text style={styles.attentionLink}>Open</Text>
+              </Text>
+            </Pressable>
+          ))}
         </Card>
       ) : null}
 
@@ -52,6 +72,7 @@ export default function DashboardScreen() {
         <StatCard label="Platform revenue (USDT)" value={formatAmount(stats.platformRevenue)} tone="WIN" />
         <StatCard label="Pending deposits" value={String(stats.pendingDeposits)} tone={stats.pendingDeposits > 0 ? 'PENDING' : undefined} />
         <StatCard label="Pending payouts" value={String(stats.pendingWithdrawals)} tone={stats.pendingWithdrawals > 0 ? 'PENDING' : undefined} />
+        <StatCard label="Support awaiting reply" value={String(support)} tone={support > 0 ? 'PENDING' : undefined} />
         <StatCard label="Live matches" value={String(stats.activeMatches)} />
         <StatCard label="Completed matches" value={String(stats.completedMatches)} />
         <StatCard label="Deposits (all time)" value={String(stats.deposits)} />
@@ -71,5 +92,7 @@ const styles = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
   attention: { borderColor: colors.warning, backgroundColor: colors.warningSoft },
   attentionTitle: { color: colors.warning, fontSize: 15, fontWeight: '700' },
-  attentionBody: { color: colors.text, fontSize: 13 }
+  attentionBody: { color: colors.text, fontSize: 13, paddingVertical: 2 },
+  attentionCount: { fontWeight: '700' },
+  attentionLink: { color: colors.info, fontWeight: '600' }
 })

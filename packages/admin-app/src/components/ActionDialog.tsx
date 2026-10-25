@@ -35,13 +35,17 @@ interface DialogValue {
 const DialogContext = createContext<DialogValue | null>(null)
 
 export function DialogProvider({ children }: { children: ReactNode }): ReactNode {
+  // `request` outlives `open`: the modal fades out after settling, and clearing the
+  // text at once would show an empty box with default buttons for the whole fade.
   const [request, setRequest] = useState<DialogRequest | null>(null)
+  const [open, setOpen] = useState(false)
   const [reason, setReason] = useState('')
   const resolver = useRef<((result: DialogResult) => void) | null>(null)
 
   const confirm = useCallback((next: DialogRequest) => {
     setReason('')
     setRequest(next)
+    setOpen(true)
     return new Promise<DialogResult>((resolve) => {
       resolver.current = resolve
     })
@@ -50,7 +54,7 @@ export function DialogProvider({ children }: { children: ReactNode }): ReactNode
   const settle = useCallback((confirmed: boolean) => {
     const resolve = resolver.current
     resolver.current = null
-    setRequest(null)
+    setOpen(false)
     resolve?.({ confirmed, reason: reason.trim() })
   }, [reason])
 
@@ -60,7 +64,7 @@ export function DialogProvider({ children }: { children: ReactNode }): ReactNode
   return (
     <DialogContext.Provider value={value}>
       {children}
-      <Modal visible={request !== null} transparent animationType="fade" onRequestClose={() => settle(false)}>
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => settle(false)}>
         <Pressable style={styles.backdrop} onPress={() => settle(false)}>
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.center}>
             <Pressable style={styles.sheet} onPress={() => undefined}>

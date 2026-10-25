@@ -21,6 +21,8 @@ export interface DashboardStats {
   withdrawals: number
   pendingDeposits: number
   pendingWithdrawals: number
+  /** Open support threads with a player message staff have not read yet. */
+  supportAwaiting: number
   platformRevenue: number
 }
 
@@ -130,6 +132,9 @@ export interface AdminWithdrawal {
   currency: string
   status: string
   deducted: string | number | null
+  /** Set aside from the player's balance at request time; null on requests from before holds. */
+  heldAmount: string | number | null
+  cancelledAt: string | null
   matchHistory: AdminWithdrawalMatch[] | null
   rejectReason: string | null
   createdAt: string
@@ -148,8 +153,47 @@ export type SettingsMap = Record<string, unknown>
 export type ReviewStatus = 'PENDING' | 'APPROVED' | 'REJECTED'
 export const REVIEW_STATUSES: ReviewStatus[] = ['PENDING', 'APPROVED', 'REJECTED']
 
+/** Withdrawals can also be withdrawn by the player while pending. */
+export type WithdrawalStatus = ReviewStatus | 'CANCELLED'
+
 export type UserStatus = 'ACTIVE' | 'SUSPENDED' | 'BANNED'
 export const USER_STATUSES: UserStatus[] = ['ACTIVE', 'SUSPENDED', 'BANNED']
 
 export type UserRole = 'PLAYER' | 'ADMIN'
 export const USER_ROLES: UserRole[] = ['PLAYER', 'ADMIN']
+
+export type SupportStatus = 'OPEN' | 'CLOSED'
+
+export interface SupportMessage {
+  id: string
+  threadId: string
+  senderId: string
+  senderRole: 'USER' | 'ADMIN'
+  body: string
+  read: boolean
+  createdAt: string
+  sender: { id: string; username: string; role: string }
+}
+
+export interface SupportThreadRow {
+  id: string
+  userId: string
+  status: SupportStatus
+  lastMessageAt: string
+  createdAt: string
+  user: { id: string; username: string; email: string | null }
+  assignedTo: { id: string; username: string } | null
+  lastMessage: { id: string; body: string; senderRole: 'USER' | 'ADMIN'; createdAt: string } | null
+  unreadCount: number
+}
+
+export interface SupportThreadDetail {
+  id: string
+  userId: string
+  status: SupportStatus
+  lastMessageAt: string
+  createdAt: string
+  user: { id: string; username: string; email: string | null; phone: string | null; status: string; createdAt: string }
+  assignedTo: { id: string; username: string } | null
+  messages: SupportMessage[]
+}

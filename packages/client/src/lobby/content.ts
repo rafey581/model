@@ -264,12 +264,13 @@ export const WITHDRAW_COPY = {
   headline: 'WITHDRAW TO USDT',
   back: 'back to lobby',
   intro:
-    'Request a cash-out. Enter the USDT amount you want and your own Solana address — ' +
-    'an admin verifies your account (including your recent matches) and sends the USDT ' +
-    'out of band. On approval the same amount is deducted from your balance.',
+    'Request a cash-out. Enter the USDT amount you want and your own Solana address. ' +
+    'The amount is set aside from your balance right away, so it cannot be staked while ' +
+    'an admin verifies your account (including your recent matches) and sends the USDT. ' +
+    'If the request is rejected, or you cancel it, the amount comes straight back.',
   addressLabel: 'YOUR USDT ADDRESS — SOLANA NETWORK',
   addressPlaceholder: 'the solana address that should receive the funds',
-  balanceLabel: 'YOUR BALANCE',
+  balanceLabel: 'AVAILABLE TO WITHDRAW',
   amountLabel: 'AMOUNT (USDT)',
   submit: 'send withdraw request',
   submitting: 'submitting…',
@@ -280,7 +281,14 @@ export const WITHDRAW_COPY = {
   statusPending: 'PENDING',
   statusApproved: 'APPROVED',
   statusRejected: 'REJECTED',
-  deducted: (n: number) => `${n} USDT deducted`,
+  deducted: (n: number) => `${n} USDT paid out`,
+  held: (n: number) => `${n} USDT set aside while this is reviewed`,
+  cancel: 'cancel request',
+  cancelling: 'cancelling…',
+  cancelConfirm: 'Cancel this withdrawal request? The amount goes back to your balance.',
+  cancelled: 'Request cancelled. The amount is back in your balance.',
+  cancelledNote: 'cancelled by you, amount returned',
+  rejectedReturned: 'the amount was returned to your balance',
   rejectedPrefix: 'reason: ',
   submitted: 'Withdraw request sent. An admin will verify it and pay out shortly.',
   amountHint: (min: number, max: number) => `min ${min} · max ${max} USDT`

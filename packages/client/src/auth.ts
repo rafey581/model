@@ -263,7 +263,7 @@ function renderLoginForm(
   const forgot = linkButton('Forgot your password?', () => renderForgotForm(container, errs))
   const switchToSignup = linkButton('Create an account', () => onSwitchMode('signup'))
   const customerSupport = linkButton('Customer Support', () => {
-    alert('For customer support, please email support via the game or contact admin.')
+    alert('Sign in and open Support from the menu to chat with our team. If you cannot sign in, use "Forgot your password?" to reset it first.')
   })
   form.append(submit, el('div', 'auth-footer', ''), forgot, switchToSignup, customerSupport)
   container.replaceChildren(form)

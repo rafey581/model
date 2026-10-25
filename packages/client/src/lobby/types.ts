@@ -88,6 +88,8 @@ export interface LobbyBridge {
   onProfileActivate: () => void
   /** Hands back to main.ts for the existing tournaments screen (create / join / bracket). */
   openTournaments: () => void
+  /** Opens the customer support chat over the lobby. */
+  openSupport: () => void
 }
 
 export interface SetupState {

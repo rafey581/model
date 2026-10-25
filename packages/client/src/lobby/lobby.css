@@ -1717,6 +1717,17 @@ body:has(.gl-root) {
   background: rgba(229, 72, 77, 0.16);
 }
 
+.gl-deposit-pill--cancelled {
+  color: var(--ivory);
+  background: rgba(255, 255, 255, 0.08);
+  opacity: 0.75;
+}
+
+.gl-withdraw-cancel {
+  margin-top: calc(var(--u) * 6);
+  align-self: flex-start;
+}
+
 .gl-deposit-note,
 .gl-deposit-loading {
   width: min(calc(var(--u) * 560), 92%);

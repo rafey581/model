@@ -287,9 +287,16 @@ model CryptoWithdrawal {
   // an admin verifies + pays it out of band. Future payout providers get their
   // own channel values.
   channel      String    @default("MANUAL")
+  // PENDING | APPROVED | REJECTED | CANCELLED (withdrawn by the player)
   status       String    @default("PENDING")
   // The USDT amount actually debited on approval (1:1 with the requested amount).
   deducted     Decimal?
+  // The amount moved from available to locked when the request was made, so it
+  // cannot be staked or requested twice while it waits. Consumed on approval,
+  // released on rejection or cancellation. Null on requests made before holds
+  // existed; those are still debited from available on approval.
+  heldAmount   Decimal?
+  cancelledAt  DateTime?
   // Snapshot of the player's last finished (non-practice) matches, taken when the
   // request is created. It travels with the request so the admin can see the games
   // that funded the balance before approving — "the user really won the game".

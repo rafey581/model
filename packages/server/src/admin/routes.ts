@@ -6,6 +6,7 @@ import { requireAdminSession } from './auth.js'
 import { runInTransaction, ledger } from '../wallet/service.js'
 import { invalidateSettingsCache } from '../settings/index.js'
 import { listFraudFlags, checkLedgerInvariance } from '../fraud/index.js'
+import { threadsAwaitingReply } from '../support/service.js'
 
 const adjustSchema = z.object({
   userId: z.string(),
@@ -37,14 +38,15 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   const adminGuard = requireAdminSession
 
   app.get('/api/admin/stats', { config: { public: true }, preHandler: adminGuard }, async (_request, reply) => {
-    const [users, matches, completed, deposits, withdrawals, pendingDeposits, pendingWithdrawals] = await Promise.all([
+    const [users, matches, completed, deposits, withdrawals, pendingDeposits, pendingWithdrawals, supportAwaiting] = await Promise.all([
       prisma.user.count(),
       prisma.match.count({ where: { status: { in: ['MATCH_STARTED', 'MATCH_IN_PROGRESS'] } } }),
       prisma.match.count({ where: { status: 'PRIZE_SETTLED' } }),
       prisma.walletTransaction.count({ where: { type: 'DEPOSIT' } }),
       prisma.walletTransaction.count({ where: { type: 'WITHDRAWAL' } }),
       prisma.cryptoDeposit.count({ where: { status: 'PENDING' } }),
-      prisma.cryptoWithdrawal.count({ where: { status: 'PENDING' } })
+      prisma.cryptoWithdrawal.count({ where: { status: 'PENDING' } }),
+      threadsAwaitingReply()
     ])
     const revenue = await prisma.walletTransaction.aggregate({
       where: { type: 'PLATFORM_FEE' },
@@ -60,6 +62,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         withdrawals,
         pendingDeposits,
         pendingWithdrawals,
+        supportAwaiting,
         platformRevenue: revenue._sum.amount ? Number(revenue._sum.amount) : 0
       }
     })
