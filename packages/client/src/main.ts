@@ -1,5 +1,5 @@
 import './styles.css'
-import { api, connectSocket, getSocket, makeToast } from './game/network.js'
+import { api, clearStoredToken, connectSocket, disconnectSocket, getSocket, makeToast, readStoredToken, storeToken } from './game/network.js'
 import { openSupportChat, refreshSupportChat } from './support.js'
 import { drawTable, resetTableAnimation } from './game/renderer.js'
 import { Scene3D } from './game/scene3d.js'
@@ -93,7 +93,7 @@ function formatCash(amount: number | string): string {
   return `${text} USDT`
 }
 
-let token = localStorage.getItem('token') ?? ''
+let token = readStoredToken()
 let currentUser: { id: string; username: string; role: string; status: string } | null = null
 let wallet = { balance: 0, locked: 0 }
 let tiers: TierData[] = []
@@ -586,19 +586,7 @@ function header(_options: { home?: boolean } = {}): HTMLElement {
     const logout = el('button', 'profile-menu-item', 'Logout') as HTMLButtonElement
     logout.type = 'button'
     logout.setAttribute('role', 'menuitem')
-    logout.onclick = () => {
-      token = ''
-      localStorage.removeItem('token')
-      currentUser = null
-      activeMatchId = null
-      activeTournamentId = null
-      activeScreen = 'home'
-      pendingChallenge = null
-      incomingChallenges = []
-      clearTournamentTimer()
-      leaveGameState()
-      render()
-    }
+    logout.onclick = () => void signOut()
     dropdown.appendChild(logout)
 
     chip.onclick = (e) => {
@@ -1997,6 +1985,28 @@ function render(): void {
 }
 
 /**
+ * Ends the player's session everywhere: the stored token, the server's cookie (or the
+ * next load would sign straight back in from it), the socket, and every piece of
+ * in-memory state that belonged to the signed-in player. The cookie is cleared before
+ * the auth screen is drawn, so a fast reload cannot race it.
+ */
+async function signOut(): Promise<void> {
+  token = ''
+  clearStoredToken()
+  disconnectSocket()
+  currentUser = null
+  activeMatchId = null
+  activeTournamentId = null
+  activeScreen = 'home'
+  pendingChallenge = null
+  incomingChallenges = []
+  clearTournamentTimer()
+  leaveGameState()
+  await api('/auth/logout', { method: 'POST', body: {} }).catch(() => undefined)
+  render()
+}
+
+/**
  * Read-only bridge from the new lobby views into existing main.ts handlers and state.
  * Does not change match start, audio, wallet, or API contracts — only exposes them.
  */
@@ -2076,7 +2086,8 @@ function createLobbyBridge(): LobbyBridge {
       activeScreen = 'tournaments'
       render()
     },
-    openSupport: () => openSupportChat()
+    openSupport: () => openSupportChat(),
+    signOut: () => void signOut()
   }
 }
 
@@ -4862,34 +4873,34 @@ async function init(): Promise<void> {
   }
   document.addEventListener('pointerdown', unlock)
   window.addEventListener('keydown', unlock)
+  type SessionUser = { id: string; username: string; role: string; status: string }
+  const startSession = (user: SessionUser, sessionToken: string): void => {
+    token = sessionToken
+    storeToken(sessionToken)
+    currentUser = user
+    handleSocketEvents(connectSocket(sessionToken))
+    void fetchNotifications()
+    void fetchIncomingChallenges()
+  }
+  // A stored token is checked before anything uses it. If it is missing or stale, a
+  // still-valid session cookie is exchanged for a fresh one; with neither, the auth
+  // screen takes over.
   if (token) {
-    const socket = connectSocket(token)
-    handleSocketEvents(socket)
     try {
-      const data = await api<{ user: { id: string; username: string; role: string; status: string } }>('/auth/status')
-      currentUser = data.user
-      void fetchNotifications()
-      void fetchIncomingChallenges()
+      const data = await api<{ authenticated: boolean; user?: SessionUser }>('/auth/status')
+      if (data.authenticated && data.user) startSession(data.user, token)
+      else throw new Error('stale session')
     } catch {
       token = ''
-      localStorage.removeItem('token')
+      clearStoredToken()
     }
-  } else {
-    // An OAuth sign-in returns by redirect, so the client comes back with a session
-    // cookie but no token in localStorage. Exchange the cookie for one rather than
-    // showing a login card to someone who is already signed in.
+  }
+  if (!currentUser) {
     try {
-      const data = await api<{ user: { id: string; username: string; role: string; status: string }; token: string }>(
-        '/auth/session'
-      )
-      token = data.token
-      localStorage.setItem('token', token)
-      currentUser = data.user
-      handleSocketEvents(connectSocket(token))
-      void fetchNotifications()
-      void fetchIncomingChallenges()
+      const data = await api<{ user: SessionUser; token: string }>('/auth/session')
+      startSession(data.user, data.token)
     } catch {
-      // No session at all, which is the ordinary case: the auth screen takes over.
+      // No session at all, which is the ordinary case.
     }
   }
   requestAnimationFrame(loop)

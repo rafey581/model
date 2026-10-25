@@ -90,6 +90,8 @@ export interface LobbyBridge {
   openTournaments: () => void
   /** Opens the customer support chat over the lobby. */
   openSupport: () => void
+  /** Ends the session and returns to the sign-in screen. */
+  signOut: () => void
 }
 
 export interface SetupState {

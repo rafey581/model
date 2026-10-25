@@ -73,6 +73,10 @@ export const INFO_COPY = {
 export const SETTINGS_COPY = {
   eyebrow: 'preferences',
   headline: 'SETTINGS',
+  accountLabel: 'Account',
+  accountHint: (username: string) => `Signed in as ${username}.`,
+  signOut: 'Log out',
+  signOutConfirm: 'Log out of this device?',
   soundLabel: 'Table sounds',
   soundHint: 'Pots, cushions, fouls, and crowd cues share one mute.',
   qualityLabel: 'Graphics quality',

@@ -1,5 +1,5 @@
 import { APP_TITLE } from '@snooker/shared'
-import { api } from './game/network.js'
+import { api, storeToken } from './game/network.js'
 
 /**
  * The public sign-in screen.
@@ -89,7 +89,7 @@ function linkButton(text: string, onClick: () => void): HTMLButtonElement {
 }
 
 function completeSignIn(token: string): void {
-  localStorage.setItem('snooker_token', token)
+  storeToken(token)
   window.location.reload()
 }
 

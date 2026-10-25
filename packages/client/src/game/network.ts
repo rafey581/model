@@ -65,10 +65,54 @@ const serverErrorWording: Record<number, string> = {
   409: 'That email or username is already registered. Try logging in instead.'
 }
 
+/**
+ * The player's session token, kept in one place.
+ *
+ * The server sets an httpOnly cookie too, but the socket needs the token itself, and
+ * the cookie does not travel where the page and the API are on different sites (the
+ * Android app against a remote server), so every request also carries it as a Bearer
+ * header. An earlier build saved it under another key; it is moved over on first read
+ * so a player signed in by that build stays signed in.
+ */
+const TOKEN_KEY = 'token'
+const LEGACY_TOKEN_KEY = 'snooker_token'
+
+export function readStoredToken(): string {
+  try {
+    const legacy = localStorage.getItem(LEGACY_TOKEN_KEY)
+    if (legacy) {
+      if (!localStorage.getItem(TOKEN_KEY)) localStorage.setItem(TOKEN_KEY, legacy)
+      localStorage.removeItem(LEGACY_TOKEN_KEY)
+    }
+    return localStorage.getItem(TOKEN_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+export function storeToken(token: string): void {
+  try {
+    localStorage.setItem(TOKEN_KEY, token)
+    localStorage.removeItem(LEGACY_TOKEN_KEY)
+  } catch {
+    // Storage refused (private mode): the cookie still carries this visit.
+  }
+}
+
+export function clearStoredToken(): void {
+  try {
+    localStorage.removeItem(TOKEN_KEY)
+    localStorage.removeItem(LEGACY_TOKEN_KEY)
+  } catch {
+    // Nothing stored to clear.
+  }
+}
+
 export async function api<T>(path: string, options: { method?: string; body?: unknown } = {}): Promise<T> {
+  const token = readStoredToken()
   const response = await fetch(`${API_BASE}${path}`, {
     method: options.method ?? 'GET',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     credentials: 'include',
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined
   })
@@ -112,6 +156,12 @@ export function connectSocket(token: string): Socket {
 export function getSocket(): Socket {
   if (!socket) throw new Error('socket not connected')
   return socket
+}
+
+/** Drops the live connection, if any (sign-out). */
+export function disconnectSocket(): void {
+  socket?.disconnect()
+  socket = null
 }
 
 export interface ToastFn {

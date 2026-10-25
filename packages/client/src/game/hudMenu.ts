@@ -449,7 +449,8 @@ export function installHudMenu(mounts: HudMenuMounts): HudMenu {
     panel.hidden = !open
     menuBtn.setAttribute('aria-expanded', String(open))
   }
-  menuBtn.onclick = () => setOpen(panel.hidden)
+  // `hidden` may also be 'until-found' (still hidden), so anything but false opens it.
+  menuBtn.onclick = () => setOpen(panel.hidden !== false)
   // Choosing something closes the list, except the toggles a player may want to flip and see.
   panel.addEventListener('click', (event) => {
     const item = (event.target as Element | null)?.closest('.hud-tool')

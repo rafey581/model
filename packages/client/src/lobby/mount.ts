@@ -377,7 +377,8 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
         bridge.setSoundMuted(!bridge.getSoundMuted())
         paint()
       },
-      onQualityChange: () => paint()
+      onQualityChange: () => paint(),
+      onSignOut: () => bridge.signOut()
     })
   }
 

@@ -309,10 +309,33 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * POST /api/auth/logout
+   *
+   * Public: clearing the cookie needs no proof of identity, and a player whose token
+   * has already expired must still be able to sign out cleanly.
    */
-  app.post('/api/auth/logout', async (_request, reply) => {
+  app.post('/api/auth/logout', { config: { public: true } }, async (_request, reply) => {
     reply.clearCookie('token', { path: '/' })
     return reply.send({ ok: true })
+  })
+
+  /**
+   * GET /api/auth/session
+   *
+   * Exchanges a still-valid session cookie for the token the client keeps for its
+   * socket and Authorization header, so a page that lost its stored token (cleared
+   * storage, a new tab after an older build) does not show a login card to someone
+   * who is signed in. 401 when there is no usable session.
+   */
+  app.get('/api/auth/session', { config: { public: true } }, async (request, reply) => {
+    const cookieToken = request.cookies.token
+    const payload = cookieToken ? verifyToken(cookieToken) : null
+    if (!payload) return reply.code(401).send({ ok: false, error: 'no active session' })
+    const user = await prisma.user.findUnique({ where: { id: payload.id } })
+    if (!user || user.status !== 'ACTIVE') {
+      reply.clearCookie('token', { path: '/' })
+      return reply.code(401).send({ ok: false, error: 'no active session' })
+    }
+    return reply.send({ ok: true, data: { user: toPublicUser(user), token: cookieToken } })
   })
 
   /**

@@ -10,6 +10,7 @@ import {
 
 export interface SettingsActions {
   onToggleSound: () => void
+  onSignOut: () => void
   /** Called after the graphics quality has been changed and saved, so the screen repaints. */
   onQualityChange: () => void
 }
@@ -34,6 +35,18 @@ export function renderSettings(bridge: LobbyBridge, actions: SettingsActions): H
   row.append(copy, toggle)
   panel.appendChild(row)
   panel.appendChild(renderQualityRow(actions))
+
+  const account = el('div', 'gl-settings-row')
+  const accountCopy = el('div')
+  accountCopy.append(el('div', undefined, SETTINGS_COPY.accountLabel), el('p', undefined, SETTINGS_COPY.accountHint(bridge.username)))
+  const signOut = el('button', 'gl-chip gl-settings-signout', SETTINGS_COPY.signOut) as HTMLButtonElement
+  signOut.type = 'button'
+  signOut.onclick = () => {
+    if (window.confirm(SETTINGS_COPY.signOutConfirm)) actions.onSignOut()
+  }
+  account.append(accountCopy, signOut)
+  panel.appendChild(account)
+
   screen.appendChild(panel)
   return screen
 }
