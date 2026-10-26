@@ -1,0 +1,253 @@
+# Deploying Snooker Stake
+
+The whole system, start to finish: the server on AWS EC2, the player app (Android APK,
+plus an optional web version), and the staff app (Android APK). Follow the parts in order;
+both apps have the server's address built in, so the server comes first.
+
+| Piece | Where it runs | Built with |
+|---|---|---|
+| Server (API + game sockets) + PostgreSQL | One EC2 instance | Node 20, pnpm, Docker |
+| Player app "Snooker Stake" (`com.snookerx.game`) | Players' phones (APK) and optionally the web | Vite + Capacitor, built on your PC |
+| Staff app "Snooker Admin" (`com.snookerarena.admin`) | Staff phones (APK) | Expo, built in the cloud by EAS |
+
+All current work is on the branch **`merge/friend-changes`**. Use that branch (or `main`
+once it has been merged there).
+
+---
+
+## 0. Decide the server's address first
+
+Everything points at one address. Pick it before building anything:
+
+- **Elastic IP (quickest):** EC2 console → Elastic IPs → Allocate → Associate with the
+  instance. An Elastic IP never changes; a plain instance IP changes on every stop/start,
+  which is why the two apps once pointed at different servers.
+  Apps then use `http://<ELASTIC_IP>:4000`.
+- **Domain with HTTPS (recommended for real players):** point `api.yourdomain.com` at the
+  Elastic IP and put nginx + Let's Encrypt in front (part 1.8). Apps then use
+  `https://api.yourdomain.com`.
+
+Below, `<SERVER>` means whichever you chose, e.g. `http://13.204.251.122:4000`.
+
+---
+
+## 1. Server on EC2
+
+### 1.1 Launch the instance
+- Ubuntu 24.04 LTS, **t3.small or larger** (t3.micro's 1 GB runs out of memory while
+  building), 20 GB gp3 disk, Elastic IP attached.
+- Security group inbound:
+  - 22 (SSH): **your IP only**
+  - 4000: 0.0.0.0/0 (the apps talk to it; close it if you use nginx + HTTPS instead)
+  - 80, 443: 0.0.0.0/0 (only if you use nginx)
+  - **Never open 5432.** The database login is the fixed `snooker/snooker` from
+    `docker-compose.yml`.
+
+### 1.2 Install the tools
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y git nginx docker.io docker-compose-v2
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs
+sudo npm install -g pnpm
+sudo usermod -aG docker $USER && newgrp docker
+```
+
+### 1.3 Get the code and build
+```bash
+git clone https://github.com/rafey581/model.git snooker && cd snooker
+git checkout merge/friend-changes
+pnpm install
+pnpm build          # shared -> server (prisma generate + tsc) -> client web build
+```
+
+### 1.4 Configure
+```bash
+cp .env.example packages/server/.env
+nano packages/server/.env
+```
+The file **must** be `packages/server/.env`. Set at least:
+
+| Setting | Value |
+|---|---|
+| `NODE_ENV` | `production` |
+| `JWT_SECRET`, `COOKIE_SECRET` | each the output of `openssl rand -hex 32` (two different values) |
+| `CLIENT_ORIGIN` | `http://localhost,<web address if any>`; `http://localhost` is where the player APK's requests come from |
+| `MAX_STAKE` | `5000` (Master Match goes to 5000 USDT) |
+| `DEPOSIT_WALLET_ADDRESS` | your USDT (Solana) receiving address; deposits are refused while empty |
+| `AUTH_ALLOW_DIRECT_REGISTER` | `true` until email is set up; with `false`, sign-up needs the emailed code |
+| `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | your mail provider, so sign-up / reset codes are emailed (without it they only appear in the server log) |
+| `ADMIN_ALLOWED_IPS` | **leave empty**: staff phones on mobile data change IP constantly |
+| `ADMIN_PUSH_ENABLED` | `true` (rings staff phones) |
+| `REAL_MONEY_ENABLED` | `false` |
+
+### 1.5 Database
+```bash
+pnpm db:up                                        # starts PostgreSQL in Docker
+pnpm db:deploy                                    # applies every migration
+SEED_ADMIN_PASSWORD='<a strong password>' pnpm db:seed   # FIRST deploy only: creates admin@snooker.test
+pnpm db:status                                    # should say: up to date
+```
+Never run `db:seed` again on a live database, and never `db:migrate` (that is for development).
+
+### 1.6 Run it as a service
+`/etc/systemd/system/snooker.service`:
+```ini
+[Unit]
+Description=Snooker Stake server
+After=network.target docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/snooker/packages/server
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
+```
+`WorkingDirectory` is the server package, so it finds its `.env`.
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now snooker
+curl http://localhost:4000/api/health      # {"ok":true,...,"db":"up"}
+journalctl -u snooker -f                   # live logs
+```
+
+### 1.7 After the first start: raise the stake ceiling
+A database that was set up before Master Match stores `maxStake = 10` in its admin
+settings, and that saved value wins over `.env`: every table above 10 USDT is refused
+("maximum stake is 10"). In the staff app: **More → Settings → max stake → 5000**.
+Check from the server:
+```bash
+docker exec -it snooker-postgres psql -U snooker -c "SELECT value FROM \"AppSetting\" WHERE key='maxStake'"
+```
+
+### 1.8 Optional: nginx, HTTPS and the web version
+Only needed for a domain with HTTPS, or to offer the game in a browser. Follow
+`deployment.md` §1.7 (proxying `/api` and `/socket.io` to port 4000 with WebSocket
+upgrade) and §3 (serving `packages/client/dist`), then:
+```bash
+sudo certbot --nginx -d api.yourdomain.com
+```
+Add the web address to `CLIENT_ORIGIN`, restart (`sudo systemctl restart snooker`), and close port 4000.
+
+### 1.9 Updating the server later
+```bash
+cd ~/snooker && git pull
+pnpm install && pnpm build
+pnpm db:deploy                    # applies new migrations (safe to run every time)
+sudo systemctl restart snooker
+```
+Back up first: `docker exec snooker-postgres pg_dump -U snooker snooker > backup-$(date +%F).sql`.
+
+---
+
+## 2. Player app APK (Snooker Stake)
+
+Built on your own computer.
+
+### 2.1 One-time setup
+- Install **Android Studio** (it brings the Android SDK; the app targets SDK 35) and
+  Node 20 + pnpm.
+- `git clone https://github.com/rafey581/model.git && cd model && git checkout merge/friend-changes`
+
+### 2.2 Point it at the server
+Edit `packages/client/.env.app`. The repo has `http://10.0.2.2:4000`, which only works in
+the Android emulator. For real phones:
+```
+VITE_API_ORIGIN=<SERVER>
+```
+(e.g. `http://13.204.251.122:4000`, or `https://api.yourdomain.com` with no port).
+
+### 2.3 Build
+```bash
+pnpm install
+pnpm --filter @snooker/shared build
+cd packages/client
+pnpm build:app          # web build with the server address baked in
+npx cap sync android    # copies it into the Android project
+cd android
+./gradlew assembleDebug        # Windows: gradlew.bat assembleDebug
+```
+APK: `packages/client/android/app/build/outputs/apk/debug/app-debug.apk`. Copy it to a
+phone and install (allow "install unknown apps").
+
+### 2.4 Release build (to hand out to players)
+1. Open `packages/client/android` in Android Studio.
+2. Increase `versionCode` (and `versionName`) in `android/app/build.gradle` for every release.
+3. **Build → Generate Signed App Bundle / APK → APK**, create a keystore, choose `release`.
+4. **Back up the keystore and its passwords.** Every future update must be signed with the
+   same keystore, or phones refuse to install it over the old version.
+
+---
+
+## 3. Staff app APK (Snooker Admin)
+
+Built in the cloud by EAS.
+
+### 3.1 Point it at the server
+In `packages/admin-app/eas.json`, `build.base.env`:
+```json
+"EXPO_PUBLIC_API_URL": "<SERVER>/api"
+```
+(note the `/api` on the end). It currently says `http://13.204.251.122:4000/api`.
+
+### 3.2 Phone ringing: Firebase (one time)
+Deposit and withdrawal alerts reach Android through Firebase. Without this the app works,
+but nothing rings.
+1. https://console.firebase.google.com → **Add project**.
+2. Add an **Android app** with package name `com.snookerarena.admin`; download
+   `google-services.json` into `packages/admin-app/`.
+3. In `packages/admin-app/app.json`, under `"android"`, add
+   `"googleServicesFile": "./google-services.json"`.
+4. Firebase → Project settings → Service accounts → **Generate new private key**.
+5. https://expo.dev → project **snooker-admin** → Credentials → Android → FCM V1 →
+   upload that key.
+
+Do not commit the private key. `google-services.json` holds only public identifiers.
+
+### 3.3 Build
+```bash
+npm install -g eas-cli
+eas login                    # the Expo account that owns the project ("xast")
+cd packages/admin-app
+pnpm build:android           # "preview" profile -> an installable .apk
+```
+EAS prints a download link and QR code when it finishes (about 10–20 minutes).
+`pnpm build:android:production` makes an `.aab` for the Play Store instead.
+
+A rebuild is needed whenever the server address, `app.json` or a native package
+changes. Server-only changes never need an app rebuild.
+
+### 3.4 First run
+1. Install the APK, sign in as `admin@snooker.test` with the seed password, and change it.
+2. Allow notifications when asked.
+3. **More → Phone alerts → Send test ring.** The phone should ring for ~24 seconds.
+
+---
+
+## 4. Checklist after deploying
+
+- [ ] `curl <SERVER>/api/health` shows `"db":"up"`
+- [ ] Player APK: sign up, log in, reload stays signed in, practice starts (6 reds)
+- [ ] A 100 USDT or Master Match table opens (proves `maxStake` was raised; plays 10 reds)
+- [ ] Deposit request → staff phone rings → approve → player balance goes up
+- [ ] Withdrawal request → balance shows it held → approve → staff pays out
+- [ ] Support message from the player → appears in the staff Support tab → reply arrives
+- [ ] Staff dashboard shows deposits, withdrawals and profit for Today
+
+## 5. Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| Server exits at start | Missing `DATABASE_URL`, `JWT_SECRET` or `COOKIE_SECRET` in `packages/server/.env` (`journalctl -u snooker`) |
+| App shows "Server offline" | Wrong address in `.env.app` / `eas.json`, port 4000 closed in the security group, or the server is down |
+| "maximum stake is 10" | Raise max stake in staff app Settings (1.7) |
+| Deposits refused "not configured" | `DEPOSIT_WALLET_ADDRESS` empty |
+| Sign-up codes never arrive | SMTP not set: codes are only in the server log |
+| Staff app can't sign in from mobile data | `ADMIN_ALLOWED_IPS` is set; empty it |
+| Phone never rings | Firebase/FCM not set up (3.2), notifications denied, or the APK was built before the Firebase files were added |
+| After moving the server, apps can't connect | The address is built into both apps: change it and rebuild both |
