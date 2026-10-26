@@ -73,7 +73,8 @@ The file **must** be `packages/server/.env`. Set at least:
 | `JWT_SECRET`, `COOKIE_SECRET` | each the output of `openssl rand -hex 32` (two different values) |
 | `CLIENT_ORIGIN` | `http://localhost,<web address if any>`; `http://localhost` is where the player APK's requests come from |
 | `MAX_STAKE` | `5000` (Master Match goes to 5000 USDT) |
-| `DEPOSIT_WALLET_ADDRESS` | your USDT (Solana) receiving address; deposits are refused while empty |
+| `DEPOSIT_WALLET_ADDRESS` | `7oK51mdQkub5kMsZoTMFRVpcsfcNvrGKTigu9wWbvMyR` (Solana; already the built-in default). The server will not start with an invalid Solana address |
+| `DEPOSIT_CURRENCIES` | `USDT,USDC` (both on Solana, each credited 1:1) |
 | `AUTH_ALLOW_DIRECT_REGISTER` | `true` until email is set up; with `false`, sign-up needs the emailed code |
 | `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | your mail provider, so sign-up / reset codes are emailed (without it they only appear in the server log) |
 | `ADMIN_ALLOWED_IPS` | **leave empty**: staff phones on mobile data change IP constantly |
@@ -246,7 +247,7 @@ changes. Server-only changes never need an app rebuild.
 | Server exits at start | Missing `DATABASE_URL`, `JWT_SECRET` or `COOKIE_SECRET` in `packages/server/.env` (`journalctl -u snooker`) |
 | App shows "Server offline" | Wrong address in `.env.app` / `eas.json`, port 4000 closed in the security group, or the server is down |
 | "maximum stake is 10" | Raise max stake in staff app Settings (1.7) |
-| Deposits refused "not configured" | `DEPOSIT_WALLET_ADDRESS` empty |
+| Server will not start: "not a valid Solana address" | Typo in `DEPOSIT_WALLET_ADDRESS`; it must be the Solana address |
 | Sign-up codes never arrive | SMTP not set: codes are only in the server log |
 | Staff app can't sign in from mobile data | `ADMIN_ALLOWED_IPS` is set; empty it |
 | Phone never rings | Firebase/FCM not set up (3.2), notifications denied, or the APK was built before the Firebase files were added |

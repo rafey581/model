@@ -20,6 +20,8 @@ export interface DepositInfo {
   enabled: boolean
   network: string
   currency: string
+  /** Every coin accepted on the network, each credited 1:1 (USDT, USDC). */
+  currencies: string[]
   walletAddress: string
   minUsdt: number
   maxUsdt: number
@@ -30,7 +32,8 @@ export function depositInfo(): DepositInfo {
   return {
     enabled: config.DEPOSIT_ENABLED,
     network: config.DEPOSIT_NETWORK,
-    currency: config.DEPOSIT_CURRENCY,
+    currency: config.DEPOSIT_CURRENCIES[0] ?? config.DEPOSIT_CURRENCY,
+    currencies: config.DEPOSIT_CURRENCIES.length ? config.DEPOSIT_CURRENCIES : [config.DEPOSIT_CURRENCY],
     walletAddress: config.DEPOSIT_WALLET_ADDRESS,
     minUsdt: config.DEPOSIT_MIN_USDT,
     maxUsdt: config.DEPOSIT_MAX_USDT,
@@ -59,18 +62,29 @@ export class DuplicateDepositTxError extends Error {
 export interface CreateDepositInput {
   userId: string
   amountUsdt: number
+  /** The coin sent (one of DEPOSIT_CURRENCIES); the first one when omitted. */
+  currency?: string
   txHash: string
   screenshot: string
 }
 
+export class UnsupportedDepositCurrencyError extends Error {
+  constructor(readonly accepted: string[]) {
+    super(`only ${accepted.join(' or ')} on Solana can be deposited`)
+  }
+}
+
 export async function createDeposit(input: CreateDepositInput): Promise<{ id: string }> {
+  const accepted = depositInfo().currencies
+  const currency = (input.currency ?? accepted[0] ?? config.DEPOSIT_CURRENCY).toUpperCase()
+  if (!accepted.includes(currency)) throw new UnsupportedDepositCurrencyError(accepted)
   try {
     const created = await prisma.cryptoDeposit.create({
       data: {
         userId: input.userId,
         network: config.DEPOSIT_NETWORK,
         address: config.DEPOSIT_WALLET_ADDRESS,
-        currency: config.DEPOSIT_CURRENCY,
+        currency,
         channel: 'MANUAL',
         amount: input.amountUsdt,
         txHash: input.txHash,
@@ -83,15 +97,15 @@ export async function createDeposit(input: CreateDepositInput): Promise<{ id: st
     await notifyAdmins(
       'DEPOSIT_PENDING',
       'New deposit request',
-      `${input.amountUsdt} ${config.DEPOSIT_CURRENCY} (${config.DEPOSIT_NETWORK}) awaits verification`
+      `${input.amountUsdt} ${currency} (${config.DEPOSIT_NETWORK}) awaits verification`
     )
     // Ring the staff phones. Not awaited: the player's request is done either way.
     void prisma.user
       .findUnique({ where: { id: input.userId }, select: { username: true } })
       .then((user) =>
         pushToAdmins({
-          title: `New deposit: ${input.amountUsdt} ${config.DEPOSIT_CURRENCY}`,
-          body: `${user?.username ?? 'A player'} sent ${input.amountUsdt} ${config.DEPOSIT_CURRENCY} on ${config.DEPOSIT_NETWORK}. Verify and approve.`,
+          title: `New deposit: ${input.amountUsdt} ${currency}`,
+          body: `${user?.username ?? 'A player'} sent ${input.amountUsdt} ${currency} on ${config.DEPOSIT_NETWORK}. Verify and approve.`,
           href: '/deposits',
           kind: 'DEPOSIT_PENDING',
           ring: true

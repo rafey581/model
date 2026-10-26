@@ -10,7 +10,8 @@ import {
   rejectDeposit,
   DepositNotFoundError,
   DepositAlreadyReviewedError,
-  DuplicateDepositTxError
+  DuplicateDepositTxError,
+  UnsupportedDepositCurrencyError
 } from './service.js'
 
 const createDepositSchema = z.object({
@@ -18,6 +19,8 @@ const createDepositSchema = z.object({
   // A Solana signature is 87-88 base58 characters, but be permissive: the admin
   // verifies the actual transaction before anything is credited.
   txHash: z.string().trim().min(8, 'transaction id looks too short').max(200, 'transaction id looks too long'),
+  // Which coin was sent; checked against DEPOSIT_CURRENCIES in the service.
+  currency: z.string().trim().max(10).optional(),
   screenshot: z.string().min(1, 'a proof screenshot is required')
 })
 
@@ -59,7 +62,7 @@ export async function registerDepositRoutes(app: FastifyInstance): Promise<void>
       const parsed = createDepositSchema.safeParse(request.body)
       if (!parsed.success) return reply.code(400).send({ ok: false, error: parsed.error.flatten() })
 
-      const { amountUsdt, txHash, screenshot } = parsed.data
+      const { amountUsdt, txHash, screenshot, currency } = parsed.data
       const info = depositInfo()
 
       if (!info.enabled) return reply.code(403).send({ ok: false, error: 'crypto deposits are currently disabled' })
@@ -80,9 +83,12 @@ export async function registerDepositRoutes(app: FastifyInstance): Promise<void>
       }
 
       try {
-        const created = await createDeposit({ userId: request.authUser!.id, amountUsdt, txHash, screenshot })
+        const created = await createDeposit({ userId: request.authUser!.id, amountUsdt, txHash, screenshot, currency })
         return reply.code(201).send({ ok: true, data: created })
       } catch (error) {
+        if (error instanceof UnsupportedDepositCurrencyError) {
+          return reply.code(400).send({ ok: false, error: error.message })
+        }
         if (error instanceof DuplicateDepositTxError) {
           return reply.code(400).send({ ok: false, error: 'this transaction id has already been used for a deposit request' })
         }

@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest'
 import { prisma } from '../db/index.js'
-import { createDeposit, approveDeposit, rejectDeposit, DuplicateDepositTxError } from './service.js'
+import { createDeposit, approveDeposit, rejectDeposit, depositInfo, DuplicateDepositTxError, UnsupportedDepositCurrencyError } from './service.js'
 import { checkLedgerInvariance } from '../fraud/index.js'
 
 const TAG = `deposit${Date.now() % 1000000}`
@@ -129,5 +129,34 @@ describe('manual deposits', () => {
     expect(Number(wallet!.available)).toBe(100)
 
     await expect(rejectDeposit(deposit.id, admin)).rejects.toThrow(/already reviewed/)
+  }, 30_000)
+
+  it('accepts USDC on Solana as well as USDT, records the coin, and credits it 1:1', async () => {
+    const player = await createUser()
+    const admin = await createUser('SUPERADMIN')
+    expect(depositInfo().currencies).toEqual(['USDT', 'USDC'])
+    expect(depositInfo().network).toBe('SOL')
+    expect(depositInfo().walletAddress).toBe('7oK51mdQkub5kMsZoTMFRVpcsfcNvrGKTigu9wWbvMyR')
+
+    const deposit = await createDeposit({ userId: player, amountUsdt: 40, currency: 'usdc', txHash: `${TAG}-usdc`, screenshot: 'data:image/png;base64,AAAA' })
+    const row = await prisma.cryptoDeposit.findUniqueOrThrow({ where: { id: deposit.id } })
+    expect(row.currency).toBe('USDC')
+    expect(row.address).toBe('7oK51mdQkub5kMsZoTMFRVpcsfcNvrGKTigu9wWbvMyR')
+
+    const approved = await approveDeposit(deposit.id, admin)
+    expect(approved.credited).toBe(40)
+    const wallet = await prisma.wallet.findUniqueOrThrow({ where: { userId: player } })
+    expect(Number(wallet.available)).toBe(40)
+
+    const usdt = await createDeposit({ userId: player, amountUsdt: 5, txHash: `${TAG}-usdt-default`, screenshot: 'data:image/png;base64,AAAA' })
+    expect((await prisma.cryptoDeposit.findUniqueOrThrow({ where: { id: usdt.id } })).currency).toBe('USDT')
+  }, 30_000)
+
+  it('refuses any other coin', async () => {
+    const player = await createUser()
+    await expect(
+      createDeposit({ userId: player, amountUsdt: 10, currency: 'ETH', txHash: `${TAG}-eth`, screenshot: 'data:image/png;base64,AAAA' })
+    ).rejects.toThrow(UnsupportedDepositCurrencyError)
+    expect(await prisma.cryptoDeposit.count({ where: { userId: player } })).toBe(0)
   }, 30_000)
 })

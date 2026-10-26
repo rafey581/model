@@ -78,12 +78,24 @@ const envSchema = z.object({
       if (typeof v === 'string') return v === 'true' || v === '1'
       return true
     }, z.boolean()),
-  // Solana program (SPL) USDT is what the player is told to send.
+  // Players send SPL tokens on Solana only. DEPOSIT_CURRENCIES lists the coins
+  // accepted (each credited 1:1 to the USDT balance); DEPOSIT_CURRENCY is the
+  // first, kept for anything that names one coin.
   DEPOSIT_NETWORK: z.string().default('SOL'),
   DEPOSIT_CURRENCY: z.string().default('USDT'),
-  // The operator's USDT-on-Solana address shown to players. Empty means deposits
-  // are advertised as not configured and requests are rejected.
-  DEPOSIT_WALLET_ADDRESS: z.string().default(''),
+  DEPOSIT_CURRENCIES: z
+    .string()
+    .default('USDT,USDC')
+    .transform((v) => v.split(',').map((c) => c.trim().toUpperCase()).filter(Boolean)),
+  // The operator's receiving address on Solana, shown to players. It must look like a
+  // Solana address (base58, 32-44 characters), so a typo stops the server at start
+  // instead of sending players' money somewhere it cannot be recovered. Unset or
+  // empty (as older .env files have it) means the operator's address below; switch
+  // deposits off with DEPOSIT_ENABLED=false instead.
+  DEPOSIT_WALLET_ADDRESS: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : '7oK51mdQkub5kMsZoTMFRVpcsfcNvrGKTigu9wWbvMyR'),
+    z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, 'DEPOSIT_WALLET_ADDRESS is not a valid Solana address')
+  ),
   DEPOSIT_MIN_USDT: z.coerce.number().default(5),
   DEPOSIT_MAX_USDT: z.coerce.number().default(1000),
   // Proof screenshot size cap (raw bytes). Suggested: keep phones low-res.

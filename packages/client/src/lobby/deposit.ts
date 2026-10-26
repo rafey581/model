@@ -17,6 +17,8 @@ export interface DepositInfo {
   enabled: boolean
   network: string
   currency: string
+  /** Coins accepted on the network (USDT, USDC); older servers send only `currency`. */
+  currencies?: string[]
   walletAddress: string
   minUsdt: number
   maxUsdt: number
@@ -107,6 +109,30 @@ function renderForm(info: DepositInfo, actions: DepositActions): HTMLElement {
   const panel = el('div', 'gl-panel gl-deposit-form')
 
   panel.appendChild(el('p', 'gl-deposit-intro', DEPOSIT_COPY.intro))
+  panel.appendChild(el('p', 'gl-deposit-warning', DEPOSIT_COPY.networkWarning))
+
+  // --- Which coin ----------------------------------------------------------------
+  const coins = info.currencies && info.currencies.length ? info.currencies : [info.currency]
+  let coin = coins[0]!
+  if (coins.length > 1) {
+    panel.appendChild(el('div', 'gl-deposit-label', DEPOSIT_COPY.coinLabel))
+    const coinRow = el('div', 'gl-chip-row')
+    coinRow.setAttribute('role', 'radiogroup')
+    const chips: HTMLButtonElement[] = []
+    for (const c of coins) {
+      const chip = el('button', 'gl-chip', c) as HTMLButtonElement
+      chip.type = 'button'
+      chip.setAttribute('role', 'radio')
+      chip.setAttribute('aria-pressed', String(c === coin))
+      chip.onclick = () => {
+        coin = c
+        for (const other of chips) other.setAttribute('aria-pressed', String(other === chip))
+      }
+      chips.push(chip)
+      coinRow.appendChild(chip)
+    }
+    panel.appendChild(coinRow)
+  }
 
   // --- Address to send to ----------------------------------------------------
   const addressRow = el('div', 'gl-deposit-address')
@@ -204,7 +230,7 @@ function renderForm(info: DepositInfo, actions: DepositActions): HTMLElement {
       return
     }
     if (value < info.minUsdt || value > info.maxUsdt) {
-      actions.toast(`amount must be between ${info.minUsdt} and ${info.maxUsdt} ${info.currency}`, 'error')
+      actions.toast(`amount must be between ${info.minUsdt} and ${info.maxUsdt} ${coin}`, 'error')
       return
     }
     const tx = txHash.value.trim()
@@ -220,7 +246,7 @@ function renderForm(info: DepositInfo, actions: DepositActions): HTMLElement {
     try {
       await api<{ id: string }>('/deposits', {
         method: 'POST',
-        body: { amountUsdt: value, txHash: tx, screenshot }
+        body: { amountUsdt: value, txHash: tx, screenshot, currency: coin }
       })
       actions.toast(DEPOSIT_COPY.submitted)
       amount.value = ''

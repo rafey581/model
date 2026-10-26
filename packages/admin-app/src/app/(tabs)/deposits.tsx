@@ -155,9 +155,9 @@ export default function DepositsScreen() {
       <SectionTitle>Notes</SectionTitle>
       <Card>
         <Text style={styles.notes}>
-          The screenshot is the player's proof of transfer. Look the tx id up on the network explorer (press and
-          hold it to copy) and check the amount and the receiving address match before approving.
-          A tx id can only be submitted once.
+          The screenshot is the player's proof of transfer. Look the tx id up on a Solana explorer (press and
+          hold it to copy) and check the token (USDT or USDC, as shown on the request), the amount and the
+          receiving address match before approving. Both coins are credited 1:1. A tx id can only be submitted once.
         </Text>
       </Card>
     </Screen>

@@ -247,13 +247,17 @@ export const DEPOSIT_COPY = {
   headline: 'FUND YOUR BALANCE',
   back: 'back to lobby',
   intro:
-    'Send USDT on the Solana network to the address below, then submit the transaction id ' +
-    'and a screenshot of the payment. An admin verifies the transaction from their side and ' +
-    'credits your balance with the same USDT amount.',
-  addressLabel: 'PLATFORM USDT ADDRESS — SOLANA NETWORK',
+    'Send USDT or USDC on the Solana network to the address below, then submit the transaction id ' +
+    'and a screenshot of the payment. An admin verifies the transaction and credits your balance ' +
+    '1:1 (1 USDC = 1 USDT).',
+  networkWarning:
+    'Solana network only. USDT or USDC only. Coins sent on any other network (Ethereum, BNB, Tron…) ' +
+    'or any other token cannot be recovered.',
+  coinLabel: 'COIN YOU SENT',
+  addressLabel: 'PLATFORM ADDRESS — SOLANA NETWORK (USDT / USDC)',
   copyAddress: 'copy',
   copied: 'address copied',
-  amountLabel: 'AMOUNT (USDT)',
+  amountLabel: 'AMOUNT SENT',
   txLabel: 'TRANSACTION ID',
   txPlaceholder: 'the solana signature of your transfer',
   proofLabel: 'PROOF SCREENSHOT',
@@ -272,7 +276,7 @@ export const DEPOSIT_COPY = {
   credited: (n: number) => `${n} USDT credited`,
   rejectedPrefix: 'reason: ',
   submitted: 'Deposit request sent. An admin will verify it shortly.',
-  amountHint: (min: number, max: number) => `min ${min} · max ${max} USDT`
+  amountHint: (min: number, max: number) => `min ${min} · max ${max} (USDT or USDC)`
 } as const
 
 /**
