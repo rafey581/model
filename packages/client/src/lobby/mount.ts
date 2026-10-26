@@ -1,4 +1,5 @@
 import './lobby.css'
+import { GUEST_STAKE_PROMPT } from '@snooker/shared'
 import { HOME_COPY } from './content.js'
 import { clear } from './dom.js'
 import { renderHome } from './home.js'
@@ -13,7 +14,7 @@ import { emitSfx } from '../sfx/sfxEvents.js'
 import { requestLandscape } from '../game/hudMenu.js'
 import { createShell, syncTabIndicator, tabToView, viewToTab } from './shell.js'
 import { createCasinoShell, renderCasinoHome, wantsCasinoLobby, type CasinoDestination } from './casino.js'
-import { defaultSetupState, renderSetup } from './setup.js'
+import { defaultSetupState, renderSetup, tiersForTable } from './setup.js'
 import { renderStatistics } from './stats.js'
 import type {
   InfoSection,
@@ -93,6 +94,12 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
   /** Which lobby is up: the desktop hall, or the compact one for phones and narrow windows. */
   let casino = wantsCasinoLobby()
 
+  const stakeLocked = (): boolean => {
+    if (!bridge.guest) return false
+    bridge.toast(GUEST_STAKE_PROMPT, 'info')
+    return true
+  }
+
   /** Where the desktop lobby's sidebar and top bar send the player. */
   const goCasino = (where: CasinoDestination): void => {
     switch (where) {
@@ -104,6 +111,7 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
         openSetup(null)
         return
       case 'tournaments':
+        if (stakeLocked()) return
         bridge.openTournaments()
         return
       case 'games':
@@ -112,6 +120,7 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
         paint()
         return
       case 'wallet':
+        if (stakeLocked()) return
         state.view = 'deposit'
         state.deposit = null
         void loadDepositView().then(paint)
@@ -121,6 +130,7 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
         bridge.toast('The leaderboard is coming soon.', 'info')
         return
       case 'friends':
+        if (stakeLocked()) return
         state.view = 'friends'
         paint()
         return
@@ -232,10 +242,15 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
         practice: () => openSetup('ai'),
         // A private room is a table for a friend, which is what the friends screen opens.
         createRoom: () => {
+          if (stakeLocked()) return
           state.view = 'friends'
           paint()
         },
-        tournaments: () => bridge.openTournaments(),
+        tournaments: () => {
+          if (stakeLocked()) return
+          bridge.openTournaments()
+        },
+        masterMatch: () => openSetup('online', undefined, 'master'),
         openGames: () => goCasino('games'),
         history: state.history,
         userId: bridge.userId
@@ -254,14 +269,19 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
           state.view = 'info'
           paint()
         },
-        openTournaments: () => bridge.openTournaments(),
+        openTournaments: () => {
+          if (stakeLocked()) return
+          bridge.openTournaments()
+        },
         openDeposit: () => {
+          if (stakeLocked()) return
           state.view = 'deposit'
           state.deposit = null
           void loadDepositView().then(paint)
           paint()
         },
         openFriends: () => {
+          if (stakeLocked()) return
           state.view = 'friends'
           paint()
         },
@@ -270,6 +290,7 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
           paint()
         },
         openWithdraw: () => {
+          if (stakeLocked()) return
           state.view = 'withdraw'
           state.withdraw = null
           void loadWithdrawView().then(paint)
@@ -285,6 +306,10 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
           paint()
         },
         onChange: (next) => {
+          if (bridge.guest && next.mode === 'online') {
+            bridge.toast(GUEST_STAKE_PROMPT, 'info')
+            return
+          }
           state.setup = next
           if (next.mode === 'online' && !state.friendsLoaded) void loadFriends().then(paint)
           paint()
@@ -382,8 +407,18 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
     paint()
   }
 
-  const openSetup = (mode: PlayMode | null, friendUsername?: string): void => {
+  const openSetup = (mode: PlayMode | null, friendUsername?: string, table: 'open' | 'master' = 'open'): void => {
+    if (bridge.guest && (mode === 'online' || table === 'master')) {
+      bridge.toast(GUEST_STAKE_PROMPT, 'info')
+      return
+    }
     state.setup = defaultSetupState(bridge, mode)
+    if (table === 'master') {
+      state.setup.table = 'master'
+      state.setup.mode = mode ?? 'online'
+      const masterTiers = tiersForTable(bridge.getStakeTiers(), 'master')
+      state.setup.stakeTierId = masterTiers[0]?.id ?? state.setup.stakeTierId
+    }
     if (mode === 'ai') state.setup.difficulty = bridge.practiceDifficulty
     if (mode === 'online') {
       void loadFriends().then(paint)
@@ -407,8 +442,14 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
   }
 
   const startMatch = async (): Promise<void> => {
-    const { mode, difficulty, format, stakeTierId, opponent, friendUsername } = state.setup
+    const { mode, difficulty, format, opponent, friendUsername } = state.setup
+    let { stakeTierId } = state.setup
     if (!mode || state.starting) return
+    if (mode === 'online') {
+      const allowed = tiersForTable(bridge.getStakeTiers(), state.setup.table ?? 'open')
+      if (!allowed.some((tier) => tier.id === stakeTierId)) stakeTierId = allowed[0]?.id ?? null
+      state.setup.stakeTierId = stakeTierId
+    }
     // Still inside the tap, before anything is awaited: the only moment a phone may be
     // turned sideways for the table.
     requestLandscape()
@@ -419,6 +460,10 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
         bridge.setPracticeDifficulty(difficulty)
         await bridge.startPractice(difficulty)
       } else {
+        if (bridge.guest) {
+          bridge.toast(GUEST_STAKE_PROMPT, 'info')
+          return
+        }
         const tier = stakeTierId ?? bridge.getDefaultStakeTierId()
         if (!tier) {
           bridge.toast('Stake tiers unavailable. Try again shortly.', 'error')

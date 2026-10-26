@@ -30,6 +30,11 @@ export const SETUP_COPY = {
   difficultyLabel: 'AI DIFFICULTY',
   lengthLabel: 'MATCH LENGTH',
   stakeLabel: 'STAKE',
+  tableLabel: 'TABLE',
+  tableOpen: 'OPEN TABLE',
+  tableOpenHint: '1 – 100 USDT',
+  tableMaster: 'MASTER MATCH',
+  tableMasterHint: '500 – 5000 USDT',
   opponentLabel: 'OPPONENT',
   opponentAnyone: 'ANYONE',
   opponentAnyoneHint: 'broadcast to online players',
@@ -38,7 +43,7 @@ export const SETUP_COPY = {
   friendPickLabel: 'WHICH FRIEND',
   friendEmpty: 'no friends yet — add one from the FRIENDS screen first',
   facts: ['15 reds', '6 colours', '1 white cue ball'] as const,
-  panelBrand: 'SNOOKERX',
+  panelBrand: 'SNOOKER STAKE',
   panelBadge: 'LIVE TABLE',
   panelTitle: 'Ready when you are',
   panelBody: 'Confirm the mode and start when the table feels right.',
@@ -83,6 +88,16 @@ export const SETTINGS_COPY = {
     { value: 'low', label: 'Low', hint: 'Fastest' },
     { value: 'medium', label: 'Medium', hint: 'Balanced' },
     { value: 'high', label: 'High', hint: 'Sharpest' }
+  ],
+  musicLabel: 'Music',
+  musicHint: 'Slow background music. It lowers during a shot and pauses when you leave the app.',
+  musicVolume: 'Volume',
+  musicTracks: [
+    { value: 'piano', label: 'Piano' },
+    { value: 'guitar', label: 'Guitar' },
+    { value: 'violin', label: 'Violin' },
+    { value: 'flute', label: 'Flute' },
+    { value: 'mix', label: 'Mix', hint: 'Rotates' }
   ]
 } as const
 
@@ -205,7 +220,7 @@ export const INVITE_COPY = {
   share: 'share',
   copied: 'copied to clipboard',
   copyFailed: 'could not copy — select it and copy manually',
-  shareText: (bonus: number) => `Join me on SnookerX. Sign up and play — I earn ${bonus} USDT when you finish your first match.`,
+  shareText: (bonus: number) => `Join me on Snooker Stake. Sign up and play — I earn ${bonus} USDT when you finish your first match.`,
   statInvited: 'INVITED',
   statPlayed: 'PLAYED',
   statEarned: 'EARNED',

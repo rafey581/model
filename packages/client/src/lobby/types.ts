@@ -24,7 +24,11 @@ export interface LobbyStakeTier {
   id: string
   label: string
   usdt: number
+  /** Absent on an older server: the id prefix is the fallback. */
+  table?: 'OPEN' | 'MASTER'
 }
+
+export type StakeTableChoice = 'open' | 'master'
 
 export interface LobbyProfileStats {
   matches: number
@@ -46,6 +50,8 @@ export interface LobbyBridge {
   appTitle: string
   username: string
   userId: string
+  /** A guest can practice, and is stopped from stakes, cash, and friends. */
+  guest?: boolean
   walletBalance: number
   logoSvg: string
   formatCash: (amount: number) => string
@@ -79,6 +85,8 @@ export interface SetupState {
   difficulty: PracticeAiLevel
   format: MatchFormat
   stakeTierId: string | null
+  /** Online only: ordinary open table, or a Master Match. */
+  table: StakeTableChoice
   /** Online only: open to everyone, or invite one friend. */
   opponent: 'anyone' | 'friend'
   /** The friend to invite when `opponent` is 'friend'. */

@@ -2694,3 +2694,118 @@
   letter-spacing: 0.02em;
   opacity: 0.85;
 }
+
+/* ------------------------------------------------------------------ home theme
+ * The hall after login cycles red, then blue, then gold. Only `.is-landing`
+ * (the home view) takes it. Auth and the other lobby screens keep their colours.
+ * Registered colours interpolate; a jump between gradients does not.
+ */
+
+@property --cx-a {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #ef4444;
+}
+
+@property --cx-b {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #7f1d1d;
+}
+
+.cx-root.is-landing .cx-backdrop {
+  background:
+    radial-gradient(62% 48% at 72% -8%, color-mix(in srgb, var(--cx-a) 55%, transparent), transparent 70%),
+    radial-gradient(48% 42% at 6% 108%, color-mix(in srgb, var(--cx-b) 50%, transparent), transparent 72%),
+    radial-gradient(36% 30% at 100% 80%, color-mix(in srgb, var(--cx-a) 22%, transparent), transparent 70%),
+    linear-gradient(180deg, #14080c, #07060a);
+  animation: cx-hall 36s ease-in-out infinite;
+}
+
+.cx-root.is-landing {
+  animation: cx-hall 36s ease-in-out infinite;
+}
+
+@keyframes cx-hall {
+  0%, 10% {
+    --cx-a: #ef4444;
+    --cx-b: #991b1b;
+  }
+  36%, 48% {
+    --cx-a: #60a5fa;
+    --cx-b: #1d4ed8;
+  }
+  74%, 86% {
+    --cx-a: #f5c542;
+    --cx-b: #b45309;
+  }
+  100% {
+    --cx-a: #ef4444;
+    --cx-b: #991b1b;
+  }
+}
+
+.cx-root.is-landing .cx-hero,
+.cx-root.is-landing .cx-panel,
+.cx-root.is-landing .cx-mode,
+.cx-root.is-landing .cx-master,
+.cx-root.is-landing .cx-nav__item.is-active {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--cx-a) 42%, transparent),
+    0 16px 40px rgba(0, 0, 0, 0.38);
+}
+
+.cx-master {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 16px;
+  padding: 18px 20px;
+  border-radius: var(--cx-radius);
+  background:
+    linear-gradient(105deg, rgba(42, 24, 8, 0.92), rgba(18, 14, 10, 0.88));
+  border: 1px solid rgba(245, 197, 66, 0.35);
+}
+
+.cx-master__kicker {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  font-weight: 700;
+  color: #f5c542;
+}
+
+.cx-master__title {
+  margin: 4px 0 0;
+  font-size: 22px;
+  letter-spacing: 0.02em;
+}
+
+.cx-master__text {
+  margin: 6px 0 0;
+  max-width: 46ch;
+  color: var(--cx-dim);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.cx-master__cta {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 720px) {
+  .cx-master {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cx-root.is-landing,
+  .cx-root.is-landing .cx-backdrop {
+    animation: none;
+    --cx-a: #60a5fa;
+    --cx-b: #1d4ed8;
+  }
+}

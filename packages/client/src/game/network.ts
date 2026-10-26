@@ -65,12 +65,45 @@ const serverErrorWording: Record<number, string> = {
   409: 'That email or username is already registered. Try logging in instead.'
 }
 
+/** A dead host must not hold the first paint. 10.0.2.2 never answers on a real phone. */
+const API_TIMEOUT_MS = 2500
+
 export async function api<T>(path: string, options: { method?: string; body?: unknown } = {}): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    method: options.method ?? 'GET',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  // The Android webview calls the API on another host, so the session cookie is not
+  // sent. The saved token is what the server already accepts as a bearer.
+  try {
+    const saved = localStorage.getItem('token') ?? localStorage.getItem('snooker_token')
+    if (saved) headers.Authorization = `Bearer ${saved}`
+  } catch {
+    // No storage (a test runner). The cookie, when there is one, still goes.
+  }
+  const controller = new AbortController()
+  // AbortSignal is not enough on Android: Capacitor's native HTTP stack never
+  // settles a POST to a dead host, so this race rejects at the deadline itself.
+  const response = await new Promise<Response>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      controller.abort()
+      reject(new TypeError('Failed to fetch'))
+    }, API_TIMEOUT_MS)
+    fetch(`${API_BASE}${path}`, {
+      method: options.method ?? 'GET',
+      headers,
+      credentials: 'include',
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal
+    }).then(
+      (res) => {
+        clearTimeout(timer)
+        resolve(res)
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        const name = error && typeof error === 'object' && 'name' in error ? String((error as { name: string }).name) : ''
+        if (name === 'AbortError' || error instanceof TypeError) reject(new TypeError('Failed to fetch'))
+        else reject(error)
+      }
+    )
   })
 
   // A failed request does not always come back as JSON. A proxy or gateway can
@@ -104,7 +137,8 @@ export function connectSocket(token: string): Socket {
   socket?.disconnect()
   socket = io(API_ORIGIN || '/', {
     auth: { token },
-    transports: ['websocket']
+    transports: ['websocket'],
+    timeout: API_TIMEOUT_MS
   })
   return socket
 }

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { config } from '../config.js'
+import { guestStakeMessage } from '../auth/guestGate.js'
 import { prisma } from '../db/index.js'
 import { requireAdminSession } from '../admin/auth.js'
 import {
@@ -56,6 +57,8 @@ export async function registerDepositRoutes(app: FastifyInstance): Promise<void>
     '/api/deposits',
     { bodyLimit: config.DEPOSIT_SCREENSHOT_MAX_BYTES * 2 + 512 * 1024 },
     async (request, reply) => {
+      const blocked = await guestStakeMessage(request.authUser!.id)
+      if (blocked) return reply.code(403).send({ ok: false, error: blocked })
       const parsed = createDepositSchema.safeParse(request.body)
       if (!parsed.success) return reply.code(400).send({ ok: false, error: parsed.error.flatten() })
 

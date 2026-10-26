@@ -549,10 +549,8 @@ describe("the venue's television cameras", () => {
     }
   }
 
-  it('offers two views on the button: behind the cue ball, and overhead', () => {
-    // One press goes overhead and the next comes back. The television views are still
-    // poses the rig can hold; they are just not stops on the button any more.
-    expect([...PLAYER_CAMERA_MODES]).toEqual(['AIM', 'TOP_DOWN'])
+  it('offers the cue view, a low side camera, and the overhead table', () => {
+    expect([...PLAYER_CAMERA_MODES]).toEqual(['AIM', 'SIDE', 'TOP_DOWN'])
   })
 
   it('opens up on a narrow canvas without touching the landscape framing', () => {

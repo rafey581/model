@@ -4,7 +4,7 @@ import { DIFFICULTIES } from '../lobbyModel.js'
 import { SETUP_COPY } from './content.js'
 import { accentHeadline, el } from './dom.js'
 import { ICONS } from './icons.js'
-import type { LobbyBridge, PlayMode, SetupState } from './types.js'
+import type { LobbyBridge, LobbyStakeTier, PlayMode, SetupState, StakeTableChoice } from './types.js'
 
 export interface SetupActions {
   onBack: () => void
@@ -120,16 +120,40 @@ export function renderSetup(
       }
     }
 
-    const tiers = bridge.getStakeTiers()
+    left.appendChild(el('div', 'gl-label gl-row-label', SETUP_COPY.tableLabel))
+    const tableRow = el('div', 'gl-chip-row')
+    const table = state.table ?? 'open'
+    for (const [value, label, hint] of [
+      ['open', SETUP_COPY.tableOpen, SETUP_COPY.tableOpenHint],
+      ['master', SETUP_COPY.tableMaster, SETUP_COPY.tableMasterHint]
+    ] as const) {
+      const chip = el('button', 'gl-chip') as HTMLButtonElement
+      chip.type = 'button'
+      chip.setAttribute('aria-pressed', String(table === value))
+      chip.append(document.createTextNode(label), el('span', 'gl-chip__hint', hint))
+      chip.onclick = () => {
+        const nextTiers = tiersForTable(bridge.getStakeTiers(), value)
+        const keep = nextTiers.some((tier) => tier.id === state.stakeTierId)
+        actions.onChange({
+          ...state,
+          table: value,
+          stakeTierId: keep ? state.stakeTierId : (nextTiers[0]?.id ?? null)
+        })
+      }
+      tableRow.appendChild(chip)
+    }
+    left.appendChild(tableRow)
+
+    const tiers = tiersForTable(bridge.getStakeTiers(), table)
     if (tiers.length) {
       left.appendChild(el('div', 'gl-label gl-row-label', SETUP_COPY.stakeLabel))
       const row = el('div', 'gl-chip-row gl-chip-row--stakes')
-      const active = state.stakeTierId ?? bridge.getDefaultStakeTierId() ?? tiers[0]!.id
+      const active = tiers.some((tier) => tier.id === state.stakeTierId) ? state.stakeTierId : tiers[0]!.id
       for (const tier of tiers) {
         const chip = el('button', 'gl-chip', `${tier.label}`) as HTMLButtonElement
         chip.type = 'button'
         chip.setAttribute('aria-pressed', String(tier.id === active))
-        chip.onclick = () => actions.onChange({ ...state, stakeTierId: tier.id })
+        chip.onclick = () => actions.onChange({ ...state, stakeTierId: tier.id, table })
         row.appendChild(chip)
       }
       left.appendChild(row)
@@ -159,7 +183,7 @@ export function renderSetup(
   const needsFriend = state.mode === 'online' && state.opponent === 'friend' && !state.friendUsername
   start.disabled = !state.mode || actions.starting || needsFriend
   start.onclick = () => actions.onStart()
-  const summary = el('div', 'gl-setup__summary', buildSummary(state))
+  const summary = el('div', 'gl-setup__summary', buildSummary(state, bridge))
   const foot = el('div', 'gl-setup__foot')
   foot.append(start, summary)
   body.append(brandRow, copy, foot)
@@ -197,14 +221,26 @@ function modeCard(
   return btn
 }
 
-function buildSummary(state: SetupState): string {
+export function tierTableOf(tier: { id: string; table?: string }): 'OPEN' | 'MASTER' {
+  if (tier.table === 'MASTER' || tier.id.startsWith('MASTER_')) return 'MASTER'
+  return 'OPEN'
+}
+
+export function tiersForTable(tiers: LobbyStakeTier[], table: StakeTableChoice): LobbyStakeTier[] {
+  const wanted = table === 'master' ? 'MASTER' : 'OPEN'
+  return tiers.filter((tier) => tierTableOf(tier) === wanted)
+}
+
+function buildSummary(state: SetupState, bridge: LobbyBridge): string {
   if (!state.mode) return 'SELECT A MODE TO BEGIN'
   if (state.mode === 'ai') {
     return `VS AI / ${state.difficulty} / ${SETUP_COPY.formats.BO1.label}`
   }
   const fmt = SETUP_COPY.formats[state.format]
   const vs = state.opponent === 'friend' ? (state.friendUsername ?? 'A FRIEND') : 'ANYONE'
-  return `ONLINE / ${fmt.label} / ${vs}`
+  const table = state.table === 'master' ? 'MASTER' : 'OPEN'
+  const tier = bridge.getStakeTiers().find((item) => item.id === state.stakeTierId)
+  return `ONLINE / ${fmt.label} / ${vs} / ${table}${tier ? ` / ${tier.label}` : ''}`
 }
 
 export function defaultSetupState(
@@ -216,6 +252,7 @@ export function defaultSetupState(
     difficulty: bridge.practiceDifficulty,
     format: 'BO1',
     stakeTierId: bridge.getDefaultStakeTierId(),
+    table: 'open',
     opponent: 'anyone',
     friendUsername: null
   }

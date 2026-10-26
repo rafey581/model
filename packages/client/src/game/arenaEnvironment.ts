@@ -193,7 +193,7 @@ function hoardingTexture(cfg: ArenaConfig, budget: ArenaBudget): THREE.CanvasTex
     ctx.fillStyle = 'rgba(255,255,255,0.3)'
     ctx.fillRect(x0 + gap, tileH * 0.9, w, Math.max(1, tileH * 0.012))
 
-    const text = slogans[(p * 2 + 1) % slogans.length] ?? 'SNOOKERX'
+    const text = slogans[(p * 2 + 1) % slogans.length] ?? 'SNOOKER STAKE'
     let fontPx = Math.round(tileH * 0.44)
     ctx.font = `700 ${fontPx}px system-ui, "Segoe UI", sans-serif`
     const widest = w * 0.8
@@ -1592,7 +1592,7 @@ const STAND_TOP_DARKEN = 0.6
 /** The dark above the stands, and the haze that settles over the far rows. */
 const ARENA_VOID_COLOR = '#03050b'
 const ARENA_HAZE_COLOR = '#070a14'
-const STUDIO_SPONSORS = ['SNOOKERX', 'WORLD SNOOKER', 'LIVE ON STREAM', 'CHAMPIONSHIP']
+const STUDIO_SPONSORS = ['SNOOKER STAKE', 'WORLD SNOOKER', 'LIVE ON STREAM', 'CHAMPIONSHIP']
 
 function studioTexture(ctx: CanvasRenderingContext2D, repeatX: boolean, name: string): THREE.CanvasTexture {
   const tex = new THREE.CanvasTexture(ctx.canvas)
@@ -1699,7 +1699,7 @@ function studioBandTexture(width: number): THREE.CanvasTexture {
     // The accent: gold on the blue boards, red on the dark ones.
     ctx.fillStyle = i % 2 === 0 ? '#f2c14e' : '#e0323f'
     ctx.fillRect(x0 + boardW * 0.06, height * 0.2, Math.max(4, boardW * 0.012), height * 0.6)
-    const text = STUDIO_SPONSORS[i] ?? 'SNOOKERX'
+    const text = STUDIO_SPONSORS[i] ?? 'SNOOKER STAKE'
     let font = Math.round(height * 0.46)
     ctx.font = `800 ${font}px system-ui, "Segoe UI", sans-serif`
     const room = boardW * 0.74
@@ -1716,7 +1716,7 @@ function studioBandTexture(width: number): THREE.CanvasTexture {
   return studioTexture(ctx, true, 'studio-band')
 }
 
-/** The branded board: SnookerX on a deep gradient, a gold rule and a line under it, softly lit. */
+/** The branded board: Snooker Stake on a deep gradient, a gold rule and a line under it, softly lit. */
 function studioBoardTexture(width: number): THREE.CanvasTexture {
   const height = Math.round(width * (STUDIO_BOARD_HEIGHT / STUDIO_BOARD_WIDTH))
   const ctx = canvas2d(width, height)
@@ -1765,17 +1765,22 @@ function studioBoardTexture(width: number): THREE.CanvasTexture {
   // The name, with a glow behind it, and the line under it.
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
-  const nameSize = Math.round(height * 0.38)
+  const nameSize = Math.round(height * 0.26)
   ctx.font = `italic 900 ${nameSize}px "Segoe UI", system-ui, sans-serif`
+  const left = 'Snooker'
+  const right = 'Stake'
+  const gap = nameSize * 0.18
+  const leftW = ctx.measureText(left).width
+  const rightW = ctx.measureText(right).width
+  const start = (width - (leftW + gap + rightW)) / 2
+  ctx.textAlign = 'left'
   ctx.shadowColor = 'rgba(120,220,255,0.85)'
   ctx.shadowBlur = nameSize * 0.35
   ctx.fillStyle = '#ffffff'
-  ctx.fillText('Snooker', width * 0.455, height * 0.43)
+  ctx.fillText(left, start, height * 0.43)
   ctx.shadowColor = 'rgba(255,200,80,0.9)'
   ctx.fillStyle = '#ffd25a'
-  const snookerW = ctx.measureText('Snooker').width
-  ctx.textAlign = 'left'
-  ctx.fillText('X', width * 0.455 + snookerW / 2 + nameSize * 0.04, height * 0.43)
+  ctx.fillText(right, start + leftW + gap, height * 0.43)
   ctx.shadowBlur = 0
   ctx.textAlign = 'center'
   ctx.fillStyle = '#e9c46a'

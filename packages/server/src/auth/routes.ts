@@ -305,7 +305,43 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ ok: true, data: { reset: true } })
   })
 
-  // Guest feature removed
+  /**
+   * POST /api/auth/guest
+   *
+   * A short-lived session with no wallet. Practice is free; stakes, cash, and
+   * friends are refused with the guest prompt. The client falls back to a local
+   * frame when this request cannot reach the server.
+   */
+  app.post('/api/auth/guest', { config: { public: true } }, async (_request, reply) => {
+    if (!config.AUTH_ALLOW_GUEST) {
+      return reply.code(403).send({ ok: false, error: 'guest play is disabled' })
+    }
+    let user: Awaited<ReturnType<typeof prisma.user.create>> | null = null
+    for (let attempt = 0; attempt < 3 && !user; attempt++) {
+      const suffix = Math.random().toString(36).slice(2, 8)
+      try {
+        user = await prisma.user.create({
+          data: {
+            username: `Guest${suffix}`,
+            email: `guest-${suffix}@guest.local`,
+            passwordHash: '!',
+            role: 'PLAYER',
+            authProvider: 'GUEST',
+            name: 'Guest'
+          }
+        })
+      } catch (error) {
+        if (!isUniqueViolation(error) || attempt === 2) throw error
+      }
+    }
+    if (!user) return reply.code(500).send({ ok: false, error: 'guest play is unavailable' })
+    const token = signToken(
+      { id: user.id, username: user.username, role: user.role, status: user.status },
+      4 * 60 * 60
+    )
+    reply.setCookie('token', token, { httpOnly: true, sameSite: 'lax', path: '/' })
+    return reply.send({ ok: true, data: { user: toPublicUser(user), token } })
+  })
 
   /**
    * POST /api/auth/logout
@@ -313,6 +349,23 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/auth/logout', async (_request, reply) => {
     reply.clearCookie('token', { path: '/' })
     return reply.send({ ok: true })
+  })
+
+  /**
+   * GET /api/auth/session
+   *
+   * The page asks for this when it has a cookie but no token in storage, which is
+   * how a reload finds a session that was set by the login response. No session is
+   * a 401, the same answer as a missing bearer, so the client shows the sign-in card.
+   */
+  app.get('/api/auth/session', { config: { public: true } }, async (request, reply) => {
+    const token = request.cookies?.token || request.headers.authorization?.replace('Bearer ', '')
+    if (!token) return reply.code(401).send({ ok: false, error: 'unauthorized' })
+    const payload = verifyToken(token)
+    if (!payload) return reply.code(401).send({ ok: false, error: 'invalid token' })
+    const user = await prisma.user.findUnique({ where: { id: payload.id } })
+    if (!user || user.status !== 'ACTIVE') return reply.code(403).send({ ok: false, error: 'account not active' })
+    return reply.send({ ok: true, data: { user: toPublicUser(user), token } })
   })
 
   /**

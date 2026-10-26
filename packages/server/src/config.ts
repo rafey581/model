@@ -51,7 +51,9 @@ const envSchema = z.object({
   MATCH_RECONNECT_GRACE_SEC: z.coerce.number().default(120),
   COMMISSION_PCT: z.coerce.number().default(0.1),
   MIN_STAKE: z.coerce.number().default(1),
-  MAX_STAKE: z.coerce.number().default(10),
+  // High enough for Master Match (5000 USDT). An operator can still lower it in
+  // admin settings; the ledger then refuses anything above that ceiling.
+  MAX_STAKE: z.coerce.number().default(5000),
 
   // --- Invitations (referral programme) -----------------------------------
   // Every account gets a unique invite code. A new player may enter a code (or

@@ -1,3 +1,4 @@
+import { APP_TITLE } from '@snooker/shared'
 import './matchLoading.css'
 import './matchLoadingCasino.css'
 import {
@@ -55,6 +56,10 @@ export function showMatchLoading(opts: MatchLoadingShowOpts): MatchLoadingHandle
   const center = document.createElement('div')
   center.className = 'ml-center'
 
+  const brand = document.createElement('p')
+  brand.className = 'ml-mode'
+  brand.textContent = APP_TITLE
+
   const mode = document.createElement('p')
   mode.className = 'ml-mode'
   mode.textContent = opts.modeLabel
@@ -104,7 +109,7 @@ export function showMatchLoading(opts: MatchLoadingShowOpts): MatchLoadingHandle
   longer.className = 'ml-longer'
   longer.textContent = 'Taking a little longer than usual, thanks for your patience.'
 
-  center.append(mode, stage, title, status, tip, progressRow, readyLabel, longer)
+  center.append(brand, mode, stage, title, status, tip, progressRow, readyLabel, longer)
   root.append(bg, buildHallLights(reduced), center)
   document.body.appendChild(root)
 

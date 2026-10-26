@@ -311,6 +311,19 @@ interface Roll {
 const ROLL_MATCH = 0.5
 
 /**
+ * Share of sliding friction that sidespin may spend curving the cue ball while it is
+ * still skidding. Pure rolling has no swerve: the contact point is at rest, so side
+ * english only shows once the ball is sliding (an elevated cue's tilted spin axis).
+ */
+const SWERVE_FRACTION = 0.38
+
+/**
+ * A ball slower than this, in mm/s, is allowed a wider pocket mouth. Faster balls
+ * have to be aimed into the throat or the jaw rattles them back out.
+ */
+const POCKET_GENTLE_SPEED = 1900
+
+/**
  * The rotation a ball starts the stroke with, laid along the way it is travelling.
  *
  * Only the cue ball is moving at the start, and `applyShot` has set its rotation from
@@ -352,15 +365,36 @@ function integrate(ball: BallState, roll: Roll, dt: number): void {
   const sx = vx - roll.x
   const sy = vy - roll.y
   const slip = Math.sqrt(sx * sx + sy * sy)
+  // Fraction of this step the ball is still skidding. Swerve only exists then.
+  let slideFraction = 0
   if (slip > ROLL_MATCH) {
+    slideFraction = 1
     const closes = 3.5 * SLIDE_FRICTION * dt
     if (closes >= slip) {
       // Grips within this step: centre and surface meet at the analytic natural-roll
       // velocity, v - 2/7 of the slip, and the ball rolls from here.
+      slideFraction = slip / closes
       vx -= (2 / 7) * sx
       vy -= (2 / 7) * sy
       roll.x = vx
       roll.y = vy
+      // The rest of the step is true roll. Without this the ball coasts at the
+      // gripping pace for the whole step and the last few centimetres arrive hot.
+      const rollDt = dt * (1 - slideFraction)
+      if (rollDt > 0) {
+        const gripped = Math.hypot(vx, vy)
+        const nextSpeed = gripped - ROLL_FRICTION * rollDt
+        if (nextSpeed <= MIN_SPEED || gripped === 0) {
+          vx = 0
+          vy = 0
+        } else {
+          const f = nextSpeed / gripped
+          vx *= f
+          vy *= f
+        }
+        roll.x = vx
+        roll.y = vy
+      }
     } else {
       const k = (SLIDE_FRICTION * dt) / slip
       vx -= sx * k
@@ -388,6 +422,26 @@ function integrate(ball: BallState, roll: Roll, dt: number): void {
     }
     roll.x = vx
     roll.y = vy
+  }
+  // Sidespin curves a skidding ball. The yaw is taken out of the velocity direction
+  // (and the roll with it) so the curve does not add pace and the skid is preserved.
+  if (slideFraction > 0 && Math.abs(ball.spin.x) > 0.02) {
+    const speed = Math.hypot(vx, vy)
+    if (speed > 40) {
+      const grip = Math.min(1, slip / Math.max(speed, 1))
+      const lat = Math.abs(ball.spin.x) * SWERVE_FRACTION * SLIDE_FRICTION * grip
+      const yaw = Math.sign(ball.spin.x) * Math.min(0.04, (lat * dt * slideFraction) / speed)
+      const c = Math.cos(yaw)
+      const s = Math.sin(yaw)
+      const nvx = vx * c - vy * s
+      const nvy = vx * s + vy * c
+      const rx = roll.x * c - roll.y * s
+      const ry = roll.x * s + roll.y * c
+      vx = nvx
+      vy = nvy
+      roll.x = rx
+      roll.y = ry
+    }
   }
   ball.vel.x = vx
   ball.vel.y = vy
@@ -519,24 +573,71 @@ function cushionDamping(ball: BallState): number {
   return Math.max(0.5, CUSHION_TANGENTIAL_DAMP + (1 - CUSHION_TANGENTIAL_DAMP) * (1 - side * 0.5))
 }
 
+/**
+ * How far the ball's path misses the pocket centre, in millimetres.
+ * Zero is aimed straight at the hole.
+ */
+function pocketMiss(dx: number, dy: number, vx: number, vy: number): number {
+  const speed = Math.hypot(vx, vy)
+  if (speed < 1) return 0
+  return Math.abs(dx * vy - dy * vx) / speed
+}
+
+/**
+ * A pocket is not a circle that swallows anything that touches it.
+ *
+ * A ball aimed into the throat drops at any pace. A gentle ball is allowed a wider
+ * mouth. A hard ball that only clips the jaw — the path misses the throat — rattles
+ * back onto the table instead of falling in.
+ */
+function pocketShouldDrop(ball: BallState, pocket: Pocket, dx: number, dy: number, dist: number): boolean {
+  const throat = pocket.radius * (pocket.kind === 'middle' ? 0.6 : 0.66)
+  if (dist < throat * 0.62) return true
+  const inward = -(ball.vel.x * dx + ball.vel.y * dy) / Math.max(dist, 1)
+  if (inward < 0 && dist > throat * 0.8) return false
+  const miss = pocketMiss(dx, dy, ball.vel.x, ball.vel.y)
+  if (miss <= throat) return true
+  const speed = Math.hypot(ball.vel.x, ball.vel.y)
+  return speed <= POCKET_GENTLE_SPEED && miss <= pocket.radius * 0.9
+}
+
+/** Bounce a refused ball back off the jaw, just outside the capture circle. */
+function rattleOut(ball: BallState, pocket: Pocket, nx: number, ny: number): void {
+  ball.pos.x = pocket.x + nx * (pocket.radius + 1.25)
+  ball.pos.y = pocket.y + ny * (pocket.radius + 1.25)
+  const vn = ball.vel.x * nx + ball.vel.y * ny
+  if (vn < 0) {
+    const bounce = 0.42
+    ball.vel.x -= (1 + bounce) * vn * nx
+    ball.vel.y -= (1 + bounce) * vn * ny
+  }
+  ball.vel.x *= 0.86
+  ball.vel.y *= 0.86
+}
+
 function checkPockets(ball: BallState, pockets: Pocket[], events: SimEvent[], tick: number): Pocket | null {
   for (const pocket of pockets) {
     const dx = ball.pos.x - pocket.x
     const dy = ball.pos.y - pocket.y
-    if (dx * dx + dy * dy < pocket.radius * pocket.radius) {
-      ball.potted = true
-      ball.vel.x = 0
-      ball.vel.y = 0
-      ball.spin.x = 0
-      ball.spin.y = 0
-      ball.angularVel = 0
-      events.push({
-        type: ball.isCue ? 'CUE_POTTED' : 'POTTED',
-        tick,
-        ballId: ball.id
-      })
-      return pocket
+    const dist2 = dx * dx + dy * dy
+    if (dist2 >= pocket.radius * pocket.radius || dist2 === 0) continue
+    const dist = Math.sqrt(dist2)
+    if (!pocketShouldDrop(ball, pocket, dx, dy, dist)) {
+      rattleOut(ball, pocket, dx / dist, dy / dist)
+      continue
     }
+    ball.potted = true
+    ball.vel.x = 0
+    ball.vel.y = 0
+    ball.spin.x = 0
+    ball.spin.y = 0
+    ball.angularVel = 0
+    events.push({
+      type: ball.isCue ? 'CUE_POTTED' : 'POTTED',
+      tick,
+      ballId: ball.id
+    })
+    return pocket
   }
   return null
 }
@@ -639,17 +740,29 @@ function resolveCollisionPair(a: BallState, b: BallState, stepDt = 0): boolean {
  * contact (see `integrate`), and that rotation carries it through or pulls it back as
  * the cloth takes hold, by however much spin it still had when it arrived.
  */
+function rotateVelocity(ball: BallState, radians: number): void {
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  const vx = ball.vel.x
+  const vy = ball.vel.y
+  ball.vel = vec(vx * cos - vy * sin, vx * sin + vy * cos)
+}
+
 function applySpinEffects(cue: BallState, object: BallState): void {
-  if (Math.abs(cue.spin.x) > 0.01) {
-    const contactNormal = normalize(sub(object.pos, cue.pos))
-    if (contactNormal.x === 0 && contactNormal.y === 0) return
-    const angle = (SIDE_SPIN_THROW_DEG * Math.PI / 180) * clamp(cue.spin.x, -1, 1)
-    const cos = Math.cos(angle)
-    const sin = Math.sin(angle)
-    const vx = object.vel.x
-    const vy = object.vel.y
-    object.vel = vec(vx * cos - vy * sin, vx * sin + vy * cos)
-  }
+  const side = clamp(cue.spin.x, -1, 1)
+  if (Math.abs(side) <= 0.01) return
+  const contactNormal = normalize(sub(object.pos, cue.pos))
+  if (contactNormal.x === 0 && contactNormal.y === 0) return
+  // A slow contact grips and throws; a hard one skids through and throws less.
+  // The factor stays inside (0, 1], so the rotation cannot add pace.
+  const objectSpeed = Math.hypot(object.vel.x, object.vel.y)
+  const pace = Math.min(1, 2200 / Math.max(objectSpeed, 300))
+  const throwRad = (SIDE_SPIN_THROW_DEG * Math.PI / 180) * side * (0.65 + 0.35 * pace)
+  rotateVelocity(object, throwRad)
+  // Running side opens the cue ball's leaving angle; check side closes it.
+  // Opposite the throw, and only when the cue ball still has pace to turn.
+  const cueSpeed = Math.hypot(cue.vel.x, cue.vel.y)
+  if (cueSpeed > 80) rotateVelocity(cue, -throwRad * 0.5)
 }
 
 function cloneBall(ball: BallState): BallState {

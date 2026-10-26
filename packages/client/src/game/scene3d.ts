@@ -92,6 +92,7 @@ import {
   setAimProfile,
   AIM_PROFILE_DESKTOP,
   AIM_PROFILE_PHONE,
+  VIEW_TRANSITION_SECONDS,
   type CameraPose
 } from './camera.js'
 import {
@@ -136,6 +137,7 @@ import { buildTableMarkings } from './tableMarkings.js'
 import {
   TABLE_LEGS_SUFFIX, dressTableReflections, instantiateTableModel, instantiateTexturedTable, isTexturedTableModel,
   tableModelIfReady, setRailFinish, type TableMaterials } from './tableModel.js'
+import { dressPhotoTable, requestLeatherPhoto, requestWoodPhoto } from './photoFinish.js'
 
 const HALF_L = TABLE_LENGTH / 2
 const HALF_W = TABLE_WIDTH / 2
@@ -315,9 +317,9 @@ let MAX_ANISO = 4
  * away to navy. The table is the subject of the picture; the room is its backdrop.
  */
 /** The scene's clear colour: dark navy, the top of the room's gradient. */
-const ROOM_BG_COLOR = '#10235a'
+const ROOM_BG_COLOR = '#07080c'
 /** What the camera sees past the edge of the carpet: the darkened hall itself. */
-const ROOM_DARK_COLOR = '#0a1638'
+const ROOM_DARK_COLOR = '#050608'
 /** Gentle exponential fog in the room's own colour, per millimetre. Nothing at gameplay distances, a fade at the far wall. */
 const ROOM_FOG_DENSITY = 0.00004
 /** The blue the wall is painted at its brightest. */
@@ -327,14 +329,14 @@ const ROOM_WALL_TOP_COLOR = '#0b1a45'
 /** The floor: dark, so the lit table is the subject of the picture. */
 const ROOM_FLOOR_COLOR = '#9a3340'
 /** The bed's colour: deep tournament snooker green. */
-const CLOTH_COLOR = '#1a8f25'
+const CLOTH_COLOR = '#126e28'
 
 /** How much of the cushions' shared normal map is left standing. */
 const CUSHION_NORMAL_STRENGTH = 0.12
 /** Cushion cloth: a brighter green than the bed so the raised edge reads. */
-const CUSHION_COLOR = 0x189a42
-/** The cushion nose strip: brighter still, catching the lamp. */
-const NOSE_COLOR = 0x24b852
+const CUSHION_COLOR = 0x146e29
+/** The cushion nose strip: the same cloth, a touch lighter where the nap turns. */
+const NOSE_COLOR = 0x1b8c34
 
 /*
  * STEP 3 — the balls, their contact with the cloth, and the cue stick.
@@ -356,25 +358,25 @@ const APRON_SIDE_TINT = '#4a1d1a'
 
 // Cushions — one step darker so they sit against the deeper bed without glowing.
 const CUSHION_FACE_COLOR = '#0e5e2e'
-const CUSHION_TOP_COLOR = '#1fae4a'
-const CUSHION_NOSE_COLOR = '#2bc75a'
+const CUSHION_TOP_COLOR = '#146e29'
+const CUSHION_NOSE_COLOR = '#1b8c34'
 
 // Cloth / baize — Tournament Snooker Green with darker corner falloff.
 const CLOTH_ROUGHNESS = 0.9
 const CLOTH_METALNESS = 0
-const CLOTH_SHEEN = 0.14
-const CLOTH_SHEEN_COLOR = '#35b045'
-const CLOTH_SHEEN_ROUGHNESS = 0.62
+const CLOTH_SHEEN = 0.05
+const CLOTH_SHEEN_COLOR = '#1b8c34'
+const CLOTH_SHEEN_ROUGHNESS = 0.78
 const CLOTH_NORMAL_STRENGTH = 0.13
 
 /** The contact disc's size, as a multiple of the ball's radius. */
 const BALL_SHADOW_PLANE = 2.8
 /** The contact disc's height above the cloth, in millimetres. */
 const BALL_SHADOW_Y = 0.5
-/** How far the contact disc leans off the ball's centre, away from the lamp overhead. */
-const BALL_SHADOW_LEAN_MM = 2.5
-/** The contact disc's stretch along that lean. */
-const BALL_SHADOW_STRETCH = 1.15
+/** Directly under the ball. An overhead bank throws no lean. */
+const BALL_SHADOW_LEAN_MM = 0
+/** Circular. A stretch would read as a directional shadow. */
+const BALL_SHADOW_STRETCH = 1
 /** The stick's shadow strip on the cloth, in millimetres across. Thinner than cue butt (13mm vs 26mm). */
 const STICK_SHADOW_WIDTH = 13
 /** The stick's shadow color on the cloth (pure black). */
@@ -494,7 +496,7 @@ const AIM_RING_Y = 1.1
  * LINE 2 — object ball path along the line of centres: a bright lime when the ball may be
  * played, the way the broadcast-style games mark a legal object ball, and red when not.
  */
-const AIM_LINE2_COLOR = 0x7dff3a
+const AIM_LINE2_COLOR = 0xd7c27a
 /** The line's colour while it is on a ball that may not be played. */
 const AIM_WRONG_COLOR = 0xff4136
 
@@ -682,30 +684,26 @@ const POCKET_BACKING_COLOR = 0x070707
  * green is taken down, so its top, which faces the key light squarely, is the bed's green
  * and not a pale, washed-out strip.
  */
-const CUSHION_SELF_LIGHT = 0.15
-const CUSHION_LIT_SCALE = 0.85
+const CUSHION_SELF_LIGHT = 0.28
+const CUSHION_LIT_SCALE = 1
 /** How far outside the net the backing sits, so the net is always drawn in front of it. */
 const POCKET_BACKING_GAP_MM = 3
 
 /** How much of the room's flat fill light the textured table keeps (see buildTable). */
-const TEXTURED_AMBIENT_SCALE = 0.35
-const TEXTURED_HEMI_SCALE = 0.4
+const TEXTURED_AMBIENT_SCALE = 0.1
+const TEXTURED_HEMI_SCALE = 0.06
 
 /** The table lights' colour: warm white. */
 const CANOPY_COLOR = 0xfff2e0
 /**
- * The textured table's two lights, as a broadcast table is lit: a key light and a softer
- * fill, each from above one corner and across the table from the other, so everything on
- * the table has a lit side and a shaded side and every cushion drops a soft shadow on the
- * cloth beside it, stronger on the key light's side. Positions are directions towards the
- * light (it shines at the middle of the table), and the strengths.
+ * One overhead bank, straight down the middle of the bed. A second lamp from a corner
+ * would throw the long shadows a television table does not have.
  */
 const TABLE_LIGHTS: ReadonlyArray<{ from: readonly [number, number, number]; intensity: number }> = [
-  { from: [-1100, 1700, -1400], intensity: 1.9 },
-  { from: [1100, 1700, 1400], intensity: 0.75 }
+  { from: [0, 3400, 0], intensity: 2.55 }
 ]
-/** What is left of the overhead lamp on the textured table, which the table lights now do the work of. */
-const TEXTURED_LAMP_INTENSITY = 0.3
+/** A whisper under the bank, so the pocket mouths are not pure black. */
+const TEXTURED_LAMP_INTENSITY = 0.12
 
 /**
  * A potted ball goes in the way it arrived: it keeps the speed and the direction it had as
@@ -761,9 +759,9 @@ const CLOTH_BAKED_LEVEL = 1.12
 const CLOTH_LIT_LEVEL = 1.1
 
 /** How strongly the fibre tile shows in the bed's colour. */
-const CLOTH_DETAIL_STRENGTH = 0.4
+const CLOTH_DETAIL_STRENGTH = 0.04
 /** How strongly the fibre shows on the cushions, and how much cloth one repeat of it covers in mm. */
-const CUSHION_DETAIL_STRENGTH = 0.6
+const CUSHION_DETAIL_STRENGTH = 0.04
 const CLOTH_DETAIL_TILE_MM = 270
 
 /**
@@ -812,6 +810,14 @@ function withWorldClothDetail<T extends ClothMaterial>(material: T, strength = C
           'diffuseColor.rgb *= 1.0 + ( texture2D( clothDetail, clothUv / clothDetailTile ).g - 0.5 ) * 2.0 * clothDetailStrength;'
         ].join('\n')
       )
+    if (!(material instanceof THREE.MeshBasicMaterial)) {
+      // A nap sheen from the view angle. Wool cloth brightens as the eye grazes it.
+      // This is one instruction on the colour, not a second lighting model.
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <opaque_fragment>',
+        'outgoingLight += vec3(0.01, 0.022, 0.006) * pow(clamp(1.0 - abs(normalize(normal).z), 0.0, 1.0), 3.2);\n#include <opaque_fragment>'
+      )
+    }
   }
   material.customProgramCacheKey = () => 'cloth-world-detail'
   return material
@@ -821,6 +827,7 @@ function withClothDetail<T extends ClothMaterial>(material: T): T {
   const detail = { value: clothDetailTexture() }
   const repeat = { value: new THREE.Vector2(CLOTH_DETAIL_REPEAT_U, CLOTH_DETAIL_REPEAT_V) }
   const strength = { value: CLOTH_DETAIL_STRENGTH }
+  const lit = !(material instanceof THREE.MeshBasicMaterial)
   material.onBeforeCompile = (shader) => {
     shader.uniforms.clothDetail = detail
     shader.uniforms.clothDetailRepeat = repeat
@@ -834,8 +841,14 @@ function withClothDetail<T extends ClothMaterial>(material: T): T {
         '#include <map_fragment>',
         '#include <map_fragment>\n#ifdef USE_MAP\n\tdiffuseColor.rgb *= 1.0 + ( texture2D( clothDetail, vMapUv * clothDetailRepeat ).g - 0.5 ) * 2.0 * clothDetailStrength;\n#endif'
       )
+    if (lit) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <opaque_fragment>',
+        'outgoingLight += vec3(0.01, 0.022, 0.006) * pow(clamp(1.0 - abs(normalize(normal).z), 0.0, 1.0), 3.2);\n#include <opaque_fragment>'
+      )
+    }
   }
-  material.customProgramCacheKey = () => 'cloth-detail'
+  material.customProgramCacheKey = () => (lit ? 'cloth-detail-sheen' : 'cloth-detail')
   return material
 }
 
@@ -864,7 +877,7 @@ function tableMaterials(clothMat: ClothMaterial): TableMaterials {
 
   const wood = new THREE.MeshPhysicalMaterial({
     map: woodTexture(),
-    color: 0xffffff,
+    color: 0x3c180e,
     roughness: 0.42,
     metalness: 0,
     clearcoat: isLow ? 0 : 0.7,
@@ -880,11 +893,12 @@ function tableMaterials(clothMat: ClothMaterial): TableMaterials {
     wood.normalMap = woodNormalTexture()
     wood.normalScale = new THREE.Vector2(0.4, 0.4)
   }
+  requestWoodPhoto(wood)
 
   const brass = new THREE.MeshStandardMaterial({
     color: 0xd4a64a,
     metalness: 1,
-    roughness: 0.28,
+    roughness: 0.18,
     envMapIntensity: 1.3
   })
   if (!isLow) brass.roughnessMap = brassRoughnessTexture()
@@ -934,6 +948,7 @@ function tableMaterials(clothMat: ClothMaterial): TableMaterials {
     leather.normalMap = leatherNormalTexture()
     leather.normalScale = new THREE.Vector2(0.25, 0.25)
   }
+  requestLeatherPhoto(leather)
 
   return {
     Wood: wood,
@@ -941,8 +956,8 @@ function tableMaterials(clothMat: ClothMaterial): TableMaterials {
     JawCloth: jawCloth,
     Leather: leather,
     NetCord: new THREE.MeshStandardMaterial({
-      color: 0xf4f4f0,
-      roughness: 0.85,
+      color: 0x121212,
+      roughness: 0.94,
       metalness: 0,
       side: THREE.DoubleSide
     }),
@@ -1133,40 +1148,13 @@ function ballEnvTexture(): THREE.CanvasTexture {
     grad.addColorStop(1, '#091c0c')
     ctx.fillStyle = grad
     ctx.fillRect(0, 0, w, h)
-    const lamp = (cx: number, cy: number, rw: number, rh: number, a: number): void => {
-      ctx.save()
-      ctx.translate(cx * w, cy * h)
-      ctx.scale(rw * w, rh * h)
-      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1)
-      g.addColorStop(0, `rgba(255,255,255,${a})`)
-      g.addColorStop(0.55, `rgba(255,250,235,${a})`)
-      g.addColorStop(1, 'rgba(255,250,235,0)')
-      ctx.fillStyle = g
-      ctx.beginPath()
-      ctx.arc(0, 0, 1, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.restore()
-    }
-    // Softboxes, not bulbs: a long canopy panel overhead and two tall panels to the sides.
-    // A polished ball mirrors a panel as a long soft streak rather than a pin-point, and
-    // that streak is most of what makes a ball read as glass-hard resin instead of plastic.
-    const panel = (cx: number, cy: number, rw: number, rh: number, a: number): void => {
-      ctx.save()
-      ctx.translate(cx * w, cy * h)
-      const pw = rw * w
-      const ph = rh * h
-      ctx.shadowColor = `rgba(255,250,235,${a})`
-      ctx.shadowBlur = Math.min(pw, ph) * 0.6
-      ctx.fillStyle = `rgba(255,252,242,${a})`
-      ctx.beginPath()
-      ctx.roundRect(-pw / 2, -ph / 2, pw, ph, Math.min(pw, ph) * 0.3)
-      ctx.fill()
-      ctx.restore()
-    }
-    panel(0.5, 0.16, 0.2, 0.09, 1)
-    lamp(0.5, 0.17, 0.15, 0.26, 0.18)
-    panel(0.26, 0.36, 0.035, 0.2, 0.85)
-    panel(0.74, 0.36, 0.035, 0.2, 0.85)
+    // One light bank, hard-edged. A ball mirrors it as a crisp white rectangle.
+    ctx.fillStyle = '#ffffff'
+    const bankW = w * 0.5
+    const bankH = h * 0.07
+    ctx.fillRect(w * 0.5 - bankW / 2, h * 0.14, bankW, bankH)
+    ctx.fillStyle = '#0c3d18'
+    ctx.fillRect(0, h * 0.62, w, h * 0.38)
     const texture = new THREE.CanvasTexture(canvas)
     texture.colorSpace = THREE.SRGBColorSpace
     texture.mapping = THREE.EquirectangularReflectionMapping
@@ -1212,8 +1200,8 @@ function canopyEnvTexture(): THREE.CanvasTexture {
  * Held a little under full so a ball keeps its own colour and falls into shade below its
  * middle, with a crisp highlight on top, rather than every ball washed bright all over.
  */
-const BALL_ENV_INTENSITY = 4.5
-const CUE_BALL_ENV_INTENSITY = 5
+const BALL_ENV_INTENSITY = 6.2
+const CUE_BALL_ENV_INTENSITY = 6.6
 
 /**
  * The back wall: blue paint, brightest at the height the lamp reaches, falling to
@@ -1317,6 +1305,8 @@ export class BallRig {
   turn: { rollX: number; rollY: number; sideRate: number } | null = null
   /** Side spin still turning it, rad/s, left from the replay to wear off on its own. */
   sideRate = 0
+  /** A faint copy of the cue ball, drawn behind it while it is moving fast. */
+  private smear: THREE.Mesh | null = null
 
   constructor(radius: number, color: number, shadowTex: THREE.CanvasTexture, opts: BallRigOptions = {}) {
     this.cueShadow = opts.cue === true
@@ -1333,6 +1323,20 @@ export class BallRig {
     // no shadow renders.
     this.sphere.castShadow = false
     this.group.add(this.sphere)
+    if (this.cueShadow) {
+      this.smear = new THREE.Mesh(
+        this.sphere.geometry,
+        new THREE.MeshBasicMaterial({
+          color: 0xf7f4ee,
+          transparent: true,
+          opacity: 0.2,
+          depthWrite: false
+        })
+      )
+      this.smear.visible = false
+      this.smear.renderOrder = 2
+      this.group.add(this.smear)
+    }
     const blobMat = new THREE.MeshBasicMaterial({
       map: opts.shadowTex ?? shadowTex,
       color: 0x000000,
@@ -1463,6 +1467,26 @@ export class BallRig {
     this.group.scale.set(RISE_START_SCALE, RISE_START_SCALE, RISE_START_SCALE)
   }
 
+  /**
+   * A short ghost behind the cue ball when it is moving quickly. Off for the colours,
+   * and off entirely when `enabled` is false (the low quality tier).
+   */
+  applyCueSmear(enabled: boolean): void {
+    const smear = this.smear
+    if (!smear) return
+    const speed = Math.hypot(this.velocity.x, this.velocity.z)
+    if (!enabled || speed < 2600) {
+      smear.visible = false
+      return
+    }
+    const amount = Math.min(1, (speed - 2600) / 6400)
+    const len = speed
+    smear.visible = true
+    smear.position.set((-this.velocity.x / len) * this.radius * 0.42 * amount, 0, (-this.velocity.z / len) * this.radius * 0.42 * amount)
+    smear.quaternion.copy(this.sphere.quaternion)
+    ;(smear.material as THREE.MeshBasicMaterial).opacity = 0.1 + amount * 0.16
+  }
+
   aim(targetX: number, targetZ: number, highlight: boolean, reset: boolean): void {
     if (reset) {
       this.group.position.set(targetX, BALL_RADIUS, targetZ)
@@ -1495,6 +1519,7 @@ export class BallRig {
   dispose(): void {
     this.sphere.geometry.dispose()
     this.material.dispose()
+    if (this.smear) (this.smear.material as THREE.Material).dispose()
     ;(this.blob.material as THREE.MeshBasicMaterial).dispose()
     this.blob.geometry.dispose()
   }
@@ -1624,6 +1649,8 @@ export class Scene3D implements VenueHost {
   private aimViewSettled = false
   /** Set when the player has picked a different view: the next camera step cuts to it. */
   private cameraCut = false
+  /** While this clock is in the future, a view change eases instead of following the aim. */
+  private viewEaseUntil = 0
   /** True once the surroundings have been put on their cheaper finish for this scene. */
   private environmentLow = false
   /** Set once the stands and the crowd have been put away to hold the frame rate (see lowerSurroundingDetail). */
@@ -1931,13 +1958,44 @@ export class Scene3D implements VenueHost {
   }
 
   private applyWarmPose(pose: CameraPose): void {
-    this.camera.position.set(tableX(pose.x), pose.height, tableZ(pose.y))
-    this.camera.lookAt(tableX(pose.lookX), pose.lookHeight, tableZ(pose.lookY))
+    this.placeCamera(pose)
+    this.camera.updateMatrixWorld(true)
+  }
+
+  /**
+   * Puts the lens on a pose without rolling as it passes overhead.
+   *
+   * `lookAt` keeps world-up. That up becomes parallel to the view on the way to the
+   * top-down camera, and the picture flips. Overhead, screen-up is the baulk end.
+   */
+  private placeCamera(pose: CameraPose): void {
+    const cx = tableX(pose.x)
+    const cy = pose.height
+    const cz = tableZ(pose.y)
+    const lx = tableX(pose.lookX)
+    const ly = pose.lookHeight
+    const lz = tableZ(pose.lookY)
+    this.camera.position.set(cx, cy, cz)
+    const vx = lx - cx
+    const vy = ly - cy
+    const vz = lz - cz
+    const v2 = vx * vx + vy * vy + vz * vz || 1
+    const vertical = Math.abs(vy) / Math.sqrt(v2)
+    const blend = vertical <= 0.72 ? 0 : vertical >= 0.94 ? 1 : (vertical - 0.72) / 0.22
+    const ux = -blend
+    const uy = 1 - blend
+    const uz = 0
+    const vd = (ux * vx + uy * vy + uz * vz) / v2
+    const fx = ux - vx * vd
+    const fy = uy - vy * vd
+    const fz = uz - vz * vd
+    const fl = Math.hypot(fx, fy, fz) || 1
+    this.camera.up.set(fx / fl, fy / fl, fz / fl)
+    this.camera.lookAt(lx, ly, lz)
     if (this.camera.fov !== pose.fov) {
       this.camera.fov = pose.fov
       this.camera.updateProjectionMatrix()
     }
-    this.camera.updateMatrixWorld(true)
   }
 
   private warmDraw(): void {
@@ -2035,7 +2093,7 @@ export class Scene3D implements VenueHost {
       // A phone is the exception the other way: its GPU draws in tiles held on the chip,
       // where 4x MSAA is resolved before anything reaches memory and costs very little,
       // and without it every ball and rail edge on a small screen visibly steps.
-      antialias: (tier.antialias && !hasWeakGpu()) || (tier.name !== 'low' && isPhoneScreen()),
+      antialias: tier.name !== 'low' && (!hasWeakGpu() || isPhoneScreen()),
       powerPreference: 'high-performance'
     })
     this.renderer.setPixelRatio(1)
@@ -2613,6 +2671,7 @@ export class Scene3D implements VenueHost {
       })
       this.scene.add(model)
       this.texturedTable = model
+      dressPhotoTable(model)
       this.buildPocketBacking(model)
       // The cushions' faces stand upright under an overhead canopy, so the light barely
       // reaches them and they went a dark green band along every rail. The felt carries a
@@ -2668,7 +2727,8 @@ export class Scene3D implements VenueHost {
         cam.updateProjectionMatrix()
         light.shadow.bias = -0.0004
         light.shadow.normalBias = 1.5
-        light.shadow.radius = 4
+        // Soft penumbra. The map is baked once, so a wider filter does not cost frames.
+        light.shadow.radius = qualityConfig().name === 'low' ? 2 : 7
         this.scene.add(light)
       }
       // The overhead lamp stays as a little fill, and its own shadow goes: the table
@@ -2795,6 +2855,7 @@ const outerL = APRON_OUTER_L
       clearcoatRoughness: 0.28,
       envMapIntensity: 0.5
     })
+    requestWoodPhoto(apronMat)
     // The main body: same outer footprint and same top face as the original box, so the
     // depth guard's 1mm cloth-to-apron gap is untouched. Only the faces *between* this
     // and the cap change.
@@ -2848,6 +2909,7 @@ const outerL = APRON_OUTER_L
       clearcoatRoughness: 0.3,
       envMapIntensity: 0.35
     })
+    requestWoodPhoto(panelMat)
     const mouldingMat = new THREE.MeshPhysicalMaterial({
       map: woodTexture(),
       roughnessMap: woodRoughnessTexture(),
@@ -2858,6 +2920,7 @@ const outerL = APRON_OUTER_L
       clearcoatRoughness: 0.3,
       envMapIntensity: 0.35
     })
+    requestWoodPhoto(mouldingMat)
 
     // Long faces (x-axis) - two panels each side, split at centre
     for (const side of [-1, 1]) {
@@ -2966,6 +3029,7 @@ const outerL = APRON_OUTER_L
       clearcoatRoughness: 0.08,
       envMapIntensity: 1.3
     })
+    requestWoodPhoto(crownMat)
 
     // Long rails
     for (const side of [-1, 1]) {
@@ -3027,6 +3091,7 @@ const outerL = APRON_OUTER_L
       clearcoatRoughness: 0.18,
       envMapIntensity: 0.9
     })
+    requestWoodPhoto(legMat)
 
     // Legs: a turned column, not a post.
     //
@@ -3425,6 +3490,7 @@ const outerL = APRON_OUTER_L
       sheenColor: new THREE.Color(0xa8794a),
       envMapIntensity: 0.8
     })
+    requestLeatherPhoto(leatherMat)
     const brassLipMat = new THREE.MeshStandardMaterial({
       color: 0xd8b878,
       metalness: 1,
@@ -3474,8 +3540,10 @@ const outerL = APRON_OUTER_L
       metalness: 0,
       clearcoat: 0.15,
       clearcoatRoughness: 0.35,
-      envMapIntensity: 0.25
+      envMapIntensity: 0.25,
+      name: 'Leather'
     })
+    requestLeatherPhoto(pocketRimMat)
     // The jaali hanging inside the pocket: a dark, matte, unlit-looking weave. Seen from
     // inside, so BackSide - the camera looks down into a cone, not at the outside of one.
     const pocketNetMat = new THREE.MeshStandardMaterial({
@@ -4685,6 +4753,9 @@ const outerL = APRON_OUTER_L
     this.stick.visible = true
     this.stick.position.set(hitX - fwd.x * backOff, hitY - fwd.y * backOff, hitZ - fwd.z * backOff)
     this.stick.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), fwd)
+    const striking = this.strikeAt !== 0 && performance.now() - this.strikeAt < STICK_STROKE_MS
+    const cueBlur = striking && qualityConfig().name !== 'low' ? 0.07 : 0
+    this.stick.scale.set(1, 1 + cueBlur, 1)
 
     // The red spot, a hair off the surface along the ball's own normal so it never sinks
     // into it.
@@ -4890,7 +4961,10 @@ const outerL = APRON_OUTER_L
     // A different view from the one being shown is the player pressing the button: the
     // next frame goes straight there. This is called every frame with the same mode, and
     // that changes nothing.
-    if (mode !== this.cameraMode) this.cameraCut = true
+    if (mode !== this.cameraMode) {
+      this.viewEaseUntil = performance.now() + VIEW_TRANSITION_SECONDS * 1600
+      if (this.rig.velocity) this.rig = { pose: this.rig.pose, yaw: this.rig.yaw }
+    }
     this.cameraMode = mode
   }
 
@@ -5131,7 +5205,8 @@ const outerL = APRON_OUTER_L
             cue,
             aimAngle: this.lastAimAngle,
             latch: this.latch,
-            focus: count > 0 ? { x: sumX / count, y: sumY / count, spread } : null
+            focus: count > 0 ? { x: sumX / count, y: sumY / count, spread } : null,
+            smoothSeconds: performance.now() < this.viewEaseUntil ? VIEW_TRANSITION_SECONDS : undefined
           },
           dt
         )
@@ -5200,12 +5275,7 @@ const outerL = APRON_OUTER_L
       }
     }
     this.spinGuide.visible = this.tipMark.visible && this.spinFocusAmount > 0.15
-    this.camera.position.set(tableX(pose.x), pose.height, tableZ(pose.y))
-    this.camera.lookAt(tableX(pose.lookX), pose.lookHeight, tableZ(pose.lookY))
-    if (this.camera.fov !== pose.fov) {
-      this.camera.fov = pose.fov
-      this.camera.updateProjectionMatrix()
-    }
+    this.placeCamera(pose)
     if (this.spinGuide.visible) {
       // Square to the lens, so its rings are true circles on the screen and centred on
       // the ball, and its dot exactly over the red spot the tip will strike.
@@ -5617,6 +5687,7 @@ const outerL = APRON_OUTER_L
       // A streamed shot hands over positions that are already sampled from the
       // simulation, so they are applied as-is instead of being smoothed again.
       const k = this.immediate ? 1 : 1 - Math.exp(-dt * 14)
+      const cueSmear = qualityConfig().name !== 'low'
       for (const rig of this.balls.values()) {
         if (rig.group.visible && !rig.sinking && !rig.rising) {
           const beforeX = rig.group.position.x
@@ -5626,6 +5697,7 @@ const outerL = APRON_OUTER_L
           const vx = (rig.group.position.x - beforeX) / dt
           const vz = (rig.group.position.z - beforeZ) / dt
           rig.velocity.set(rig.velocity.x + (vx - rig.velocity.x) * 0.6, 0, rig.velocity.z + (vz - rig.velocity.z) * 0.6)
+          rig.applyCueSmear(cueSmear)
           // Turned the way the replay says it is turning (skid, screw, side spin), or
           // rolled from its travel when it does not say.
           rig.stepTurn(dt, this.turnScale)

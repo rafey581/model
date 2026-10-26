@@ -3,7 +3,8 @@ import { ledger, runInTransaction, InsufficientBalanceError } from '../wallet/se
 import { getSettings } from '../settings/index.js'
 import { assertNotBot, assertViableFormat, resolveStakeTier, MatchError } from '../matches/service.js'
 import { COMPLETED_STATUSES } from '../users/stats.js'
-import { STAKE_TIERS } from '@snooker/shared'
+import { STAKE_TIERS, matchTypeForStake, stakeTierById } from '@snooker/shared'
+import { guestStakeMessage } from '../auth/guestGate.js'
 import type { StakeTierId } from '@snooker/shared'
 
 /**
@@ -47,6 +48,8 @@ export interface ChallengeView {
   stakeTier: string
   stakePerPlayer: number
   stakeLabel: string
+  /** OPEN for a public table, MASTER for a Master Match. */
+  table: 'OPEN' | 'MASTER'
   format: string
   expiresAt: string
   /** True for an invite born from the rematch button; cosmetic, so the popup can say so. */
@@ -124,6 +127,7 @@ function serialize(
     stakeTier: row.stakeTier,
     stakePerPlayer: Number(row.stakePerPlayer),
     stakeLabel: stakeLabelFor(row.stakeTier),
+    table: stakeTierById(row.stakeTier)?.table ?? 'OPEN',
     format: row.format,
     expiresAt: row.expiresAt.toISOString(),
     ...(rematch ? { rematch: true } : {})
@@ -138,6 +142,8 @@ export async function createChallenge(opts: {
   rematch?: boolean
 }): Promise<ChallengeView> {
   const { challengerId } = opts
+  const blocked = await guestStakeMessage(challengerId)
+  if (blocked) throw new ChallengeError(blocked)
   const tier = await validateForChallenge(challengerId, opts.stakeTier, opts.format)
 
   // Soft check only: the hard freeze happens at accept. Refusing here keeps a
@@ -163,7 +169,7 @@ export async function createChallenge(opts: {
       const recent = await prisma.match.findFirst({
         where: {
           AND: [
-            { matchType: 'ONE_V_ONE' },
+            { matchType: { in: ['ONE_V_ONE', 'MASTER'] } },
             { status: { in: [...COMPLETED_STATUSES] } },
             { finishedAt: { gte: new Date(Date.now() - REMATCH_WINDOW_MS) } },
             { players: { some: { userId: challengerId } } },
@@ -248,6 +254,8 @@ export interface AcceptedChallenge {
  */
 export async function acceptChallenge(opts: { challengeId: string; userId: string }): Promise<AcceptedChallenge> {
   const { challengeId, userId } = opts
+  const blocked = await guestStakeMessage(userId)
+  if (blocked) throw new ChallengeError(blocked)
   const now = new Date()
   const settings = await getSettings()
 
@@ -274,7 +282,7 @@ export async function acceptChallenge(opts: { challengeId: string; userId: strin
 
       const match = await tx.match.create({
         data: {
-          matchType: 'ONE_V_ONE',
+          matchType: matchTypeForStake(tier.id),
           stakeTier: tier.id,
           stakePerPlayer: tier.usdt,
           format: challenge.format,

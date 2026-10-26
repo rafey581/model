@@ -181,13 +181,13 @@ export const TOTAL_REDS = 15
 /**
  * The product's name, in one place.
  *
- * `index.html` cannot import it, so its `<title>` is the one copy that has to be typed
- * out again; everything rendered in the app reads this, which is what keeps the wordmark
- * from drifting between the header and the home screen. The login and admin-login screens
- * deliberately keep the old name and type their own title, so nothing about them moves
- * with this constant.
+ * `index.html` cannot import it, so its `<title>` is typed again there. Everything the
+ * app renders — sign-in, the hall, the loading line — reads this constant.
  */
-export const APP_TITLE = 'SnookerX'
+export const APP_TITLE = 'Snooker Stake'
+
+/** Shown when a guest tries to stake, deposit, withdraw, or use friends. */
+export const GUEST_STAKE_PROMPT = 'Sign up to play for stakes'
 
 export const PRACTICE_AI_LEVELS = ['EASY', 'MEDIUM', 'HARD'] as const
 export type PracticeAiLevel = (typeof PRACTICE_AI_LEVELS)[number]
@@ -208,14 +208,45 @@ export const REFERRAL_BONUS_USDT = 1
 export const PRACTICE_DAILY_FREE_LIMIT = 3
 
 /**
- * The stake tables. The game plays in real USDT at 1:1 — a `1 USDT` table stakes
- * one USDT per player — so the tier amount *is* the table's money, no conversion.
+ * Which public table a stake belongs to.
+ *
+ * `OPEN` is the ordinary challenge (1 through 100 USDT). `MASTER` is the high-stake
+ * Master Match (500 through 5000 USDT). Both still go through the same ledger freeze
+ * and the same balance check; neither turns on the crypto rails.
+ */
+export const STAKE_TABLES = ['OPEN', 'MASTER'] as const
+export type StakeTable = (typeof STAKE_TABLES)[number]
+
+/**
+ * The stake tables. The game plays in USDT at 1:1 — a `1 USDT` table stakes one USDT
+ * per player — so the tier amount *is* the table's money, no conversion.
  */
 export const STAKE_TIERS = [
-  { id: 'TIER_1', usdt: 1, label: '1 USDT' },
-  { id: 'TIER_5', usdt: 5, label: '5 USDT' },
-  { id: 'TIER_10', usdt: 10, label: '10 USDT' }
+  { id: 'TIER_1', usdt: 1, label: '1 USDT', table: 'OPEN' },
+  { id: 'TIER_5', usdt: 5, label: '5 USDT', table: 'OPEN' },
+  { id: 'TIER_10', usdt: 10, label: '10 USDT', table: 'OPEN' },
+  { id: 'TIER_20', usdt: 20, label: '20 USDT', table: 'OPEN' },
+  { id: 'TIER_50', usdt: 50, label: '50 USDT', table: 'OPEN' },
+  { id: 'TIER_100', usdt: 100, label: '100 USDT', table: 'OPEN' },
+  { id: 'MASTER_500', usdt: 500, label: '500 USDT', table: 'MASTER' },
+  { id: 'MASTER_1000', usdt: 1000, label: '1000 USDT', table: 'MASTER' },
+  { id: 'MASTER_2000', usdt: 2000, label: '2000 USDT', table: 'MASTER' },
+  { id: 'MASTER_3000', usdt: 3000, label: '3000 USDT', table: 'MASTER' },
+  { id: 'MASTER_5000', usdt: 5000, label: '5000 USDT', table: 'MASTER' }
 ] as const
 export type StakeTierId = (typeof STAKE_TIERS)[number]['id']
-export const STAKE_TIER_IDS: readonly [StakeTierId, ...StakeTierId[]] = [STAKE_TIERS[0].id, STAKE_TIERS[1].id, STAKE_TIERS[2].id]
+export const STAKE_TIER_IDS = STAKE_TIERS.map((tier) => tier.id) as unknown as readonly [StakeTierId, ...StakeTierId[]]
 export type StakeTier = (typeof STAKE_TIERS)[number]
+
+export function stakeTierById(id: string): StakeTier | undefined {
+  return STAKE_TIERS.find((tier) => tier.id === id)
+}
+
+export function stakesForTable(table: StakeTable): StakeTier[] {
+  return STAKE_TIERS.filter((tier) => tier.table === table)
+}
+
+/** Match row type written when a tier is accepted. Master stakes are not practice. */
+export function matchTypeForStake(tierId: string): 'ONE_V_ONE' | 'MASTER' {
+  return stakeTierById(tierId)?.table === 'MASTER' ? 'MASTER' : 'ONE_V_ONE'
+}
