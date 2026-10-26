@@ -365,7 +365,9 @@ export const ARENA_CONFIG: ArenaConfig = {
 
   // Tone mapping stays where the scene put it: ACES by default, Neutral behind its flag.
   render: {
-    exposure: 0.98,
+    // Raised from 0.98: the table read a touch dim. Lifts the whole frame evenly; ACES
+    // tone mapping keeps the white cue ball and the lamp highlights from clipping.
+    exposure: 1.15,
     shadowSize: 2048,
     ambientColor: '#dfe8ff',
     ambientIntensity: 0.1,

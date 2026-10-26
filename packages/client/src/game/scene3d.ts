@@ -344,7 +344,8 @@ const NOSE_COLOR = 0x1b8c34
 /** Ball resin: tight diffuse under the lacquer film. */
 // Renderer/tone mapping — ACES for rich filmic contrast; Neutral remains an A/B flag.
 const TONE_MAPPING_MODE: 'neutral' | 'aces' = 'aces'
-const TONE_EXPOSURE = 1.06
+// Kept level with the arena's exposure (arenaConfig.ts), which is the one in force when it is built.
+const TONE_EXPOSURE = 1.15
 
 /** The table lamp: warm white, a cone wide enough to hold the corners, no distance falloff. */
 const LAMP_COLOR = 0xfff0dc
@@ -700,7 +701,7 @@ const CANOPY_COLOR = 0xfff2e0
  * would throw the long shadows a television table does not have.
  */
 const TABLE_LIGHTS: ReadonlyArray<{ from: readonly [number, number, number]; intensity: number }> = [
-  { from: [0, 3400, 0], intensity: 2.55 }
+  { from: [0, 3400, 0], intensity: 3.0 }
 ]
 /** A whisper under the bank, so the pocket mouths are not pure black. */
 const TEXTURED_LAMP_INTENSITY = 0.12
@@ -754,9 +755,9 @@ type ClothMaterial = THREE.MeshPhysicalMaterial | THREE.MeshLambertMaterial | TH
  * Under the lamp the cloth came out at about 0.8 of its texture. This is a little over
  * that on purpose: a table under a canopy of lights is the brightest thing in the room.
  */
-const CLOTH_BAKED_LEVEL = 1.12
+const CLOTH_BAKED_LEVEL = 1.25
 /** How bright the textured table's lit bed is, against the felt's own colours. */
-const CLOTH_LIT_LEVEL = 1.1
+const CLOTH_LIT_LEVEL = 1.22
 
 /** How strongly the fibre tile shows in the bed's colour. */
 const CLOTH_DETAIL_STRENGTH = 0.04
