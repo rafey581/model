@@ -270,11 +270,11 @@ describe('cue ball contact shadow', () => {
     expect(cue.blob.parent).toBe(cue.group)
   })
 
-  it('leaves the coloured balls on their retuned grounding', () => {
+  it('sits a circular contact disc directly under a coloured ball', () => {
     const red = new BallRig(BALL_RADIUS, 0xd91515, fakeShadow())
     red.aim(600, 0, false, true)
     expect(red.group.position.y + red.blob.position.y).toBeCloseTo(0.5, 9)
-    expect(Math.hypot(red.blob.position.x, red.blob.position.z)).toBeCloseTo(2.5, 9)
-    expect(red.blob.scale.x).toBeCloseTo(1.15, 9)
+    expect(Math.hypot(red.blob.position.x, red.blob.position.z)).toBeCloseTo(0, 9)
+    expect(red.blob.scale.x).toBeCloseTo(1, 9)
   })
 })

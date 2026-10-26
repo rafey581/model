@@ -368,9 +368,9 @@ export const ARENA_CONFIG: ArenaConfig = {
     exposure: 0.98,
     shadowSize: 2048,
     ambientColor: '#dfe8ff',
-    ambientIntensity: 0.45,
+    ambientIntensity: 0.1,
     hemiSky: '#fff1d8',
-    hemiIntensity: 0.68
+    hemiIntensity: 0.14
   },
 
   palette: {
@@ -472,7 +472,7 @@ export const ARENA_CONFIG: ArenaConfig = {
     panels: 80, // was 64 (40 before E3)
     panelsPerTile: 4,
     emissiveIntensity: 0.25,
-    slogans: ['SNOOKERX', 'WORLD CHAMPIONSHIP', 'SNOOKER ARENA', 'LIVE ON STREAM', 'TOP BREAK 112', 'NEXT FRAME']
+    slogans: ['SNOOKER STAKE', 'WORLD CHAMPIONSHIP', 'SNOOKER ARENA', 'LIVE ON STREAM', 'TOP BREAK 112', 'NEXT FRAME']
   },
 
   wall: {
@@ -485,7 +485,7 @@ export const ARENA_CONFIG: ArenaConfig = {
     bands: 6,
     bandHalfWidth: 190,
     drop: 620,
-    intensity: 0.5
+    intensity: 0.08
   },
 
   rig: {
@@ -495,7 +495,7 @@ export const ARENA_CONFIG: ArenaConfig = {
     fixtureRadius: 430,
     fixtures: 5,
     fixtureDrop: 520,
-    emissiveIntensity: 1.5,
+    emissiveIntensity: 0.22,
     hangers: 9
   },
 

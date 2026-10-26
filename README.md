@@ -24,6 +24,16 @@ packages/
   admin-app/  Expo (React Native) staff app - the only admin surface
 ```
 
+## Stakes
+
+Open tables: **1, 5, 10, 20, 50, 100 USDT**. Master Match: **500, 1000, 2000, 3000, 5000 USDT**.
+Both use the same virtual ledger freeze and settlement. `REAL_MONEY_ENABLED` stays
+`false`, so crypto deposits and withdrawals stay gated off. A new account still
+starts with 1 USDT; a Master Match needs a balance that covers the stake.
+
+The post-login home hall (not the sign-in screen) cycles its glow through red,
+blue, and gold. `prefers-reduced-motion` holds it on the blue hall.
+
 ## 1v1 matchmaking
 
 Online play is invitation-based rather than a browsed table list:
@@ -90,7 +100,31 @@ network needs nothing configured. Point it elsewhere with
 `EXPO_PUBLIC_API_URL=http://host:4000/api` in `packages/admin-app/.env`. The
 seeded admin account is created by `pnpm db:seed`.
 
-### Installable Android build (APK)
+### Player app (Android debug APK)
+
+The playable client is Snooker Stake, a Capacitor app in `packages/client` (`com.snookerx.game`).
+A debug APK is built with the JDK and Android SDK (compile/target SDK 35):
+
+```bash
+# Emulator default: the host machine is 10.0.2.2. A phone on your LAN needs that
+# machine's address instead, then the same two commands.
+#   VITE_API_ORIGIN=http://192.168.1.20:4000
+cd packages/client
+pnpm build:app          # reads packages/client/.env.app (VITE_API_ORIGIN)
+pnpm cap:sync
+cd android && ./gradlew assembleDebug
+```
+
+`VITE_API_ORIGIN` is baked in at build time. The checked-in `.env.app` points at
+`http://10.0.2.2:4000`, which is the Android emulator's alias for the computer
+running the API. Change that one line and rebuild to aim a handset at another host.
+The API still has to be reachable, and `REAL_MONEY_ENABLED` is unchanged.
+
+Graphics quality is automatic: low on weak phones, medium on typical Android,
+high on desktop. Override with `?quality=low|medium|high` or the in-game setting.
+Rails and pocket leather use the birch and hide photos in `public/textures`.
+
+### Staff app (Android APK via EAS)
 
 `packages/admin-app/eas.json` defines a `preview` profile that produces a
 directly installable `.apk`. EAS builds in the cloud, so no Android SDK or Java

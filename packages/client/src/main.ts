@@ -1,5 +1,5 @@
 import './styles.css'
-import { api, clearStoredToken, connectSocket, disconnectSocket, getSocket, makeToast, readStoredToken, storeToken } from './game/network.js'
+import { api, clearStoredToken, connectSocket, disconnectSocket, FAST_TIMEOUT_MS, getSocket, makeToast, readStoredToken, storeToken } from './game/network.js'
 import { openSupportChat, refreshSupportChat } from './support.js'
 import { drawTable, resetTableAnimation } from './game/renderer.js'
 import { Scene3D } from './game/scene3d.js'
@@ -12,8 +12,8 @@ import type { Hud } from './game/hud.js'
 import { frameForHud } from './game/hudFrame.js'
 import { createShotTimer } from './game/shotTimerView.js'
 import type { TurnTiming } from './game/shotTimer.js'
-import type { ShotInput, ShotPlayback } from '@snooker/shared'
-import { APP_TITLE, STAKE_TIERS, COLOR_VALUES, MATCH_CHAT_PHRASES, MATCH_CHAT_MAX_LOG, matchChatPhraseText, xpForMatch } from '@snooker/shared'
+import type { FrameState, ShotInput, ShotPlayback } from '@snooker/shared'
+import { APP_TITLE, applyFoulChoice, COLOR_VALUES, cueStartPosition, frameSnapshot, MATCH_CHAT_MAX_LOG, MATCH_CHAT_PHRASES, matchChatPhraseText, STAKE_TIERS, xpForMatch } from '@snooker/shared'
 import type { MatchFormat, PracticeAiLevel } from '@snooker/shared'
 import { createAvatarBadge } from './game/avatar.js'
 import {
@@ -36,6 +36,9 @@ import {
 import type { LobbyBridge, LobbySession, LoadPhase } from './lobby/index.js'
 import type { Socket } from 'socket.io-client'
 import { playCushion, playFoul, playFrameEnd, playMatchEnd, playPot, setSoundMuted, isSoundMuted, unlockAudio } from './game/audio.js'
+import { armMusic, setMusicDucked } from './game/music.js'
+import { freshLocalFrame, LOCAL_MATCH_ID, placeLocalCue, robotShot, strokeLocal } from './game/localPractice.js'
+import { clearLocalGuest, consumeLocalGuestAutostart, GUEST_STAKE_PROMPT, isGuestAccount, isLocalGuest, isUnreachable, LOCAL_GUEST_ID, localGuestUser, markLocalGuest, type SessionUser } from './guest.js'
 import { USE_NEW_SFX } from './lobby/flag.js'
 import { emitSfx } from './sfx/sfxEvents.js'
 import { replaySfx } from './sfx/replayAdapter.js'
@@ -48,7 +51,7 @@ import { playRecapWipe } from './game/recapWipe.js'
 import { fillBalance } from './lobby/casino.js'
 import { xpBar } from './lobby/progress.js'
 import type { LobbyProgress } from './lobby/types.js'
-import { renderAuthScreen } from './auth.js'
+import { renderAuthScreen, setAuthOfflineNotice } from './auth.js'
 import {
   confirmPlacement,
   initialPlacementFlow,
@@ -94,7 +97,9 @@ function formatCash(amount: number | string): string {
 }
 
 let token = readStoredToken()
-let currentUser: { id: string; username: string; role: string; status: string } | null = null
+let currentUser: SessionUser | null = null
+let localFrame: FrameState | null = null
+let localRobotTimer: number | undefined
 let wallet = { balance: 0, locked: 0 }
 let tiers: TierData[] = []
 let activeTierId: string | null = null
@@ -128,6 +133,8 @@ interface ChallengeDto {
   stakeTier: string
   stakePerPlayer: number
   stakeLabel: string
+  /** OPEN or MASTER. Older servers omit it; the tier id is the fallback. */
+  table?: 'OPEN' | 'MASTER'
   format: string
   expiresAt: string
   /** True for an invite born from the rematch button, so the popup can say so. */
@@ -453,9 +460,11 @@ let adaptiveQuality = true
 /** Backing pixels per CSS pixel at full scale: the screen's density under the ceiling and the tier's cap. */
 function fullPixelRatio(): number {
   const device = window.devicePixelRatio || 1
-  const high = qualityConfig().name === 'high'
+  const tier = qualityConfig()
+  const high = tier.name === 'high'
+  const tierCap = tier.name === 'low' ? 1 : tier.name === 'medium' ? 1.5 : dprCeiling
   const oversize = high && device <= 1.25 && hasWeakGpu() ? HIGH_SUPERSAMPLE : 1
-  return Math.min(dprCeiling, device) * qualityConfig().renderScale * oversize
+  return Math.min(dprCeiling, tierCap, device) * tier.renderScale * oversize
 }
 
 function storedRenderScale(): number {
@@ -1006,6 +1015,11 @@ async function loadTiers(): Promise<void> {
 }
 
 function leaveGameState(): void {
+  localFrame = null
+  if (localRobotTimer !== undefined) {
+    window.clearTimeout(localRobotTimer)
+    localRobotTimer = undefined
+  }
   activeMatchId = null
   frame = null
   mySeat = undefined
@@ -1260,6 +1274,11 @@ function renderChallengeLayer(): void {
   challengeLayerEl.classList.add('open')
 }
 
+function challengeMeta(challenge: ChallengeDto): string {
+  const master = challenge.table === 'MASTER' || challenge.stakeTier.startsWith('MASTER_')
+  return `${master ? 'Master · ' : ''}${challenge.stakeLabel} · ${challenge.format}`
+}
+
 function findingOverlay(challenge: ChallengeDto): HTMLElement {
   const overlay = el('div', 'challenge-overlay')
   const card = el('div', 'challenge-card')
@@ -1273,7 +1292,7 @@ function findingOverlay(challenge: ChallengeDto): HTMLElement {
         : 'Waiting for a player to join'
     )
   )
-  card.appendChild(el('div', 'challenge-card__meta', `${challenge.stakeLabel} · ${challenge.format}`))
+  card.appendChild(el('div', 'challenge-card__meta', challengeMeta(challenge)))
   card.appendChild(el('div', 'challenge-card__spinner'))
   card.appendChild(
     el(
@@ -1298,12 +1317,16 @@ function challengePopup(challenge: ChallengeDto): HTMLElement {
   const card = el('div', 'challenge-card')
   const isRematch = challenge.rematch === true
   card.appendChild(
-    el('div', 'challenge-card__eyebrow', isRematch ? 'REMATCH' : challenge.kind === 'FRIEND' ? 'FRIEND INVITE' : 'OPEN TABLE')
+    el(
+      'div',
+      'challenge-card__eyebrow',
+      isRematch ? 'REMATCH' : challenge.table === 'MASTER' ? 'MASTER MATCH' : challenge.kind === 'FRIEND' ? 'FRIEND INVITE' : 'OPEN TABLE'
+    )
   )
   card.appendChild(
     el('div', 'challenge-card__title', isRematch ? `${challenge.challengerUsername} wants a rematch` : `${challenge.challengerUsername} wants to play`)
   )
-  card.appendChild(el('div', 'challenge-card__meta', `${challenge.stakeLabel} · ${challenge.format}`))
+  card.appendChild(el('div', 'challenge-card__meta', challengeMeta(challenge)))
   card.appendChild(
     el('p', 'challenge-card__note', `Both players stake ${challenge.stakeLabel}; the winner takes the pool.`)
   )
@@ -1430,6 +1453,13 @@ function askConcede(): void {
 
 async function finishPractice(): Promise<void> {
   if (!activeMatchId) return
+  if (isLocalMatch()) {
+    toast('Practice ended')
+    leaveGameState()
+    activeScreen = 'home'
+    render()
+    return
+  }
   try {
     await api('/practice/resign', { method: 'POST', body: { matchId: activeMatchId } })
     toast('Practice ended')
@@ -1993,8 +2023,10 @@ function render(): void {
 async function signOut(): Promise<void> {
   token = ''
   clearStoredToken()
+  clearLocalGuest()
   disconnectSocket()
   currentUser = null
+  localFrame = null
   activeMatchId = null
   activeTournamentId = null
   activeScreen = 'home'
@@ -2015,8 +2047,9 @@ function createLobbyBridge(): LobbyBridge {
     '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" fill="#c9a84c"/><circle cx="12" cy="12" r="7" fill="#0a0a0f"/><circle cx="9.5" cy="9.5" r="2.5" fill="#e8c872"/></svg>'
   return {
     appTitle: APP_TITLE,
-    username: currentUser?.username ?? 'Player',
+    username: isGuestAccount(currentUser) ? 'Guest' : (currentUser?.username ?? 'Player'),
     userId: currentUser?.id ?? '',
+    guest: isGuestAccount(currentUser),
     // Read live: the lobby is built before the wallet request comes back, and a copy
     // taken here would show the balance from before it did.
     get walletBalance() {
@@ -2054,15 +2087,34 @@ function createLobbyBridge(): LobbyBridge {
     fetchProgress,
     startPractice: async (aiLevel) => {
       practiceDifficulty = aiLevel
-      if (!USE_LOADING_SCREEN) {
-        const data = await api<{ id: string }>('/practice/start', { method: 'POST', body: { aiLevel } })
-        await preloadTableModel()
-        enterMatch(data.id, true)
-        return
+      const offline = isLocalGuest() || currentUser?.id === LOCAL_GUEST_ID
+      const run = async (local: boolean): Promise<void> => {
+        if (!USE_LOADING_SCREEN) {
+          if (local) {
+            await preloadTableModel()
+            enterLocalPractice()
+            return
+          }
+          const data = await api<{ id: string }>('/practice/start', { method: 'POST', body: { aiLevel } })
+          await preloadTableModel()
+          enterMatch(data.id, true)
+          return
+        }
+        await startPracticeWithLoadingScreen(aiLevel, local)
       }
-      await startPracticeWithLoadingScreen(aiLevel)
+      try {
+        await run(offline)
+      } catch (error) {
+        if (isGuestAccount(currentUser) && isUnreachable(error)) {
+          markLocalGuest()
+          await run(true)
+          return
+        }
+        throw error
+      }
     },
     startOnlineChallenge: async (opts) => {
+      if (isGuestAccount(currentUser)) throw new Error(GUEST_STAKE_PROMPT)
       // Opening a table is now a challenge: the server broadcasts it to every
       // connected player (or just the friend named), and the challenger waits on
       // the lobby's "finding an opponent" overlay. The match itself is only
@@ -2083,6 +2135,10 @@ function createLobbyBridge(): LobbyBridge {
       /* Settings tab is opened by the lobby shell; no separate profile route exists. */
     },
     openTournaments: () => {
+      if (isGuestAccount(currentUser)) {
+        toast(GUEST_STAKE_PROMPT, 'info')
+        return
+      }
       activeScreen = 'tournaments'
       render()
     },
@@ -2990,7 +3046,7 @@ async function profileStatsCard(): Promise<HTMLElement> {
  * does not share this screen — it enters the match directly from the challenge
  * layer once the table is taken.
  */
-async function startPracticeWithLoadingScreen(aiLevel: PracticeAiLevel): Promise<void> {
+async function startPracticeWithLoadingScreen(aiLevel: PracticeAiLevel, local = false): Promise<void> {
   const loading = showMatchLoading({ modeLabel: 'VS AI' })
   const perf = new URLSearchParams(location.search).has('perf')
   const phaseMs: Partial<Record<LoadPhase | 'total', number>> = {}
@@ -3009,21 +3065,29 @@ async function startPracticeWithLoadingScreen(aiLevel: PracticeAiLevel): Promise
   const tAll = performance.now()
   try {
     await runPhase('fonts', async () => {
-      await Promise.all([document.fonts.ready.catch(() => undefined), ensureLobbyBgReady()])
+      const fonts = document.fonts.ready.catch(() => undefined)
+      // A stalled font host must not hold the local table. The files are optional.
+      const fontsReady = local ? Promise.race([fonts, new Promise((resolve) => setTimeout(resolve, 800))]) : fonts
+      await Promise.all([fontsReady, ensureLobbyBgReady()])
     })
 
     // Network must succeed: without a match id there is nothing to warm. Do not swallow.
     loading.report('network', 0)
     const tNet = performance.now()
-    let matchId: string
-    try {
-      const data = await api<{ id: string }>('/practice/start', { method: 'POST', body: { aiLevel } })
-      matchId = data.id
+    let matchId = ''
+    if (local) {
       loading.report('network', 1)
-      phaseMs.network = performance.now() - tNet
-    } catch (err) {
-      await loading.finish().catch(() => undefined)
-      throw err
+      phaseMs.network = 0
+    } else {
+      try {
+        const data = await api<{ id: string }>('/practice/start', { method: 'POST', body: { aiLevel } })
+        matchId = data.id
+        loading.report('network', 1)
+        phaseMs.network = performance.now() - tNet
+      } catch (err) {
+        await loading.finish().catch(() => undefined)
+        throw err
+      }
     }
 
     await runPhase('scene', async () => {
@@ -3033,12 +3097,16 @@ async function startPracticeWithLoadingScreen(aiLevel: PracticeAiLevel): Promise
       // so a missing model costs a fallback and never the match.
       await preloadTableModel()
       pendingSceneBuildProgress = (fraction) => loading.report('scene', fraction)
-      enterMatch(matchId, true)
+      if (local) enterLocalPractice()
+      else enterMatch(matchId, true)
       pendingSceneBuildProgress = undefined
     })
 
     await runPhase('audio', async () => {
-      await warmMatchAudioBuffers()
+      const warm = warmMatchAudioBuffers()
+      // The clap file is in the APK. If that read never settles, the frame still starts.
+      if (local) await Promise.race([warm, new Promise((resolve) => setTimeout(resolve, 3000))])
+      else await warm
     })
 
     if (scene3d) {
@@ -3138,6 +3206,89 @@ function enterMatch(matchId: string, isPractice = false): void {
   void loadMatchMeta(matchId)
 }
 
+function isLocalMatch(): boolean {
+  return activeMatchId === LOCAL_MATCH_ID
+}
+
+function enterLocalPractice(): void {
+  if (localRobotTimer !== undefined) {
+    window.clearTimeout(localRobotTimer)
+    localRobotTimer = undefined
+  }
+  localFrame = freshLocalFrame()
+  activeMatchId = LOCAL_MATCH_ID
+  lastShotRecap = null
+  pendingHighlight = null
+  skipHighlight?.()
+  recapPlayer = null
+  recapDone = null
+  activeMatchIsPractice = true
+  clearTournamentTimer()
+  mySeat = 0
+  const snapshot = frameSnapshot(localFrame)
+  frame = snapshot
+  myTurn = snapshot.turnIndex === mySeat
+  framesWon = [0, 0]
+  frameIndex = 1
+  players = [
+    {
+      id: 'local-seat-0',
+      userId: currentUser?.id ?? LOCAL_GUEST_ID,
+      seat: 0,
+      user: { id: currentUser?.id ?? LOCAL_GUEST_ID, username: 'Guest' }
+    },
+    {
+      id: 'local-seat-1',
+      userId: 'local-robot',
+      seat: 1,
+      user: { id: 'local-robot', username: 'Robot' }
+    }
+  ]
+  opponentGone = false
+  render()
+  updateHud()
+}
+
+function playLocalStroke(seat: number, shot: { aimAngle: number; power: number; spin?: { x: number; y: number } }): void {
+  if (!localFrame) return
+  const result = strokeLocal(localFrame, seat, shot)
+  applyGameUpdate({ frame: result.frame, events: result.events, playback: result.playback })
+}
+
+function scheduleLocalRobot(): void {
+  if (localRobotTimer !== undefined) window.clearTimeout(localRobotTimer)
+  localRobotTimer = window.setTimeout(() => {
+    localRobotTimer = undefined
+    runLocalRobot()
+  }, 650)
+}
+
+function runLocalRobot(): void {
+  if (!isLocalMatch() || !localFrame || localFrame.phase !== 'PLAYING') return
+  if (shotInFlight || shotPlayer) {
+    scheduleLocalRobot()
+    return
+  }
+  const choice = localFrame.foulChoice
+  if (choice && choice.chooser === 1) {
+    applyFoulChoice(localFrame, 1, false)
+    applyGameUpdate({ frame: frameSnapshot(localFrame) })
+  }
+  if (!localFrame || localFrame.turnIndex !== 1 || localFrame.phase !== 'PLAYING' || localFrame.foulChoice) return
+  if (localFrame.cueInHand) {
+    const spot = cueStartPosition()
+    const placed = placeLocalCue(localFrame, { x: spot.x, y: spot.y })
+    if (!placed.ok) return
+    applyGameUpdate({ frame: placed.frame })
+  }
+  if (!localFrame || localFrame.cueInHand) return
+  playLocalStroke(1, robotShot(localFrame))
+}
+
+function syncMusicDuck(): void {
+  setMusicDucked(shotInFlight || shotPlayer !== null || predictedShot !== null || queuedUpdate !== null)
+}
+
 /**
  * Sizes the canvas to the space the layout has left over.
  *
@@ -3175,7 +3326,7 @@ function applyCanvasSize(): void {
 
 function updateNetOverlay(): void {
   if (!netOverlayEl) return
-  const show = activeMatchId !== null && (!connected || !navigator.onLine)
+  const show = activeMatchId !== null && !isLocalMatch() && (!connected || !navigator.onLine)
   netOverlayEl.style.display = show ? 'flex' : 'none'
   const text = netOverlayEl.querySelector('p')
   if (text) {
@@ -3597,6 +3748,13 @@ function renderGame(): void {
       spinLabel.textContent = `Spin: ${aim.spinX.toFixed(1)} / ${aim.spinY.toFixed(1)}`
     },
     onShoot: (shot: Omit<ShotInput, 'timestamp'>) => {
+      if (isLocalMatch()) {
+        playLocalStroke(0, shot)
+        scene3d?.strikeCue(shot.power)
+        cueController?.resetPower()
+        syncMusicDuck()
+        return
+      }
       getSocket().emit('shot:play', { matchId: activeMatchId, input: { ...shot, timestamp: Date.now() } })
       // The cue goes through the ball on the table at once, while the shot is on its way;
       // the replay waits for the tip to reach the ball (see the pre-roll below).
@@ -3607,6 +3765,7 @@ function renderGame(): void {
       // controller, and it keeps animating on its own frames rather than being driven
       // by a state change that has already happened.
       cueController?.resetPower()
+      syncMusicDuck()
     }
   })
   // The slider is the other way into the same power value: dragging it writes the
@@ -3738,6 +3897,13 @@ function ensureFoulChoiceUi(): void {
     foulChoiceSent = true
     play.disabled = true
     again.disabled = true
+    if (isLocalMatch() && localFrame && mySeat !== undefined) {
+      applyFoulChoice(localFrame, mySeat, playAgain)
+      applyGameUpdate({ frame: frameSnapshot(localFrame) })
+      foulChoiceSent = false
+      scheduleLocalRobot()
+      return
+    }
     getSocket().emit('foul:choice', { matchId: activeMatchId, playAgain })
   }
   play.onclick = () => send(false)
@@ -3856,6 +4022,7 @@ function abandonPlayback(): void {
   // A held verdict belongs to a replay that is being thrown away. The authoritative
   // snapshot arrives with its own events, so reporting this one now would be stale.
   deferredVerdict = []
+  syncMusicDuck()
 }
 
 function applyGameUpdate(data: GameUpdatePayload): void {
@@ -3996,6 +4163,7 @@ function applyGameUpdate(data: GameUpdatePayload): void {
     }
   }
   updateHud()
+  syncMusicDuck()
 }
 
 /**
@@ -4027,7 +4195,7 @@ function handleSocketEvents(socket: Socket): void {
     connected = true
     updateConnChip()
     updateNetOverlay()
-    if (activeMatchId) socket.emit('match:join', { matchId: activeMatchId })
+    if (activeMatchId && !isLocalMatch()) socket.emit('match:join', { matchId: activeMatchId })
     // A reconnect may have missed a challenge push; reconcile from the server.
     void fetchIncomingChallenges()
   })
@@ -4228,6 +4396,7 @@ function isPlacing(): boolean {
 function declarePlacement(): void {
   if (placementDeclared || !activeMatchId) return
   placementDeclared = true
+  if (isLocalMatch()) return
   getSocket().emit('placement:begin', { matchId: activeMatchId })
 }
 
@@ -4393,7 +4562,22 @@ placementTarget = null
       // slow or is lost and has to be retried. Ordering it the other way round would
       // leave a window where the ball is down and the server is still counting.
       declarePlacement()
-      getSocket().emit('placement:confirm', { matchId: activeMatchId, cuePos: { x: pos.x, y: pos.y } })
+      if (isLocalMatch()) {
+        if (localFrame) {
+          const placed = placeLocalCue(localFrame, pos)
+          if (placed.ok) applyGameUpdate({ frame: placed.frame })
+          else {
+            placementFlow = rejectPlacement(placementFlow)
+            placementCommitInFlight = false
+            placementResumePending = false
+            placementTarget = null
+            placementLegal = false
+            toast('Place the cue ball on the table', 'error')
+          }
+        }
+      } else {
+        getSocket().emit('placement:confirm', { matchId: activeMatchId, cuePos: { x: pos.x, y: pos.y } })
+      }
       // The clock stays held from here until the camera is home. This is the flag that
       // sends the release when that happens.
       placementResumePending = true
@@ -4419,7 +4603,7 @@ placementTarget = null
     // nothing the player spent on the camera or on hunting for a spot is charged to them.
     if (placementResumePending && activeMatchId) {
       placementResumePending = false
-      getSocket().emit('placement:done', { matchId: activeMatchId })
+      if (!isLocalMatch()) getSocket().emit('placement:done', { matchId: activeMatchId })
     }
     // The next placement has to declare itself again. The hold was released once the ball
     // went down and the camera landed, so leaving this set would leave the next
@@ -4705,7 +4889,9 @@ function finishShot(): void {
   shotInFlight = false
   // The token identifies the replay that was just watched, so an acknowledgement that
   // arrives after the server has moved on cannot release a newer hold.
-  if (activeMatchId) getSocket().emit('shot:done', { matchId: activeMatchId, token: playedToken })
+  if (isLocalMatch()) scheduleLocalRobot()
+  else if (activeMatchId) getSocket().emit('shot:done', { matchId: activeMatchId, token: playedToken })
+  syncMusicDuck()
 }
 
 /**
@@ -4847,6 +5033,7 @@ function renderMaintenance(): void {
 }
 
 async function init(): Promise<void> {
+  document.title = APP_TITLE
   // Start the table model download now, in parallel with the auth/lobby boot. The
   // online path has no loading screen to await it in, so `tableModelIfReady()` has
   // to be able to answer by the time a scene is built; a cached, warmed download is
@@ -4868,45 +5055,77 @@ async function init(): Promise<void> {
   window.addEventListener('offline', online)
   const unlock = (): void => {
     unlockAudio()
+    armMusic()
     document.removeEventListener('pointerdown', unlock)
     window.removeEventListener('keydown', unlock)
   }
   document.addEventListener('pointerdown', unlock)
   window.addEventListener('keydown', unlock)
-  type SessionUser = { id: string; username: string; role: string; status: string }
+  let booted = false
+  const finishBoot = (): void => {
+    if (!booted) {
+      booted = true
+      requestAnimationFrame(loop)
+      void refreshMaintenance()
+      window.setInterval(refreshMaintenance, 10000)
+    }
+    render()
+  }
+
+  if (isLocalGuest() && !token) {
+    currentUser = localGuestUser()
+    const autostart = consumeLocalGuestAutostart()
+    finishBoot()
+    // Continue as Guest reloads once, then opens the local frame. No session, socket, or API.
+    if (autostart) void startPracticeWithLoadingScreen(practiceDifficulty, true)
+    return
+  }
+
+  // Paint sign-in before any network call. A phone cannot reach 10.0.2.2, and a
+  // fetch with no timeout used to sit on the empty gradient forever.
+  finishBoot()
+
   const startSession = (user: SessionUser, sessionToken: string): void => {
     token = sessionToken
     storeToken(sessionToken)
     currentUser = user
+    clearLocalGuest()
     handleSocketEvents(connectSocket(sessionToken))
     void fetchNotifications()
     void fetchIncomingChallenges()
   }
-  // A stored token is checked before anything uses it. If it is missing or stale, a
-  // still-valid session cookie is exchanged for a fresh one; with neither, the auth
-  // screen takes over.
+  // A stored token is checked before anything uses it; a stale one is dropped and a
+  // still-valid session cookie is exchanged for a fresh one. When the server cannot be
+  // reached at all, the stored token is kept (a network blip must not sign anyone
+  // out) and the card says the server is offline, or a local guest keeps playing.
+  let unreachable = false
   if (token) {
     try {
-      const data = await api<{ authenticated: boolean; user?: SessionUser }>('/auth/status')
+      const data = await api<{ authenticated: boolean; user?: SessionUser }>('/auth/status', { timeoutMs: FAST_TIMEOUT_MS })
       if (data.authenticated && data.user) startSession(data.user, token)
       else throw new Error('stale session')
-    } catch {
-      token = ''
-      clearStoredToken()
+    } catch (error) {
+      if (isUnreachable(error)) unreachable = true
+      else {
+        token = ''
+        clearStoredToken()
+      }
     }
   }
-  if (!currentUser) {
+  if (!currentUser && !unreachable) {
     try {
-      const data = await api<{ user: SessionUser; token: string }>('/auth/session')
+      const data = await api<{ user: SessionUser; token: string }>('/auth/session', { timeoutMs: FAST_TIMEOUT_MS })
       startSession(data.user, data.token)
-    } catch {
-      // No session at all, which is the ordinary case.
+    } catch (error) {
+      // No session at all is the ordinary case; only an unreachable server is news.
+      if (isUnreachable(error)) unreachable = true
     }
   }
-  requestAnimationFrame(loop)
-  void refreshMaintenance()
-  window.setInterval(refreshMaintenance, 10000)
-  render()
+  if (!currentUser && unreachable) {
+    if (isLocalGuest()) currentUser = localGuestUser()
+    else setAuthOfflineNotice(true)
+  }
+  finishBoot()
 }
 
 void init()

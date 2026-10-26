@@ -4,6 +4,7 @@ import { MatchError, assertNotBot } from '../matches/service.js'
 import { TOURNAMENT_SIZE } from '@snooker/shared'
 import { notify } from '../notifications/service.js'
 import { applyTournamentChampion, notifyProgress } from '../progress/service.js'
+import { guestStakeMessage } from '../auth/guestGate.js'
 
 export interface BracketSlot {
   seeds: number[]
@@ -36,6 +37,8 @@ export async function createTournament(name: string): Promise<{ id: string; stat
 }
 
 export async function joinTournament(tournamentId: string, userId: string): Promise<{ joined: boolean; players: number; size: number }> {
+  const blocked = await guestStakeMessage(userId)
+  if (blocked) throw new MatchError(blocked)
   await assertNotBot(userId)
   return prisma.$transaction(async (tx) => {
     const tournament = await tx.tournament.findUnique({ where: { id: tournamentId }, include: { players: true } })

@@ -23,6 +23,37 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 
 export const TABLE_MODEL_URL = '/snookerx_table.glb'
 
+/** The WebView's own fetch, before Capacitor redirects window.fetch at the API host. */
+function bundledFetch(): typeof fetch {
+  const native = (globalThis as { CapacitorWebFetch?: typeof fetch }).CapacitorWebFetch
+  return native ?? fetch
+}
+
+/**
+ * Load a file that shipped inside the APK. The URL stays on this page's origin
+ * (`http://localhost/...` in the WebView), never `VITE_API_ORIGIN`.
+ */
+function fetchBundled(url: string): Promise<Response> {
+  const parsed = new URL(url, document.baseURI)
+  if (parsed.origin !== new URL(document.baseURI).origin) {
+    return Promise.reject(new Error(`table asset is not bundled: ${url}`))
+  }
+  const path = `${parsed.pathname}${parsed.search}`
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('bundled table asset timed out')), 8000)
+    bundledFetch()(path).then(
+      (res) => {
+        clearTimeout(timer)
+        resolve(res)
+      },
+      (err: unknown) => {
+        clearTimeout(timer)
+        reject(err)
+      }
+    )
+  })
+}
+
 /**
  * Where the Draco decoder is served from (copied from three's examples/jsm/libs/draco/gltf).
  *
@@ -70,13 +101,14 @@ export function preloadTableModel(url: string = TABLE_MODEL_URL): Promise<THREE.
       // a dev server with no /public entry answers a missing .glb with HTTP 200 and
       // text/html (index.html), and the loader would then fail as a JSON parse error
       // that says nothing about the real cause. Logging the content-type names it.
-      const res = await fetch(url)
+      const res = await fetchBundled(url)
       const contentType = res.headers.get('content-type') ?? ''
       console.info(`[tableModel] preload ${url} -> HTTP ${res.status} ${contentType}`)
       if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
       const buffer = await res.arrayBuffer()
       console.info(`[tableModel] preload ${url} -> ${buffer.byteLength} bytes`)
       const draco = new DRACOLoader()
+      // Relative, so the decoder wasm is read from the APK and not proxied off-device.
       draco.setDecoderPath(DRACO_DECODER_PATH)
       const loader = new GLTFLoader()
       loader.setDRACOLoader(draco)
@@ -538,7 +570,7 @@ const UNDERSIDE = new THREE.MeshBasicMaterial({ name: 'Underside', color: 0x0606
  * back: a deep red-brown with the birch's figure still in it.
  */
 // A polished red-brown, as a match table's rails are, rather than near black.
-const MAHOGANY_STAIN = '#7a3519'
+const MAHOGANY_STAIN = '#3c180e'
 
 /**
  * The rails as the overhead (opponent's) view shows them: the deep stain and thin satin coat
@@ -546,7 +578,7 @@ const MAHOGANY_STAIN = '#7a3519'
  * stain reads as blotchy streaks along the whole rail; the deep finish reads as wood. The
  * player's own view keeps the polished finish.
  */
-const OVERHEAD_RAIL_STAIN = '#5a2c16'
+const OVERHEAD_RAIL_STAIN = '#2a100a'
 const OVERHEAD_RAIL_CLEARCOAT = 0.12
 const OVERHEAD_RAIL_CLEARCOAT_ROUGHNESS = 0.3
 const OVERHEAD_RAIL_REFLECTION = 0.85
@@ -808,8 +840,8 @@ function dressModelMaterial(source: THREE.Material, low: boolean): THREE.Materia
           // A real lacquer: the rails of a match table are polished and catch the lights
           // in a soft sheen along their length. The table lights come in at an angle now,
           // so the coat no longer throws a white glare into the overhead view.
-          clearcoat: low ? 0 : 0.45,
-          clearcoatRoughness: 0.12,
+          clearcoat: low ? 0 : 0.58,
+          clearcoatRoughness: 0.22,
           specularIntensity: 0.3,
           envMapIntensity: 0.3
         })
@@ -818,7 +850,8 @@ function dressModelMaterial(source: THREE.Material, low: boolean): THREE.Materia
     case 'Gold metal': {
       const brass = std.clone()
       brass.metalness = 1
-      brass.roughness = std.name === 'Gold' ? 0.32 : 0.24
+      brass.roughness = std.name === 'Gold' ? 0.2 : 0.16
+      brass.color.set('#e0b44a')
       brass.envMapIntensity = 1.2
       return brass
     }
@@ -839,8 +872,10 @@ function dressModelMaterial(source: THREE.Material, low: boolean): THREE.Materia
     case 'Knot': {
       const net = std.clone()
       net.side = THREE.DoubleSide
-      net.roughness = 0.8
-      net.envMapIntensity = 0.2
+      net.color.set('#121212')
+      net.roughness = 0.94
+      net.metalness = 0
+      net.envMapIntensity = 0.05
       return net
     }
     case 'Label': {

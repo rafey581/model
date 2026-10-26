@@ -278,9 +278,9 @@ export function woodNormalTexture(): THREE.CanvasTexture {
 // from #147a3c down to #083d1e at the cushions — half the centre's brightness, painted
 // into the cloth itself — which is what made the ends of the table look unlit whatever
 // the lamp was doing.
-export const CLOTH_COLOR_CENTER = '#37cc43'
-export const CLOTH_COLOR_MID = '#23a92e'
-export const CLOTH_COLOR_EDGE = '#167f1f'
+export const CLOTH_COLOR_CENTER = '#1b8c34'
+export const CLOTH_COLOR_MID = '#146e29'
+export const CLOTH_COLOR_EDGE = '#0e5c22'
 /** How far out from each cushion its shade reaches across the bed, and how dark it starts. */
 const CUSHION_SHADE_MM = 120
 const CUSHION_SHADE_STRENGTH = 0.46
@@ -341,9 +341,9 @@ const FELT_CLASSIC: FeltLook = {
 }
 
 const FELT_STUDIO: FeltLook = {
-  outer: '#28a632',
-  edge: '#209a2a',
-  ends: 0.06,
+  outer: '#115f24',
+  edge: '#0d5220',
+  ends: 0.1,
   // No painted shade along the cushions: a cushion sits on the cloth, it does not hang
   // over it in the air. What shade there is comes from the table lights themselves.
   cushionMm: 50,
@@ -432,7 +432,9 @@ function paintFelt(key: string, look: FeltLook): THREE.CanvasTexture {
     mottle = (mottle * 1103515245 + 12345) & 0x7fffffff
     return mottle / 0x7fffffff
   }
-  for (let i = 0; i < 46; i++) {
+  // The broadcast bed is one colour with a centre falloff. Blotches read as a pattern.
+  const blotches = look.cushion === 0 ? 0 : 8
+  for (let i = 0; i < blotches; i++) {
     const x = mottleRand() * size
     const y = mottleRand() * size
     const r = size * (0.07 + mottleRand() * 0.12)

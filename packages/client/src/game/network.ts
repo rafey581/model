@@ -108,13 +108,52 @@ export function clearStoredToken(): void {
   }
 }
 
-export async function api<T>(path: string, options: { method?: string; body?: unknown } = {}): Promise<T> {
+/**
+ * How long a request may take before it counts as unreachable. A dead host must not
+ * hold the first paint (10.0.2.2, the emulator's address, never answers on a real
+ * phone), so start-up and guest calls pass FAST_TIMEOUT_MS; everything else gets
+ * longer, and a request with a body (a deposit carries a screenshot) longer still,
+ * so a slow mobile connection is not mistaken for a dead server.
+ */
+export const FAST_TIMEOUT_MS = 2500
+const DEFAULT_TIMEOUT_MS = 8000
+const UPLOAD_TIMEOUT_MS = 30000
+
+export async function api<T>(
+  path: string,
+  options: { method?: string; body?: unknown; timeoutMs?: number } = {}
+): Promise<T> {
+  // The Android webview calls the API on another host, so the session cookie is not
+  // sent there; the saved token goes as a bearer, which the server already accepts.
   const token = readStoredToken()
-  const response = await fetch(`${API_BASE}${path}`, {
-    method: options.method ?? 'GET',
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    credentials: 'include',
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }
+  const timeoutMs = options.timeoutMs ?? (options.body !== undefined ? UPLOAD_TIMEOUT_MS : DEFAULT_TIMEOUT_MS)
+  const controller = new AbortController()
+  // AbortSignal is not enough on Android: Capacitor's native HTTP stack never
+  // settles a POST to a dead host, so this race rejects at the deadline itself.
+  const response = await new Promise<Response>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      controller.abort()
+      reject(new TypeError('Failed to fetch'))
+    }, timeoutMs)
+    fetch(`${API_BASE}${path}`, {
+      method: options.method ?? 'GET',
+      headers,
+      credentials: 'include',
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal
+    }).then(
+      (res) => {
+        clearTimeout(timer)
+        resolve(res)
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        const name = error && typeof error === 'object' && 'name' in error ? String((error as { name: string }).name) : ''
+        if (name === 'AbortError' || error instanceof TypeError) reject(new TypeError('Failed to fetch'))
+        else reject(error)
+      }
+    )
   })
 
   // A failed request does not always come back as JSON. A proxy or gateway can
@@ -148,7 +187,8 @@ export function connectSocket(token: string): Socket {
   socket?.disconnect()
   socket = io(API_ORIGIN || '/', {
     auth: { token },
-    transports: ['websocket']
+    transports: ['websocket'],
+    timeout: DEFAULT_TIMEOUT_MS
   })
   return socket
 }

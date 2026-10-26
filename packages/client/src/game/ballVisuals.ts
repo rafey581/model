@@ -47,7 +47,7 @@ export function ballGlossScale(): { clearcoat: number; env: number } {
   // Medium is the phone's tier, and the balls are what a phone player looks at: the same
   // finish as High.
   if (tier === 'medium') return { clearcoat: 0.75, env: 1 }
-  return { clearcoat: 0.75, env: 1 }
+  return { clearcoat: 1, env: 1.4 }
 }
 
 /**

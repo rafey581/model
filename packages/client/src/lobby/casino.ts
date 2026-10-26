@@ -45,6 +45,8 @@ export interface CasinoHomeActions {
   practice: () => void
   createRoom: () => void
   tournaments: () => void
+  /** High-stake Master Match: 500 to 5000 USDT on the virtual ledger. */
+  masterMatch: () => void
   /** The player's own games and record. */
   openGames: () => void
   history: LobbyHistoryMatch[]
@@ -93,15 +95,16 @@ function svg(body: string): string {
   )
 }
 
-/** The wordmark: SNOOKER in white, the X in gold, a small crown over it. */
+/** The wordmark: the name in white, the last word in gold, a small crown over it. */
 function wordmark(title: string, big = false): HTMLElement {
   const mark = el('span', big ? 'cx-wordmark cx-wordmark--big' : 'cx-wordmark')
   const crown = el('span', 'cx-wordmark__crown')
   crown.innerHTML = ICON.crown
-  const xAt = title.toUpperCase().lastIndexOf('X')
+  const space = title.lastIndexOf(' ')
+  const cut = space > 0 ? space + 1 : title.toUpperCase().lastIndexOf('X')
   const word = el('span', 'cx-wordmark__word')
-  if (xAt > 0) {
-    word.append(document.createTextNode(title.slice(0, xAt)), el('span', 'cx-wordmark__x', title.slice(xAt)))
+  if (cut > 0) {
+    word.append(document.createTextNode(title.slice(0, cut)), el('span', 'cx-wordmark__x', title.slice(cut)))
   } else {
     word.textContent = title
   }
@@ -213,6 +216,7 @@ export function createCasinoShell(
   progress: LobbyProgress | null = null
 ): { root: HTMLElement; main: HTMLElement } {
   const root = el('div', 'gl-root cx-root')
+  if (view === 'home') root.classList.add('is-landing')
   root.appendChild(el('div', 'cx-backdrop'))
   root.appendChild(coinRain())
 
@@ -538,6 +542,20 @@ export function renderCasinoHome(bridge: LobbyBridge, actions: CasinoHomeActions
     mode({ tone: 'gold', title: 'Practice Mode', text: 'Improve your skills against the computer.', image: '/lobby/practice.webp', focus: '60% 70%', button: 'Practice', onClick: actions.practice })
   )
   col.appendChild(modes)
+
+  const master = el('section', 'cx-master')
+  const masterCopy = el('div', 'cx-master__copy')
+  masterCopy.append(
+    el('span', 'cx-master__kicker', 'MASTER MATCH'),
+    el('h3', 'cx-master__title', 'High-stake tables'),
+    el('p', 'cx-master__text', '500, 1000, 2000, 3000 or 5000 USDT. Same table, same virtual ledger. Crypto stays off.')
+  )
+  const masterBtn = el('button', 'cx-btn cx-btn--gold cx-master__cta') as HTMLButtonElement
+  masterBtn.type = 'button'
+  masterBtn.textContent = 'Enter Master Match'
+  masterBtn.onclick = actions.masterMatch
+  master.append(masterCopy, masterBtn)
+  col.appendChild(master)
 
   // ---------------------------------------------------------------- featured tournaments
   const featured = el('section', 'cx-panel cx-featured')

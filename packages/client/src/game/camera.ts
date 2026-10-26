@@ -250,15 +250,22 @@ export type CameraMode = 'AIM' | 'TOP_DOWN' | 'TRACK' | 'PLACEMENT_TOP_DOWN' | '
 /**
  * The views the player may choose between, in the order the toggle walks them.
  *
- * `AIM` is the cue-ball camera the game plays in and `TOP_DOWN` is the overhead one, and
- * the three between them are the venue's own broadcast cameras: a wide shot down the
- * table, a side-on table camera, and a close camera that stays with the cue ball. A shot
- * takes the camera away from all of them for as long as it lasts and hands it back, so
- * the order only matters while the player is free to aim.
+ * `AIM` is the low camera behind the cue ball. `SIDE` is the low side-on table camera.
+ * `TOP_DOWN` is the static overhead of the whole bed. The wide and close television
+ * poses still exist for the rig; they are not stops on the button.
  */
 export type PlayerCameraMode = 'AIM' | 'BROADCAST' | 'SIDE' | 'CLOSE' | 'TOP_DOWN'
 
-export const PLAYER_CAMERA_MODES: readonly PlayerCameraMode[] = ['AIM', 'TOP_DOWN']
+export const PLAYER_CAMERA_MODES: readonly PlayerCameraMode[] = ['AIM', 'SIDE', 'TOP_DOWN']
+
+/**
+ * How long a change of view takes to settle, in seconds.
+ *
+ * Longer than the aim camera's own follow. A button press flies from the cue to the
+ * side camera or straight overhead; the aim follow stays on {@link MOVE_SMOOTH_SECONDS}
+ * so a shot still squares up inside the window the camera tests measure.
+ */
+export const VIEW_TRANSITION_SECONDS = 0.95
 
 /** Where the camera is, and where it is looking, all in table millimetres. */
 export interface CameraPose {
@@ -406,6 +413,11 @@ export interface CameraRequest {
    * the overhead view rather than inventing a focus.
    */
   focus: { x: number; y: number; spread: number } | null
+  /**
+   * Pose catch-up for this frame, in seconds. Omitted, the rig uses its own follow
+   * time. A view change passes {@link VIEW_TRANSITION_SECONDS} so the flight is slow.
+   */
+  smoothSeconds?: number
 }
 
 /**
@@ -827,7 +839,7 @@ export function stepCameraRig(state: CameraRigState, request: CameraRequest, dt:
     state.pose,
     target,
     state.velocity ?? AT_REST,
-    tracking ? TRACK_SMOOTH_SECONDS : MOVE_SMOOTH_SECONDS,
+    tracking ? TRACK_SMOOTH_SECONDS : (request.smoothSeconds ?? MOVE_SMOOTH_SECONDS),
     FOV_SMOOTH_SECONDS,
     step
   )

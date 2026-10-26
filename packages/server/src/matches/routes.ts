@@ -40,7 +40,7 @@ export async function registerMatchRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/api/matches/lobby', async (_request, reply) => {
     const open = await prisma.match.findMany({
-      where: { status: 'WAITING_FOR_PLAYER', matchType: 'ONE_V_ONE' },
+      where: { status: 'WAITING_FOR_PLAYER', matchType: { in: ['ONE_V_ONE', 'MASTER'] } },
       include: { players: { include: { user: { select: { id: true, username: true } } } } },
       orderBy: { createdAt: 'desc' },
       take: 100

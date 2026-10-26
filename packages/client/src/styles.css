@@ -3863,6 +3863,14 @@ button.mini {
   text-transform: uppercase;
 }
 
+.auth-offline {
+  margin: 12px 0 0;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--gold-light, #e8c872);
+}
+
 .auth-tabs {
   display: flex;
   gap: 4px;
@@ -6108,8 +6116,114 @@ html[data-quality='low'] *:not(.auth-card) {
 }
 
 html:not([data-quality='low']):not([data-quality='medium']) .hud-capsule.hud-glass {
-  backdrop-filter: blur(var(--blur-panel)) saturate(130%);
-  -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(130%);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: #070707;
+}
+
+/*
+ * The match bug: a black lower-third, white type, a yellow break box.
+ * It sits on the bottom edge so the cloth stays the picture.
+ */
+.hud-centre {
+  position: fixed;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+  top: auto;
+  transform: translateX(-50%);
+  z-index: 8;
+  width: max-content;
+  max-width: calc(100vw - 16px);
+}
+
+.hud-capsule.hud-glass {
+  background: #070707;
+  border: 1px solid rgba(232, 196, 92, 0.85);
+  border-radius: 2px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+  padding: 6px 12px;
+  gap: 12px;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.hud-capsule .hud-name {
+  color: #f5f5f5;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.hud-score .hud-points {
+  color: #ffffff;
+  text-shadow: none;
+}
+
+.hud-break {
+  min-width: 2.6ch;
+  padding: 3px 8px;
+  background: #f0c31a;
+  color: #16140c;
+  font-family: var(--font-score);
+  font-size: clamp(16px, 2.2vh, 20px);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-align: center;
+}
+
+.hud-sub .hud-frame-label,
+.hud-sub .hud-frames,
+.hud-sub .hud-prize {
+  color: #f3e2a4;
+}
+
+.hud-stat {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  padding: 6px 10px;
+  background: #070707;
+  color: #ffffff;
+  border-left: 3px solid #f0c31a;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.hud-stat.is-in {
+  animation: hud-stat-in 2.2s ease forwards;
+}
+
+@keyframes hud-stat-in {
+  0% {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  14% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  76% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-stat.is-in {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
 }
 
 /**

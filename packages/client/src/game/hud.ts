@@ -515,8 +515,14 @@ export function createHud(): Hud {
   const sep = el('div', 'hud-score-sep')
   sep.setAttribute('aria-hidden', 'true')
   sep.textContent = ':'
-  score.append(youNames.points, sep, oppNames.points)
+  const visit = el('div', 'hud-break')
+  visit.id = 'hud-break'
+  visit.textContent = '0'
+  score.append(youNames.points, visit, sep, oppNames.points)
   capsule.append(youSide, score, oppSide)
+  const stat = el('div', 'hud-stat')
+  stat.id = 'hud-stat'
+  stat.hidden = true
 
   /**
    * What the ball on is, and how many reds are left, are gone.
@@ -570,7 +576,7 @@ export function createHud(): Hud {
   eventLayer.id = 'event-banner-layer'
   toast.appendChild(eventLayer)
 
-  centre.append(capsule, sub, toast)
+  centre.append(capsule, sub, stat, toast)
 
   top.append(left, centre, right)
 
@@ -996,6 +1002,8 @@ export function createHud(): Hud {
   // number flicker. Owned by the rail rather than by update(), which is called on
   // state changes and would otherwise have to be called every frame to animate.
   let railShown = 0
+  let shownBreak: string | null = null
+  let statTimer = 0
 
   return {
     root,
@@ -1018,6 +1026,23 @@ export function createHud(): Hud {
       setText(frames, state.frames ?? '')
       setHidden(frames, state.frames === null)
       setText(frameLabel, state.frameLabel)
+      const breakText = state.breakLabel ? state.breakLabel.replace(/^Break\s+/, '') : '0'
+      setText(visit, breakText)
+      if (state.breakLabel && state.breakLabel !== shownBreak) {
+        shownBreak = state.breakLabel
+        stat.textContent = state.breakLabel
+        stat.hidden = false
+        stat.classList.remove('is-in')
+        void stat.offsetWidth
+        stat.classList.add('is-in')
+        window.clearTimeout(statTimer)
+        statTimer = window.setTimeout(() => {
+          stat.hidden = true
+        }, 2200)
+      } else if (!state.breakLabel) {
+        shownBreak = null
+        stat.hidden = true
+      }
       setHidden(inHand, !state.cueInHand)
       setText(inHand, state.cueInHandInD ? 'Ball in hand - place the cue in the D' : 'Ball in hand - place the cue anywhere on the table')
 

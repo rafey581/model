@@ -46,6 +46,8 @@ export interface DashboardUserActivity {
   newToday: number
   suspended: number
   banned: number
+  /** Guest sessions started today; optional for servers older than this app. */
+  guestsToday?: number
 }
 
 export interface PendingCountsPayload {

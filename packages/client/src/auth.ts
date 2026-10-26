@@ -1,5 +1,6 @@
 import { APP_TITLE } from '@snooker/shared'
 import { api, storeToken } from './game/network.js'
+import { armLocalGuestAutostart, clearLocalGuest, markLocalGuest } from './guest.js'
 
 /**
  * The public sign-in screen.
@@ -89,6 +90,7 @@ function linkButton(text: string, onClick: () => void): HTMLButtonElement {
 }
 
 function completeSignIn(token: string): void {
+  clearLocalGuest()
   storeToken(token)
   window.location.reload()
 }
@@ -377,11 +379,28 @@ function renderGuestMode(
   errs: ReturnType<typeof errorSlot>,
   onSwitchMode: (mode: AuthMode) => void
 ): void {
-  const note = el('div', 'auth-notice')
-  note.textContent = 'Guest feature has been removed.'
-  container.replaceChildren(note)
+  const note = el('p', 'auth-subtitle', 'Play a free frame against the robot. No account and no stake.')
+  const button = primaryButton('CONTINUE AS GUEST')
+  button.type = 'button'
+  button.addEventListener('click', () => {
+    errs.clear()
+    button.disabled = true
+    button.textContent = 'STARTING…'
+    // No /auth/guest call. On a phone the native HTTP stack ignores AbortSignal, so
+    // that POST never settles and this label stays up. Local practice needs nothing
+    // from the server.
+    markLocalGuest()
+    try {
+      localStorage.removeItem('token')
+      localStorage.removeItem('snooker_token')
+    } catch {
+      // Storage can be blocked. The in-memory flag still covers this page.
+    }
+    armLocalGuestAutostart()
+    window.location.reload()
+  })
   const switchToLogin = linkButton('Sign in or create an account', () => onSwitchMode('login'))
-  container.append(el('div', 'auth-footer', ''), switchToLogin)
+  container.replaceChildren(note, button, el('div', 'auth-footer'), switchToLogin)
 }
 
 function renderAuthTabs(
@@ -392,7 +411,8 @@ function renderAuthTabs(
   const tabs = el('div', 'auth-tabs')
   const modes: { key: AuthMode; label: string }[] = [
     { key: 'login', label: 'Login' },
-    { key: 'signup', label: 'Sign Up' }
+    { key: 'signup', label: 'Sign Up' },
+    { key: 'guest', label: 'Guest' }
   ]
   for (const { key, label } of modes) {
     const tab = document.createElement('button')
@@ -409,6 +429,7 @@ function renderAuthCard(root: HTMLElement, errs: ReturnType<typeof errorSlot>, i
   const screen = el('div', 'auth-screen')
   const card = el('div', 'auth-card')
   card.appendChild(brandCard())
+  if (showOfflineNotice) card.appendChild(el('p', 'auth-offline', SERVER_OFFLINE_NOTICE))
   card.appendChild(errs.node)
 
   const body = el('div')
@@ -438,6 +459,13 @@ function renderAuthCard(root: HTMLElement, errs: ReturnType<typeof errorSlot>, i
   root.appendChild(screen)
 
   switchMode(currentMode)
+}
+
+const SERVER_OFFLINE_NOTICE = 'Server offline – Guest practice available'
+let showOfflineNotice = false
+
+export function setAuthOfflineNotice(on: boolean): void {
+  showOfflineNotice = on
 }
 
 export function renderAuthScreen(

@@ -1,6 +1,6 @@
 {
   "appId": "com.snookerx.game",
-  "appName": "SnookerX",
+  "appName": "Snooker Stake",
   "webDir": "dist",
   "server": {
     "androidScheme": "http",

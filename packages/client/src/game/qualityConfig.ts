@@ -83,7 +83,7 @@ export const QUALITY_TIERS: Record<QualityTier, QualityTierConfig> = {
     renderScale: 1,
     antialias: true,
     shadowMapSize: 2048,
-    anisotropy: 8,
+    anisotropy: 16,
     clothNormal: true,
     crowd: 'full',
     fpsCap: 60,

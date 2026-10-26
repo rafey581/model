@@ -29,8 +29,8 @@ declare module 'fastify' {
   }
 }
 
-export function signToken(user: AuthUser): string {
-  return jwt.sign(user, config.JWT_SECRET, { expiresIn: '7d' })
+export function signToken(user: AuthUser, expiresInSeconds = 60 * 60 * 24 * 7): string {
+  return jwt.sign(user, config.JWT_SECRET, { expiresIn: expiresInSeconds })
 }
 
 export function verifyToken(token: string): AuthUser | null {

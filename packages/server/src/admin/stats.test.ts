@@ -104,6 +104,21 @@ describe('dashboard figures', () => {
     expect(after.pendingDeposits).toBeGreaterThanOrEqual(0)
   }, 30_000)
 
+  it('does not count a guest session as a player', async () => {
+    const before = await dashboardStats('UTC')
+    const guest = await prisma.user.create({
+      data: { email: `${TAG}-guest@guest.local`, username: `g${TAG}`, passwordHash: '!', role: 'PLAYER', authProvider: 'GUEST', status: 'ACTIVE' }
+    })
+    USERS.push(guest.id)
+    touchLastSeen({ id: guest.id, lastSeenAt: null })
+    await new Promise((r) => setTimeout(r, 150))
+    const after = await dashboardStats('UTC')
+    expect(after.userActivity.total).toBe(before.userActivity.total)
+    expect(after.userActivity.newToday).toBe(before.userActivity.newToday)
+    expect(after.userActivity.activeToday).toBe(before.userActivity.activeToday)
+    expect(after.userActivity.guestsToday - before.userActivity.guestsToday).toBe(1)
+  }, 30_000)
+
   it('counts a player active today once they are seen, and not before', async () => {
     const before = await dashboardStats('UTC')
     const id = await player()

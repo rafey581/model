@@ -13,4 +13,4 @@ pnpm-debug.log*
 
 # stray downloaded asset pack — 200MB of raw WAVs, not part of the app
 Pool_And_Billiards _SFX/
-clapping-best.mp4
+/clapping-best.mp4

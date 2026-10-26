@@ -1472,6 +1472,21 @@ body:has(.gl-root) {
   gap: calc(var(--u) * 8);
 }
 
+.gl-music-volume {
+  width: 100%;
+  accent-color: #c9a84c;
+}
+
+.gl-music-tracks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * 8);
+}
+
+.gl-music-tracks .gl-chip {
+  flex: 1 1 calc(var(--u) * 88);
+}
+
 .gl-settings-options .gl-chip {
   width: 100%;
   padding: 0 calc(var(--u) * 6);
