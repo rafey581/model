@@ -70,15 +70,16 @@ export function ballColor(id: number): string {
 /**
  * The table state after `step` strokes (0-based), plus the event-sequence window
  * that stroke covers. A frame boundary resets the table with the loser breaking,
- * matching how a real frame re-racks.
+ * matching how a real frame re-racks. `reds` is the rack the match was played with
+ * (Match.reds); matches from before that was recorded were all 15-red.
  */
-export function frameAt(events: ReplayEvent[], step: number): FrameSnapshot | null {
+export function frameAt(events: ReplayEvent[], step: number, reds = 15): FrameSnapshot | null {
   const shots = collectShots(events)
   if (shots.length === 0) return null
   const frames: FrameState[] = []
   const seqBounds: Array<{ start: number; end: number }> = []
   let breakIndex = 0
-  let frame = createFrame(breakIndex)
+  let frame = createFrame(breakIndex, reds)
   for (const shot of shots) {
     const before = shot.seq
     applyStroke(frame, frame.turnIndex, shot.shot)
@@ -88,7 +89,7 @@ export function frameAt(events: ReplayEvent[], step: number): FrameSnapshot | nu
       const frameEndData = nextEvent.data as { winnerIndex?: number; winnerSeat?: number }
       const winnerIndex = frameEndData.winnerIndex ?? frameEndData.winnerSeat
       breakIndex = winnerIndex === 0 || winnerIndex === 1 ? 1 - winnerIndex : breakIndex
-      frame = createFrame(breakIndex)
+      frame = createFrame(breakIndex, reds)
     }
     seqBounds.push({ start: before, end: nextEvent ? nextEvent.seq : Number.MAX_SAFE_INTEGER })
   }

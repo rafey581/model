@@ -27,6 +27,15 @@ packages/
 ## Stakes
 
 Open tables: **1, 5, 10, 20, 50, 100 USDT**. Master Match: **500, 1000, 2000, 3000, 5000 USDT**.
+
+Reds follow the stake: below **100 USDT** (and practice) a frame is racked with **6 reds**,
+from **100 USDT** up (the 100 table and every Master Match) with **10 reds**. The count is
+fixed on the match when its game starts (`Match.reds`), so every frame and the admin
+replay use the same rack. Matches from before this were 15-red.
+
+The stake ceiling is an admin setting (`maxStake`, default 5000). A database set up with
+the old default of 10 refuses every table above 10 USDT until it is raised in the admin
+app (More → Settings).
 Both use the same virtual ledger freeze and settlement. `REAL_MONEY_ENABLED` stays
 `false`, so crypto deposits and withdrawals stay gated off. A new account still
 starts with 1 USDT; a Master Match needs a balance that covers the stake.

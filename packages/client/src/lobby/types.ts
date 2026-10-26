@@ -64,8 +64,6 @@ export interface LobbyBridge {
   appTitle: string
   username: string
   userId: string
-  /** A guest can practice, and is stopped from stakes, cash, and friends. */
-  guest?: boolean
   walletBalance: number
   logoSvg: string
   formatCash: (amount: number) => string

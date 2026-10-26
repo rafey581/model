@@ -1,4 +1,4 @@
-import { BALL_IDS, TOTAL_REDS, BAULK_LINE_X, D_RADIUS, TABLE_LENGTH, TABLE_WIDTH, BALL_DIAMETER, POCKET_RADIUS_CORNER, POCKET_RADIUS_MIDDLE } from '../constants.js'
+import { BALL_IDS, TOTAL_REDS, normalizeRedCount, BAULK_LINE_X, D_RADIUS, TABLE_LENGTH, TABLE_WIDTH, BALL_DIAMETER, POCKET_RADIUS_CORNER, POCKET_RADIUS_MIDDLE } from '../constants.js'
 import { buildInitialBalls } from '../state.js'
 import type { BallState } from '../state.js'
 import type { Vec2 } from '../vec.js'
@@ -50,8 +50,10 @@ export function ballSpotPosition(id: number): Vec2 {
   return colourSpotPosition(id)
 }
 
-export function layoutTableBalls(): BallState[] {
-  const balls = buildInitialBalls()
+/** The break-off position for a frame of `reds` reds: the triangle fills row by row from its apex. */
+export function layoutTableBalls(reds: number = TOTAL_REDS): BallState[] {
+  const count = normalizeRedCount(reds)
+  const balls = buildInitialBalls(count)
   placeBall(balls, BALL_IDS.CUE, cueStartPosition().x, cueStartPosition().y)
   for (const colorId of [BALL_IDS.YELLOW, BALL_IDS.GREEN, BALL_IDS.BROWN, BALL_IDS.BLUE, BALL_IDS.PINK, BALL_IDS.BLACK]) {
     const spot = colourSpotPosition(colorId)
@@ -59,7 +61,7 @@ export function layoutTableBalls(): BallState[] {
   }
 
   let redIndex = BALL_IDS.RED_MIN
-  for (let i = 0; i < TOTAL_REDS; i++) {
+  for (let i = 0; i < count; i++) {
     const spot = redSpotPosition(i)
     placeBall(balls, redIndex, spot.x, spot.y)
     redIndex++

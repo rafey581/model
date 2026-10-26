@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../db/index.js'
-import { GUEST_STAKE_PROMPT } from '@snooker/shared'
 import { requireAdminSession } from '../admin/auth.js'
 import {
   withdrawInfo,
@@ -49,11 +48,6 @@ export async function registerWithdrawalRoutes(app: FastifyInstance): Promise<vo
     const info = withdrawInfo()
 
     if (!info.enabled) return reply.code(403).send({ ok: false, error: 'withdrawals are currently disabled' })
-    // Temporary guest accounts (POST /api/auth/guest) play but never cash out.
-    const owner = await prisma.user.findUnique({ where: { id: request.authUser!.id }, select: { authProvider: true } })
-    if (owner?.authProvider === 'GUEST') {
-      return reply.code(403).send({ ok: false, error: GUEST_STAKE_PROMPT })
-    }
     if (amountUsdt < info.minUsdt || amountUsdt > info.maxUsdt) {
       return reply.code(400).send({
         ok: false,

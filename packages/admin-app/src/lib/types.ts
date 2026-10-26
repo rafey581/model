@@ -46,8 +46,6 @@ export interface DashboardUserActivity {
   newToday: number
   suspended: number
   banned: number
-  /** Guest sessions started today; optional for servers older than this app. */
-  guestsToday?: number
 }
 
 export interface PendingCountsPayload {
@@ -100,6 +98,8 @@ export interface AdminMatch {
   matchType: string
   stakePerPlayer: string | number
   format: string
+  /** Reds the match was racked with; null on matches from before this was recorded (15). */
+  reds?: number | null
   status: string
   winnerId: string | null
   createdAt: string

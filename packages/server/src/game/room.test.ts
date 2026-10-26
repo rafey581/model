@@ -1131,3 +1131,21 @@ describe('the choice after a foul', () => {
     void cbs
   })
 })
+
+describe('red count', () => {
+  it('serves the table racked with the red count the stake chose, frame after frame', () => {
+    for (const reds of [6, 10]) {
+      const room = new GameRoom(`${MATCH_ID}-${reds}`, 'ONE_V_ONE', 'BO3', 0, undefined, callbacks(), 30, reds)
+      const snap = room.snapshot()!
+      expect(snap.totalReds).toBe(reds)
+      expect(snap.remainingReds).toBe(reds)
+      expect(snap.balls.filter((b) => b.id >= 1 && b.id <= 15)).toHaveLength(reds)
+      expect(room.match.reds).toBe(reds)
+    }
+  })
+
+  it('keeps the full 15 reds when no count is given', () => {
+    const room = new GameRoom(`${MATCH_ID}-15`, 'RANKED', 'BO1', 0, undefined, callbacks(), 30)
+    expect(room.snapshot()!.totalReds).toBe(15)
+  })
+})

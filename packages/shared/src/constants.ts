@@ -179,15 +179,33 @@ export const COLOR_NAMES: Record<number, string> = {
 export const TOTAL_REDS = 15
 
 /**
+ * How many reds a frame is racked with, by the stake on the table: a shorter
+ * 6-red frame below 100 USDT a player, a 10-red frame from 100 USDT up (the 100
+ * table and every Master Match). Practice has no stake, so it plays 6 reds.
+ * TOTAL_REDS stays the full set of red ids (1..15) the engine knows about.
+ */
+export const RED_COUNT_STAKE_THRESHOLD_USDT = 100
+export const REDS_BELOW_THRESHOLD = 6
+export const REDS_AT_OR_ABOVE_THRESHOLD = 10
+
+export function redsForStake(stakeUsdt: number | null | undefined): number {
+  const stake = Number(stakeUsdt ?? 0)
+  return Number.isFinite(stake) && stake >= RED_COUNT_STAKE_THRESHOLD_USDT ? REDS_AT_OR_ABOVE_THRESHOLD : REDS_BELOW_THRESHOLD
+}
+
+/** A red count the engine can rack: 1..TOTAL_REDS, anything else falls back to the full set. */
+export function normalizeRedCount(reds: number | null | undefined): number {
+  const n = Math.floor(Number(reds))
+  return Number.isFinite(n) && n >= 1 && n <= TOTAL_REDS ? n : TOTAL_REDS
+}
+
+/**
  * The product's name, in one place.
  *
  * `index.html` cannot import it, so its `<title>` is typed again there. Everything the
  * app renders — sign-in, the hall, the loading line — reads this constant.
  */
 export const APP_TITLE = 'Snooker Stake'
-
-/** Shown when a guest tries to stake, deposit, withdraw, or use friends. */
-export const GUEST_STAKE_PROMPT = 'Sign up to play for stakes'
 
 export const PRACTICE_AI_LEVELS = ['EASY', 'MEDIUM', 'HARD'] as const
 export type PracticeAiLevel = (typeof PRACTICE_AI_LEVELS)[number]

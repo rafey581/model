@@ -168,6 +168,10 @@ model Match {
   round          Int?
   aiLevel        String?
   stakeTier      String?
+  // Reds each frame is racked with, fixed when the match's game first starts (6 below
+  // 100 USDT a player, 10 from 100 up). Null on matches played before this existed:
+  // those were all 15-red, and replays read null that way.
+  reds           Int?
   status         String       @default("CREATED")
   stakePerPlayer Decimal      @default(0)
   currency       String       @default("USDT")

@@ -1,4 +1,4 @@
-import { MATCH_FORMATS, PRACTICE_AI_LEVELS } from '@snooker/shared'
+import { MATCH_FORMATS, PRACTICE_AI_LEVELS, redsForStake } from '@snooker/shared'
 import type { MatchFormat, PracticeAiLevel } from '@snooker/shared'
 import { DIFFICULTIES } from '../lobbyModel.js'
 import { SETUP_COPY } from './content.js'
@@ -160,8 +160,11 @@ export function renderSetup(
     }
   }
 
+  // The rack follows the stake: practice and tables under 100 USDT play 6 reds,
+  // 100 USDT and up (every Master Match) play 10.
+  const stakeUsdt = state.mode === 'online' ? (bridge.getStakeTiers().find((t) => t.id === state.stakeTierId)?.usdt ?? 0) : 0
   const facts = el('div', 'gl-facts')
-  for (const fact of SETUP_COPY.facts) facts.appendChild(el('span', 'gl-fact', fact))
+  for (const fact of [`${redsForStake(stakeUsdt)} reds`, ...SETUP_COPY.facts]) facts.appendChild(el('span', 'gl-fact', fact))
   left.appendChild(facts)
 
   const right = el('div', 'gl-panel gl-setup__right')
@@ -234,13 +237,14 @@ export function tiersForTable(tiers: LobbyStakeTier[], table: StakeTableChoice):
 function buildSummary(state: SetupState, bridge: LobbyBridge): string {
   if (!state.mode) return 'SELECT A MODE TO BEGIN'
   if (state.mode === 'ai') {
-    return `VS AI / ${state.difficulty} / ${SETUP_COPY.formats.BO1.label}`
+    return `VS AI / ${state.difficulty} / ${SETUP_COPY.formats.BO1.label} / ${redsForStake(0)} REDS`
   }
   const fmt = SETUP_COPY.formats[state.format]
   const vs = state.opponent === 'friend' ? (state.friendUsername ?? 'A FRIEND') : 'ANYONE'
   const table = state.table === 'master' ? 'MASTER' : 'OPEN'
   const tier = bridge.getStakeTiers().find((item) => item.id === state.stakeTierId)
-  return `ONLINE / ${fmt.label} / ${vs} / ${table}${tier ? ` / ${tier.label}` : ''}`
+  const reds = `${redsForStake(tier?.usdt ?? 0)} REDS`
+  return `ONLINE / ${fmt.label} / ${vs} / ${table}${tier ? ` / ${tier.label}` : ''} / ${reds}`
 }
 
 export function defaultSetupState(

@@ -4,7 +4,6 @@ import { getSettings } from '../settings/index.js'
 import { assertNotBot, assertViableFormat, resolveStakeTier, MatchError } from '../matches/service.js'
 import { COMPLETED_STATUSES } from '../users/stats.js'
 import { STAKE_TIERS, matchTypeForStake, stakeTierById } from '@snooker/shared'
-import { guestStakeMessage } from '../auth/guestGate.js'
 import type { StakeTierId } from '@snooker/shared'
 
 /**
@@ -142,8 +141,6 @@ export async function createChallenge(opts: {
   rematch?: boolean
 }): Promise<ChallengeView> {
   const { challengerId } = opts
-  const blocked = await guestStakeMessage(challengerId)
-  if (blocked) throw new ChallengeError(blocked)
   const tier = await validateForChallenge(challengerId, opts.stakeTier, opts.format)
 
   // Soft check only: the hard freeze happens at accept. Refusing here keeps a
@@ -254,8 +251,6 @@ export interface AcceptedChallenge {
  */
 export async function acceptChallenge(opts: { challengeId: string; userId: string }): Promise<AcceptedChallenge> {
   const { challengeId, userId } = opts
-  const blocked = await guestStakeMessage(userId)
-  if (blocked) throw new ChallengeError(blocked)
   const now = new Date()
   const settings = await getSettings()
 

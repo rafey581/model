@@ -21,6 +21,8 @@ export interface FrameSnapshotData {
   scores: { player0: number; player1: number }
   breakScore: number
   remainingReds: number
+  /** Reds the frame was racked with (6 or 10 by stake). */
+  totalReds?: number
   balls: DrawableBall[]
   phase?: string
   cueInHand?: boolean

@@ -51,6 +51,7 @@ export default function MatchDetailScreen() {
           <Pill label={humanize(match.status)} tone={match.status} />
           <Row label="Mode" value={`${humanize(match.matchType)} - ${match.format}`} />
           <Row label="Stake per player" value={`${formatAmount(match.stakePerPlayer)} USDT`} />
+          <Row label="Reds" value={String(match.reds ?? 15)} />
           <Row
             label="Winner"
             value={match.players.find((player) => player.userId === match.winnerId)?.user.username ?? 'undecided'}
@@ -70,7 +71,7 @@ export default function MatchDetailScreen() {
       {!eventsState.loading && !eventsState.error && events.length === 0 ? (
         <Empty label="No events recorded for this match." />
       ) : null}
-      {events.length > 0 ? <ReplayPanel events={events} /> : null}
+      {events.length > 0 ? <ReplayPanel events={events} reds={match?.reds ?? 15} /> : null}
 
       <Text style={styles.footnote}>
         Replays are reconstructed with the same engine that ran the match, from the recorded events only.

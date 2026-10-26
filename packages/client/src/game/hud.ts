@@ -75,6 +75,8 @@ export interface HudSnapshot {
   scores: { player0: number; player1: number }
   breakScore: number
   remainingReds: number
+  /** Reds the frame was racked with: 6 or 10 by stake (absent on older servers: 15). */
+  totalReds?: number
   balls: Array<{ id: number; potted: boolean }>
   cueInHand?: boolean
   /**
@@ -235,9 +237,14 @@ export function deriveHudState(input: HudInput): HudState {
     seat === undefined ? input.framesWon : seat === 0 ? input.framesWon : [input.framesWon[1], input.framesWon[0]]
 
   const pottedRed = new Set<number>()
+  let redsInSnapshot = 0
   for (const ball of snapshot?.balls ?? []) {
-    if (ball.potted && ball.id >= BALL_IDS.RED_MIN && ball.id <= BALL_IDS.RED_MAX) pottedRed.add(ball.id)
+    if (ball.id < BALL_IDS.RED_MIN || ball.id > BALL_IDS.RED_MAX) continue
+    redsInSnapshot += 1
+    if (ball.potted) pottedRed.add(ball.id)
   }
+  // The rack the frame was dealt: the server says, otherwise count the reds it sent.
+  const totalReds = snapshot?.totalReds ?? (redsInSnapshot > 0 ? redsInSnapshot : TOTAL_REDS)
 
   const anyColour = snapshot?.ballOn === 'ANY_COLOUR'
   const onColour = colourOn(snapshot?.ballOn)
@@ -289,9 +296,9 @@ export function deriveHudState(input: HudInput): HudState {
     cueInHandInD: Boolean(snapshot?.cueInHandInD),
     redsOn: (snapshot?.ballOn ?? 'RED') === 'RED',
     reds: {
-      total: TOTAL_REDS,
-      remaining: snapshot?.remainingReds ?? TOTAL_REDS,
-      onTable: Array.from({ length: TOTAL_REDS }, (_, i) => !pottedRed.has(BALL_IDS.RED_MIN + i))
+      total: totalReds,
+      remaining: snapshot?.remainingReds ?? totalReds,
+      onTable: Array.from({ length: totalReds }, (_, i) => !pottedRed.has(BALL_IDS.RED_MIN + i))
     },
     colours
   }

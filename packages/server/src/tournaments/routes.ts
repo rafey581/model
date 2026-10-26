@@ -2,7 +2,6 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../db/index.js'
 import { createTournament, joinTournament } from './service.js'
-import { guestStakeMessage } from '../auth/guestGate.js'
 import { MatchError } from '../matches/service.js'
 
 const createSchema = z.object({
@@ -17,8 +16,6 @@ export async function registerTournamentRoutes(app: FastifyInstance): Promise<vo
   app.post('/api/tournaments', async (request, reply) => {
     const parsed = createSchema.safeParse(request.body ?? { name: '8-Player Cup' })
     if (!parsed.success) return reply.code(400).send({ ok: false, error: 'invalid input' })
-    const blocked = await guestStakeMessage(request.authUser!.id)
-    if (blocked) return reply.code(403).send({ ok: false, error: blocked })
     const tournament = await createTournament(parsed.data.name)
     return reply.send({ ok: true, data: tournament })
   })

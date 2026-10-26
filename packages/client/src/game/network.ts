@@ -111,7 +111,7 @@ export function clearStoredToken(): void {
 /**
  * How long a request may take before it counts as unreachable. A dead host must not
  * hold the first paint (10.0.2.2, the emulator's address, never answers on a real
- * phone), so start-up and guest calls pass FAST_TIMEOUT_MS; everything else gets
+ * phone), so start-up calls pass FAST_TIMEOUT_MS; everything else gets
  * longer, and a request with a body (a deposit carries a screenshot) longer still,
  * so a slow mobile connection is not mistaken for a dead server.
  */

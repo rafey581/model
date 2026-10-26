@@ -15,14 +15,14 @@ const MAX_WINDOW_EVENTS = 12
  * native dependency. Step and play controls cover the job, and the event list
  * shows only the window the current stroke covers rather than thousands of rows.
  */
-export function ReplayPanel({ events }: { events: ReplayEvent[] }): ReactNode {
+export function ReplayPanel({ events, reds = 15 }: { events: ReplayEvent[]; reds?: number }): ReactNode {
   const shots = useMemo(() => collectShots(events), [events])
   const [step, setStep] = useState(0)
   const [playing, setPlaying] = useState(false)
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const total = Math.max(shots.length, 1)
-  const snapshot = useMemo(() => frameAt(events, step), [events, step])
+  const snapshot = useMemo(() => frameAt(events, step, reds), [events, step, reds])
 
   useEffect(() => {
     if (!playing) return

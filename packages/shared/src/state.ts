@@ -1,4 +1,4 @@
-import { BALL_IDS, COLOR_ORDER, COLOR_VALUES, TOTAL_REDS } from './constants.js'
+import { BALL_IDS, COLOR_ORDER, COLOR_VALUES, TOTAL_REDS, normalizeRedCount } from './constants.js'
 import { vec } from './vec.js'
 import type { Vec2 } from './vec.js'
 
@@ -18,10 +18,12 @@ export interface BallState {
   colorName?: string
 }
 
-export function buildInitialBalls(): BallState[] {
+/** Every ball of a frame racked with `reds` reds (ids 1..reds); the colours are always all six. */
+export function buildInitialBalls(reds: number = TOTAL_REDS): BallState[] {
   const balls: BallState[] = []
   balls.push(makeBall(BALL_IDS.CUE, 0, true, false, false))
-  for (let i = BALL_IDS.RED_MIN; i <= BALL_IDS.RED_MAX; i++) {
+  const lastRed = BALL_IDS.RED_MIN + normalizeRedCount(reds) - 1
+  for (let i = BALL_IDS.RED_MIN; i <= lastRed; i++) {
     balls.push(makeBall(i, 1, false, true, false))
   }
   for (const colorId of COLOR_ORDER) {
@@ -91,6 +93,8 @@ export interface FrameState {
   breakScore: number
   pottedOrder: number[]
   remainingReds: number
+  /** Reds the frame was racked with (6, 10 or the full 15). */
+  totalReds: number
   colorsRemaining: Set<number>
   cueInHand: boolean
   /**
@@ -122,6 +126,8 @@ export interface MatchState {
   matchId: string
   matchType: string
   format: string
+  /** Reds every frame of this match is racked with (see redsForStake). */
+  reds: number
   frameIndex: number
   framesWon: [number, number]
   currentFrame?: FrameState

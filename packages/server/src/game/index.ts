@@ -14,7 +14,7 @@ import { setChallengeSenders, expireStaleChallenges } from '../challenges/servic
 import { isMaintenance, getSettings } from '../settings/index.js'
 import { PRACTICE_DAILY_FREE_LIMIT } from '@snooker/shared'
 import type { PracticeAiLevel } from '@snooker/shared'
-import { isMatchChatPhrase, MATCH_CHAT_COOLDOWN_MS } from '@snooker/shared'
+import { isMatchChatPhrase, MATCH_CHAT_COOLDOWN_MS, redsForStake } from '@snooker/shared'
 import type { Prisma } from '@prisma/client'
 import { touchLastSeen } from '../users/activity.js'
 
@@ -285,7 +285,14 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
           let aiLevel: PracticeAiLevel | undefined
           if (match.aiLevel) aiLevel = match.aiLevel as PracticeAiLevel
           const settings = await getSettings()
-          room = new GameRoom(matchId, match.matchType, match.format, 0, aiLevel, callbacks, settings.turnTimeoutSec)
+          // Six reds below 100 USDT a player, ten from 100 up; practice has no stake.
+          // Fixed on the match the first time its game starts, so a room rebuilt later
+          // (and the admin replay) racks exactly what was played.
+          const reds = match.reds ?? redsForStake(Number(match.stakePerPlayer))
+          if (match.reds === null) {
+            await prisma.match.update({ where: { id: matchId }, data: { reds } }).catch(() => undefined)
+          }
+          room = new GameRoom(matchId, match.matchType, match.format, 0, aiLevel, callbacks, settings.turnTimeoutSec, reds)
           rooms.set(matchId, room)
         }
         room.registerSocket(userId, entry.seat, socket.id)

@@ -202,15 +202,17 @@ export class GameRoom {
     breakFirst = 0,
     aiLevel?: PracticeAiLevel,
     callbacks?: RoomCallbacks,
-    turnTimeoutSec?: number
+    turnTimeoutSec?: number,
+    /** Reds each frame is racked with (redsForStake); the engine's full 15 when omitted. */
+    reds?: number
   ) {
     this.matchId = matchId
     this.matchType = matchType
     this.aiLevel = aiLevel
     this.callbacks = callbacks ?? defaultCallbacks()
     this.turnTimeoutSec = turnTimeoutSec ?? config.MATCH_TURN_TIMEOUT_SEC
-    this.match = createMatch(matchId, matchType, format)
-    this.match.currentFrame = createFrame(breakFirst)
+    this.match = createMatch(matchId, matchType, format, reds)
+    this.match.currentFrame = createFrame(breakFirst, this.match.reds)
   }
 
   registerSocket(userId: string, seat: number, socketId: string): void {

@@ -7,7 +7,6 @@ import type { StakeTierId } from '@snooker/shared'
 import { notify } from '../notifications/service.js'
 import { config } from '../config.js'
 import { rewardReferralForFirstMatch } from '../referrals/service.js'
-import { guestStakeMessage } from '../auth/guestGate.js'
 import type { ReferralReward } from '../referrals/service.js'
 import { applyMatchProgress, notifyProgress } from '../progress/service.js'
 import type { ProgressOutcome } from '../progress/service.js'
@@ -74,8 +73,6 @@ async function ensureInternalUser(email: string, username: string, role: string)
 }
 
 export async function createOneVsOneMatch(ownerId: string, stakeTier: StakeTierId, format: string): Promise<{ id: string; status: string }> {
-  const blocked = await guestStakeMessage(ownerId)
-  if (blocked) throw new MatchError(blocked)
   await assertNotBot(ownerId)
   await assertViableFormat(format)
   const tier = await resolveStakeTier(stakeTier)
@@ -104,8 +101,6 @@ export async function createOneVsOneMatch(ownerId: string, stakeTier: StakeTierI
 }
 
 export async function joinOneVsOneMatch(matchId: string, playerId: string): Promise<{ id: string; status: string }> {
-  const blocked = await guestStakeMessage(playerId)
-  if (blocked) throw new MatchError(blocked)
   await assertNotBot(playerId)
   const { id, status, ownerId } = await runInTransaction(
     async (tx): Promise<{ id: string; status: string; ownerId: string | undefined }> => {

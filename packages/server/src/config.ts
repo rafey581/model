@@ -129,11 +129,6 @@ const envSchema = z.object({
   // an account directly with no OTP step.
   AUTH_ALLOW_DIRECT_REGISTER: boolFlag(true),
 
-  // Temporary guest play while the game is being built: one tap makes a throwaway
-  // account with no email, phone, password or code, and signs it in. Guests can play
-  // but never withdraw. Switch it off with AUTH_ALLOW_GUEST=false, or remove it, once
-  // the OTP signup is live on the phone.
-  AUTH_ALLOW_GUEST: boolFlag(true),
 
   // --- OTP (email verification) --------------------------------------------
   // A one-time code proves the player owns the email address they signed up with.

@@ -9,7 +9,7 @@ export const BG_IMAGE = '/lobby-pic-blurred.jpg'
 export const HOME_COPY = {
   eyebrow: 'table ready',
   headline: 'PICK YOUR MATCH',
-  heroTag: '3D SNOOKER / 15 REDS',
+  heroTag: '3D SNOOKER / 6 & 10 REDS',
   heroTitle: 'PLAY SNOOKER',
   heroSubtitle: 'Aim, power, and spin on a full 3D table.',
   heroCta: 'choose your opponent',
@@ -42,7 +42,8 @@ export const SETUP_COPY = {
   opponentFriendHint: 'invite one friend',
   friendPickLabel: 'WHICH FRIEND',
   friendEmpty: 'no friends yet — add one from the FRIENDS screen first',
-  facts: ['15 reds', '6 colours', '1 white cue ball'] as const,
+  // The red count leads the list and is filled in from the chosen stake (setup.ts).
+  facts: ['6 colours', '1 white cue ball'] as const,
   panelBrand: 'SNOOKER STAKE',
   panelBadge: 'LIVE TABLE',
   panelTitle: 'Ready when you are',

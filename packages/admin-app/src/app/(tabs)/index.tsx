@@ -132,9 +132,8 @@ export default function DashboardScreen() {
           </>
         ) : null}
       </View>
-      {people && (people.suspended > 0 || people.banned > 0 || (people.guestsToday ?? 0) > 0) ? (
+      {people && (people.suspended > 0 || people.banned > 0) ? (
         <Card>
-          {(people.guestsToday ?? 0) > 0 ? <Row label="Guest sessions today (not counted above)" value={String(people.guestsToday)} /> : null}
           {people.suspended > 0 ? <Row label="Suspended" value={String(people.suspended)} /> : null}
           {people.banned > 0 ? <Row label="Banned" value={String(people.banned)} /> : null}
         </Card>

@@ -1,4 +1,4 @@
-import { BALL_DIAMETER, BALL_IDS, BALL_RADIUS, BAULK_LINE_X, COLOR_ORDER, COLOR_VALUES, D_RADIUS, TABLE_LENGTH, TABLE_WIDTH, TOTAL_REDS } from '../constants.js'
+import { BALL_DIAMETER, BALL_IDS, BALL_RADIUS, BAULK_LINE_X, COLOR_ORDER, COLOR_VALUES, D_RADIUS, TABLE_LENGTH, TABLE_WIDTH, TOTAL_REDS, normalizeRedCount } from '../constants.js'
 import { layoutTableBalls, pocketPositions } from '../physics/layout.js'
 import { simulateStroke } from '../physics/world.js'
 import type { SimOptions } from '../physics/world.js'
@@ -8,17 +8,19 @@ import { vec, type Vec2 } from '../vec.js'
 import { applyResolution, resolveStroke, respotBall, lowestRemainingColour, isColourId, isRedId } from './snooker.js'
 import type { StrokeResolution } from './snooker.js'
 
-export function createFrame(breakIndex = 0): FrameState {
+export function createFrame(breakIndex = 0, reds: number = TOTAL_REDS): FrameState {
   const colorsRemaining = new Set<number>(COLOR_ORDER)
+  const totalReds = normalizeRedCount(reds)
   return {
-    balls: layoutTableBalls(),
+    balls: layoutTableBalls(totalReds),
     turnIndex: breakIndex,
     ballOn: 'RED',
     phase: 'PLAYING',
     scores: { player0: 0, player1: 0 },
     breakScore: 0,
     pottedOrder: [],
-    remainingReds: TOTAL_REDS,
+    remainingReds: totalReds,
+    totalReds,
     colorsRemaining,
     cueInHand: true,
     cueInHandInD: true
@@ -346,20 +348,22 @@ export function framesToWin(format: string): number {
   }
 }
 
-export function createMatch(matchId: string, matchType: string, format: string): MatchState {
+export function createMatch(matchId: string, matchType: string, format: string, reds: number = TOTAL_REDS): MatchState {
+  const count = normalizeRedCount(reds)
   return {
     matchId,
     matchType,
     format,
+    reds: count,
     frameIndex: 0,
     framesWon: [0, 0],
-    currentFrame: createFrame(0)
+    currentFrame: createFrame(0, count)
   }
 }
 
 export function newFrameForMatch(match: MatchState, breakIndex: number): FrameState {
   match.frameIndex += 1
-  match.currentFrame = createFrame(breakIndex)
+  match.currentFrame = createFrame(breakIndex, match.reds)
   return match.currentFrame
 }
 
@@ -395,6 +399,8 @@ export interface FrameSnapshot {
   scores: { player0: number; player1: number }
   breakScore: number
   remainingReds: number
+  /** Reds the frame was racked with. Optional: older snapshots meant the full 15. */
+  totalReds?: number
   balls: BallSnapshot[]
   phase: FrameState['phase']
   pottedOrder: number[]
@@ -419,6 +425,7 @@ export function frameSnapshot(frame: FrameState): FrameSnapshot {
     scores: { ...frame.scores },
     breakScore: frame.breakScore,
     remainingReds: frame.remainingReds,
+    totalReds: frame.totalReds,
     balls: frame.balls.map((b) => ({ id: b.id, x: b.pos.x, y: b.pos.y, potted: b.potted })),
     phase: frame.phase,
     pottedOrder: [...frame.pottedOrder],
@@ -453,6 +460,7 @@ export function frameFromSnapshot(snapshot: FrameSnapshot): FrameState {
     breakScore: snapshot.breakScore,
     pottedOrder: [...snapshot.pottedOrder],
     remainingReds: snapshot.remainingReds,
+    totalReds: snapshot.totalReds ?? snapshot.balls.filter((b) => isRedId(b.id)).length,
     colorsRemaining: new Set(snapshot.colorsRemaining),
     cueInHand: snapshot.cueInHand,
     cueInHandInD: snapshot.cueInHandInD ?? false,

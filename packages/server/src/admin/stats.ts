@@ -44,8 +44,6 @@ export interface DashboardUsers {
   newToday: number
   suspended: number
   banned: number
-  /** Temporary guest sessions started today (not counted as players above). */
-  guestsToday: number
 }
 
 const BONUS_TYPES = ['START_BALANCE', 'REFERRAL_BONUS']
@@ -147,17 +145,16 @@ export async function dashboardStats(tzInput?: string | null, now: Date = new Da
   const netProfit = combine(commission, (c, k) => c - bonuses[k] - adjustments[k])
   const netFlow = combine(deposits, (d, k) => d - withdrawals[k])
 
-  // Real accounts only: a guest session is a throwaway account that would otherwise
-  // inflate every player figure. Guests are counted on their own.
+  // Real accounts only: guest play has been removed, but a database that ran it may
+  // still hold throwaway guest accounts, which must not count as players.
   const players = { role: 'PLAYER', authProvider: { not: 'GUEST' } }
-  const [total, activeWeek, activeToday, newToday, suspended, banned, guestsToday] = await Promise.all([
+  const [total, activeWeek, activeToday, newToday, suspended, banned] = await Promise.all([
     prisma.user.count({ where: players }),
     prisma.user.count({ where: { ...players, lastSeenAt: { gte: starts.week } } }),
     prisma.user.count({ where: { ...players, lastSeenAt: { gte: starts.today } } }),
     prisma.user.count({ where: { ...players, createdAt: { gte: starts.today } } }),
     prisma.user.count({ where: { ...players, status: 'SUSPENDED' } }),
-    prisma.user.count({ where: { ...players, status: 'BANNED' } }),
-    prisma.user.count({ where: { role: 'PLAYER', authProvider: 'GUEST', createdAt: { gte: starts.today } } })
+    prisma.user.count({ where: { ...players, status: 'BANNED' } })
   ])
 
   const [activeMatches, completedMatches, pendingDeposits, pendingWithdrawals, supportAwaiting] = await Promise.all([
@@ -178,7 +175,7 @@ export async function dashboardStats(tzInput?: string | null, now: Date = new Da
     netFlow,
     playerBalances: round2(num(balances._sum.available) + num(balances._sum.locked))
   }
-  const users: DashboardUsers = { total, activeWeek, activeToday, newToday, suspended, banned, guestsToday }
+  const users: DashboardUsers = { total, activeWeek, activeToday, newToday, suspended, banned }
 
   return {
     timeZone: tz,
