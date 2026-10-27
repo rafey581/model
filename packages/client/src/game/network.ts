@@ -5,7 +5,7 @@ import type { Socket } from 'socket.io-client'
  * Where the game server is. Empty on the website, which is served from the same origin as
  * the server (or proxied to it), so `/api` and the socket's `/` are relative. The Android
  * app (Capacitor) is a page on its own `http://localhost`, so its build sets
- * `VITE_API_ORIGIN` to the server's address, e.g. `http://13.204.251.122:4000`.
+ * `VITE_API_ORIGIN` to the server's address, e.g. `http://54.252.128.235:4000`.
  */
 const API_ORIGIN = ((import.meta.env.VITE_API_ORIGIN as string | undefined) ?? '').replace(/\/+$/, '')
 

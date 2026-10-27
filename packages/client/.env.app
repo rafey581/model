@@ -1,4 +1,3 @@
-# Android emulator reaches the host machine at 10.0.2.2.
-# A phone on the same Wi-Fi needs this host's LAN address instead, then a rebuild:
-#   VITE_API_ORIGIN=http://192.168.1.20:4000 pnpm --filter @snooker/client build:app
-VITE_API_ORIGIN=http://10.0.2.2:4000
+# The server the Android app talks to (the EC2 Elastic IP). Change it and rebuild if the
+# server moves. For the Android emulator against a local server use http://10.0.2.2:4000.
+VITE_API_ORIGIN=http://54.252.128.235:4000

@@ -6,7 +6,7 @@
   "build": {
     "base": {
       "env": {
-        "EXPO_PUBLIC_API_URL": "http://13.204.251.122:4000/api"
+        "EXPO_PUBLIC_API_URL": "http://54.252.128.235:4000/api"
       }
     },
     "preview": {

@@ -27,7 +27,7 @@ Everything points at one address. Pick it before building anything:
   Elastic IP and put nginx + Let's Encrypt in front (part 1.8). Apps then use
   `https://api.yourdomain.com`.
 
-Below, `<SERVER>` means whichever you chose, e.g. `http://13.204.251.122:4000`.
+Below, `<SERVER>` means whichever you chose, e.g. `http://54.252.128.235:4000`.
 
 ---
 
@@ -155,12 +155,12 @@ Built on your own computer.
 - `git clone https://github.com/rafey581/model.git && cd model && git checkout merge/friend-changes`
 
 ### 2.2 Point it at the server
-Edit `packages/client/.env.app`. The repo has `http://10.0.2.2:4000`, which only works in
-the Android emulator. For real phones:
+Edit `packages/client/.env.app` if the server moves. It is set to `http://54.252.128.235:4000`;
+for the Android emulator against a local server use `http://10.0.2.2:4000`:
 ```
 VITE_API_ORIGIN=<SERVER>
 ```
-(e.g. `http://13.204.251.122:4000`, or `https://api.yourdomain.com` with no port).
+(e.g. `http://54.252.128.235:4000`, or `https://api.yourdomain.com` with no port).
 
 ### 2.3 Build
 ```bash
@@ -193,7 +193,7 @@ In `packages/admin-app/eas.json`, `build.base.env`:
 ```json
 "EXPO_PUBLIC_API_URL": "<SERVER>/api"
 ```
-(note the `/api` on the end). It currently says `http://13.204.251.122:4000/api`.
+(note the `/api` on the end). It currently says `http://54.252.128.235:4000/api`.
 
 ### 3.2 Phone ringing
 Nothing to set up. While the staff app is open, it checks for new deposit and withdrawal

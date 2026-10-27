@@ -151,7 +151,7 @@ When the build finishes, scan the QR code on the build page or download the
 
 A standalone build cannot guess the server address the way Expo Go does (there
 is no Metro dev server to read), so the URL is baked in at build time from
-`EXPO_PUBLIC_API_URL` in `eas.json` — currently `http://13.204.251.122:4000/api`.
+`EXPO_PUBLIC_API_URL` in `eas.json` — currently `http://54.252.128.235:4000/api`.
 Change it there and rebuild if the server moves. The phone must be able to reach
 that host, so the server has to be running and the port reachable.
 
