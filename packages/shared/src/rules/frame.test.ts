@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { BAULK_LINE_X, BALL_IDS, COLOR_ORDER, COLOR_VALUES, TABLE_LENGTH, TABLE_WIDTH, TOTAL_REDS, BALL_RADIUS } from '../constants.js'
 import { colourSpotPosition, cueStartPosition } from '../physics/layout.js'
 import { vec, type Vec2 } from '../vec.js'
-import type { FrameState } from '../state.js'
+import type { BallOn, FrameState } from '../state.js'
 import type { SimKeyframe } from '../events.js'
 import { buildInitialBalls } from '../state.js'
 import { applyCuePlacement, applyFoulChoice, applyFrameWinner, applyStroke, createFrame, createMatch, frameFromSnapshot, frameSnapshot, framesToWin, matchWinnerIndex, maybeEndFrame } from './frame.js'
@@ -476,7 +476,10 @@ describe('colouring up', () => {
     stroke(f, 0, [BALL_IDS.GREEN], false, BALL_IDS.GREEN)
     for (const colorId of COLOR_ORDER) {
       if (f.phase === 'FRAME_END') break
-      const on = (f.ballOn as { colour: number }).colour
+      // Widened on purpose: the stroke above changed it, which the compiler cannot see.
+      const ballOn = f.ballOn as BallOn
+      if (typeof ballOn !== 'object') throw new Error(`expected a colour on, got ${ballOn}`)
+      const on = ballOn.colour
       expect(ball(f, on).potted).toBe(false)
       stroke(f, f.turnIndex, [on], false, on)
       expect(colorId).toBeDefined()

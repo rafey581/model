@@ -1,0 +1,32 @@
+# What EAS leaves out when it uploads the repo to build the staff app.
+# EAS reads this file INSTEAD of .gitignore, so the first block repeats .gitignore.
+
+node_modules/
+dist/
+*.log
+.env
+.env.local
+.env.*.local
+backups/
+coverage/
+.DS_Store
+prisma/*.db
+pnpm-debug.log*
+.vite/
+
+# stray downloaded asset pack — 200MB of raw WAVs, not part of the app
+Pool_And_Billiards _SFX/
+/clapping-best.mp4
+# Android build output of the player app (also in packages/client/android/.gitignore)
+packages/client/android/**/build/
+packages/client/android/.gradle/
+packages/client/android/app/src/main/assets/public/
+*.apk
+*.aab
+
+# The player game's 3D models, pictures and sounds: the staff app does not use them,
+# and they are most of the upload. Code and package.json files stay, so pnpm install works.
+packages/client/public/
+packages/client/src/assets/
+/wood_birch_bump1.jpg
+.git/
