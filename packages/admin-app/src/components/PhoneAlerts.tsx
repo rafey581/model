@@ -1,11 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Modal, Platform, StyleSheet, Text, View } from 'react-native'
 import { useRouter } from 'expo-router'
-import * as Notifications from 'expo-notifications'
 import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from 'expo-audio'
 import { useAuth } from '@/auth/AuthContext'
 import { usePendingCounts } from '@/hooks/usePendingCounts'
-import { registerForPush } from '@/lib/push'
 import { Button } from '@/components/ui'
 import { colors, radius, spacing } from '@/theme'
 
@@ -18,39 +16,34 @@ interface Ringing {
   href: string
 }
 
-// While the app is open, a money request is announced by the looping in-app ring
-// below rather than the system sound (which would play once, under it).
-if (Platform.OS !== 'web') {
-  Notifications.setNotificationHandler({
-    handleNotification: async (notification) => {
-      const ring = (notification.request.content.data as { ring?: boolean } | undefined)?.ring === true
-      return { shouldShowBanner: !ring, shouldShowList: true, shouldPlaySound: !ring, shouldSetBadge: false }
-    }
-  })
+/** Rings that were asked for from elsewhere in the app (the test button on More). */
+const ringRequests = new Set<(alert: Ringing) => void>()
+
+/** Rings this phone now, as a new request would. For the "Test ring" button. */
+export function testRing(): void {
+  for (const ring of ringRequests) ring({ title: 'Test ring', body: 'This is how a new deposit or withdrawal request sounds.', href: '/' })
 }
 
 /**
- * Phone alerts for staff: registers this phone once signed in, rings while the app is
- * open when a deposit or payout request arrives, and opens the right screen when a
- * notification is tapped.
+ * Phone alerts for staff, worked out inside the app.
  *
- * With the app closed the system plays the ring channel's 24-second ringtone; with it
- * open, this component loops the same ringtone and shows a full-screen card until
- * someone taps View or Silence (or a minute passes).
+ * The app already re-reads what is waiting every few seconds (usePendingCounts). When
+ * the number of deposits or withdrawals waiting goes up, a new request has arrived:
+ * the phone loops the ringtone and shows a full-screen card until someone taps View or
+ * Silence (or a minute passes).
+ *
+ * This works while the app is open. Ringing a phone whose app is closed needs a push
+ * service (Google's Firebase on Android), which is deliberately not part of this app.
  */
 export function PhoneAlerts(): ReactNode {
   const { token } = useAuth()
   const router = useRouter()
-  const pending = usePendingCounts()
+  const { counts, loaded } = usePendingCounts()
   const [ringing, setRinging] = useState<Ringing | null>(null)
   const player = useRef<AudioPlayer | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // The listeners below are installed once; these keep them pointed at the current
-  // router and badge refresher (which changes when a session starts).
-  const routerRef = useRef(router)
-  const refreshRef = useRef(pending.refresh)
-  routerRef.current = router
-  refreshRef.current = pending.refresh
+  /** What was waiting last time we looked; null until the first reading of a session. */
+  const seen = useRef<{ deposits: number; withdrawals: number } | null>(null)
 
   const stopRing = (): void => {
     if (timer.current) clearTimeout(timer.current)
@@ -80,45 +73,52 @@ export function PhoneAlerts(): ReactNode {
     timer.current = setTimeout(stopRing, RING_TIMEOUT_MS)
   }
 
-  // Register this phone whenever a session starts.
-  useEffect(() => {
-    if (!token || Platform.OS === 'web') return
-    void registerForPush()
-  }, [token])
+  // The latest startRing for the test button, which outlives any one render.
+  const startRef = useRef(startRing)
+  startRef.current = startRing
 
   useEffect(() => {
-    if (Platform.OS === 'web') return
-    // Ring through the silent switch on iPhone: a payout waiting is the point.
-    void setAudioModeAsync({ playsInSilentMode: true }).catch(() => undefined)
-
-    const received = Notifications.addNotificationReceivedListener((notification) => {
-      const content = notification.request.content
-      const data = (content.data ?? {}) as { ring?: boolean; href?: string }
-      refreshRef.current()
-      if (data.ring) startRing({ title: content.title ?? 'New request', body: content.body ?? '', href: data.href ?? '/' })
-    })
-    const tapped = Notifications.addNotificationResponseReceivedListener((response) => {
-      const href = (response.notification.request.content.data as { href?: string } | undefined)?.href
-      stopRing()
-      refreshRef.current()
-      if (href) routerRef.current.push(href as never)
-    })
+    if (Platform.OS !== 'web') {
+      // Ring through the silent switch on iPhone: a payout waiting is the point.
+      void setAudioModeAsync({ playsInSilentMode: true }).catch(() => undefined)
+    }
+    const request = (alert: Ringing) => startRef.current(alert)
+    ringRequests.add(request)
     return () => {
-      received.remove()
-      tapped.remove()
+      ringRequests.delete(request)
       stopRing()
-      player.current?.remove()
+      try {
+        player.current?.remove()
+      } catch {
+        // Nothing to release.
+      }
       player.current = null
     }
-    // Installed once; current router and refresher come through the refs above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Signing out silences anything ringing.
+  // A new session starts from what is already waiting: those are on the dashboard, and
+  // ringing for them on every sign-in would only teach staff to ignore the ring.
   useEffect(() => {
+    seen.current = null
     if (!token) stopRing()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token])
+
+  useEffect(() => {
+    if (!token || !loaded) return
+    const previous = seen.current
+    seen.current = { deposits: counts.deposits, withdrawals: counts.withdrawals }
+    if (!previous) return
+    const newDeposits = counts.deposits - previous.deposits
+    const newWithdrawals = counts.withdrawals - previous.withdrawals
+    if (newWithdrawals > 0) {
+      startRing({ title: 'New withdrawal request', body: describe(newWithdrawals, 'payout', counts.withdrawals), href: '/withdrawals' })
+    } else if (newDeposits > 0) {
+      startRing({ title: 'New deposit request', body: describe(newDeposits, 'deposit', counts.deposits), href: '/deposits' })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, loaded, counts.deposits, counts.withdrawals])
 
   return (
     <Modal visible={ringing !== null} transparent animationType="fade" onRequestClose={stopRing}>
@@ -144,6 +144,11 @@ export function PhoneAlerts(): ReactNode {
       </View>
     </Modal>
   )
+}
+
+function describe(added: number, noun: string, waiting: number): string {
+  const what = added === 1 ? `1 new ${noun} request` : `${added} new ${noun} requests`
+  return `${what}. ${waiting} waiting in total.`
 }
 
 const styles = StyleSheet.create({

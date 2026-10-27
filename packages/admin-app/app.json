@@ -13,15 +13,6 @@
       "expo-secure-store",
       "expo-font",
       [
-        "expo-notifications",
-        {
-          "sounds": [
-            "./assets/sounds/ring.wav"
-          ],
-          "color": "#d29922"
-        }
-      ],
-      [
         "expo-build-properties",
         {
           "android": {

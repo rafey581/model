@@ -75,10 +75,9 @@ The file **must** be `packages/server/.env`. Set at least:
 | `MAX_STAKE` | `5000` (Master Match goes to 5000 USDT) |
 | `DEPOSIT_WALLET_ADDRESS` | `7oK51mdQkub5kMsZoTMFRVpcsfcNvrGKTigu9wWbvMyR` (Solana; already the built-in default). The server will not start with an invalid Solana address |
 | `DEPOSIT_CURRENCIES` | `USDT,USDC` (both on Solana, each credited 1:1) |
-| `AUTH_ALLOW_DIRECT_REGISTER` | `true` until email is set up; with `false`, sign-up needs the emailed code |
-| `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | your mail provider, so sign-up / reset codes are emailed (without it they only appear in the server log) |
+| `AUTH_ALLOW_DIRECT_REGISTER` | `true` (players sign up straight away; no email service is used) |
 | `ADMIN_ALLOWED_IPS` | **leave empty**: staff phones on mobile data change IP constantly |
-| `ADMIN_PUSH_ENABLED` | `true` (rings staff phones) |
+| `ADMIN_PUSH_ENABLED` | `false` (the staff app rings by itself while open; no Firebase or other service) |
 | `REAL_MONEY_ENABLED` | `false` |
 
 ### 1.5 Database
@@ -196,19 +195,12 @@ In `packages/admin-app/eas.json`, `build.base.env`:
 ```
 (note the `/api` on the end). It currently says `http://13.204.251.122:4000/api`.
 
-### 3.2 Phone ringing: Firebase (one time)
-Deposit and withdrawal alerts reach Android through Firebase. Without this the app works,
-but nothing rings.
-1. https://console.firebase.google.com → **Add project**.
-2. Add an **Android app** with package name `com.snookerarena.admin`; download
-   `google-services.json` into `packages/admin-app/`.
-3. In `packages/admin-app/app.json`, under `"android"`, add
-   `"googleServicesFile": "./google-services.json"`.
-4. Firebase → Project settings → Service accounts → **Generate new private key**.
-5. https://expo.dev → project **snooker-admin** → Credentials → Android → FCM V1 →
-   upload that key.
-
-Do not commit the private key. `google-services.json` holds only public identifiers.
+### 3.2 Phone ringing
+Nothing to set up. While the staff app is open, it checks for new deposit and withdrawal
+requests every 10 seconds and rings (looping ringtone and a full-screen card) when one
+arrives. With the app closed or in the background it does not ring: that would need
+Google's Firebase push service, which this project deliberately does not use. Keep the
+app open on a staff phone that is plugged in.
 
 ### 3.3 Build
 ```bash
@@ -218,15 +210,13 @@ cd packages/admin-app
 pnpm build:android           # "preview" profile -> an installable .apk
 ```
 EAS prints a download link and QR code when it finishes (about 10–20 minutes).
-`pnpm build:android:production` makes an `.aab` for the Play Store instead.
 
 A rebuild is needed whenever the server address, `app.json` or a native package
 changes. Server-only changes never need an app rebuild.
 
 ### 3.4 First run
 1. Install the APK, sign in as `admin@snooker.test` with the seed password, and change it.
-2. Allow notifications when asked.
-3. **More → Phone alerts → Send test ring.** The phone should ring for ~24 seconds.
+2. **More → Phone alerts → Test ring.** The phone should ring until you tap Silence.
 
 ---
 
@@ -235,7 +225,7 @@ changes. Server-only changes never need an app rebuild.
 - [ ] `curl <SERVER>/api/health` shows `"db":"up"`
 - [ ] Player APK: sign up, log in, reload stays signed in, practice starts (6 reds)
 - [ ] A 100 USDT or Master Match table opens (proves `maxStake` was raised; plays 10 reds)
-- [ ] Deposit request → staff phone rings → approve → player balance goes up
+- [ ] Deposit request → staff phone (app open) rings within ~10 s → approve → player balance goes up
 - [ ] Withdrawal request → balance shows it held → approve → staff pays out
 - [ ] Support message from the player → appears in the staff Support tab → reply arrives
 - [ ] Staff dashboard shows deposits, withdrawals and profit for Today
@@ -248,7 +238,7 @@ changes. Server-only changes never need an app rebuild.
 | App shows "Server offline" | Wrong address in `.env.app` / `eas.json`, port 4000 closed in the security group, or the server is down |
 | "maximum stake is 10" | Raise max stake in staff app Settings (1.7) |
 | Server will not start: "not a valid Solana address" | Typo in `DEPOSIT_WALLET_ADDRESS`; it must be the Solana address |
-| Sign-up codes never arrive | SMTP not set: codes are only in the server log |
 | Staff app can't sign in from mobile data | `ADMIN_ALLOWED_IPS` is set; empty it |
-| Phone never rings | Firebase/FCM not set up (3.2), notifications denied, or the APK was built before the Firebase files were added |
+| Phone never rings | The staff app must be open on screen (3.2); check the volume. Try More → Phone alerts → Test ring |
+| Staff app closes as soon as it opens | Rebuild the APK from the latest `main` (older builds included a push module that needed Firebase) |
 | After moving the server, apps can't connect | The address is built into both apps: change it and rebuild both |

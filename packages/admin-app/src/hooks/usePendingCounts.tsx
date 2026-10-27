@@ -7,9 +7,10 @@ import type { PendingCountsPayload } from '@/lib/types'
 /**
  * What is waiting on staff, for the tab badges.
  *
- * One poll of /admin/pending for the whole app, every 30 seconds while signed in and
+ * One poll of /admin/pending for the whole app, every 10 seconds while signed in and
  * in the foreground, plus an immediate re-read whenever a screen finishes an action
- * (approve, reject, reply) so a badge never lags the work just done.
+ * (approve, reject, reply) so a badge never lags the work just done. The same reading
+ * is what rings the phone for a new request (PhoneAlerts), hence the short interval.
  */
 export interface PendingCounts {
   deposits: number
@@ -19,30 +20,34 @@ export interface PendingCounts {
 
 interface PendingValue {
   counts: PendingCounts
+  /** False until the first reading of this session has come back. */
+  loaded: boolean
   refresh: () => void
 }
 
 const EMPTY: PendingCounts = { deposits: 0, withdrawals: 0, support: 0 }
-const POLL_MS = 30_000
+const POLL_MS = 10_000
 
-const PendingContext = createContext<PendingValue>({ counts: EMPTY, refresh: () => undefined })
+const PendingContext = createContext<PendingValue>({ counts: EMPTY, loaded: false, refresh: () => undefined })
 
 export function PendingCountsProvider({ children }: { children: ReactNode }): ReactNode {
   const { token } = useAuth()
   const [counts, setCounts] = useState<PendingCounts>(EMPTY)
+  const [loaded, setLoaded] = useState(false)
   const inFlight = useRef(false)
 
   const refresh = useCallback(() => {
     if (!token || inFlight.current) return
     inFlight.current = true
     api<PendingCountsPayload>('/admin/pending')
-      .then((stats) =>
+      .then((stats) => {
         setCounts({
           deposits: stats.pendingDeposits,
           withdrawals: stats.pendingWithdrawals,
           support: stats.supportAwaiting ?? 0
         })
-      )
+        setLoaded(true)
+      })
       .catch(() => undefined)
       .finally(() => {
         inFlight.current = false
@@ -52,6 +57,7 @@ export function PendingCountsProvider({ children }: { children: ReactNode }): Re
   useEffect(() => {
     if (!token) {
       setCounts(EMPTY)
+      setLoaded(false)
       return
     }
     refresh()
@@ -67,7 +73,7 @@ export function PendingCountsProvider({ children }: { children: ReactNode }): Re
     }
   }, [token, refresh])
 
-  const value = useMemo(() => ({ counts, refresh }), [counts, refresh])
+  const value = useMemo(() => ({ counts, loaded, refresh }), [counts, loaded, refresh])
   return <PendingContext.Provider value={value}>{children}</PendingContext.Provider>
 }
 
