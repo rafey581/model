@@ -370,7 +370,7 @@ describe('colouring up', () => {
     // frame on the final black to be traded back and forth indefinitely.
     const f = createFrame(0)
     f.remainingReds = 0
-    f.ballOn = 'ANY_COLOUR'
+    f.ballOn = { colour: BALL_IDS.YELLOW }
     let points = 0
     for (let i = 0; i < COLOR_ORDER.length; i++) {
       const colorId = COLOR_ORDER[i]!
@@ -400,7 +400,7 @@ describe('colouring up', () => {
   it('ends the frame on the blue when one player is 14 ahead of the other', () => {
     const f = createFrame(0)
     f.remainingReds = 0
-    f.ballOn = 'ANY_COLOUR'
+    f.ballOn = { colour: BALL_IDS.YELLOW }
     for (const colorId of [BALL_IDS.YELLOW, BALL_IDS.GREEN, BALL_IDS.BROWN]) {
       stroke(f, 0, [colorId], false, colorId)
       expect(f.phase).not.toBe('FRAME_END')
@@ -440,13 +440,61 @@ describe('colouring up', () => {
     // still played in ascending order.
     const f = createFrame(0)
     f.remainingReds = 0
-    f.ballOn = 'ANY_COLOUR'
+    f.ballOn = { colour: BALL_IDS.YELLOW }
     stroke(f, 0, [BALL_IDS.YELLOW], false, BALL_IDS.YELLOW)
     stroke(f, 0, [BALL_IDS.GREEN], false, BALL_IDS.GREEN)
     // Even out the scores by hand, then carry on the sequence.
     f.scores.player0 = f.scores.player1
     stroke(f, 0, [BALL_IDS.BROWN], false, BALL_IDS.BROWN)
     expect(f.ballOn).toEqual({ colour: BALL_IDS.BLUE })
+  })
+
+  it('respots the colour potted after the last red, then colours up from the yellow', () => {
+    // The colour after the final red always goes back on its spot. Leaving it down took
+    // the yellow out early, or left a potted green listed as still on the table, which
+    // then became a ball on that no one could hit.
+    for (const colorId of [BALL_IDS.YELLOW, BALL_IDS.GREEN, BALL_IDS.BLACK]) {
+      const f = createFrame(0, 6)
+      for (const red of f.balls.filter((b) => b.isRed)) red.potted = true
+      f.remainingReds = 0
+      f.ballOn = 'ANY_COLOUR'
+      const end = stroke(f, 0, [colorId], false, colorId)
+      expect(end.frameEnded).toBe(false)
+      expect(f.scores.player0).toBe(COLOR_VALUES[colorId])
+      expect(ball(f, colorId).potted).toBe(false)
+      expect(f.colorsRemaining.size).toBe(COLOR_ORDER.length)
+      expect(f.ballOn).toEqual({ colour: BALL_IDS.YELLOW })
+      expect(f.turnIndex).toBe(0)
+    }
+  })
+
+  it('never names a ball on that is off the table', () => {
+    const f = createFrame(0, 6)
+    for (const red of f.balls.filter((b) => b.isRed)) red.potted = true
+    f.remainingReds = 0
+    f.ballOn = 'ANY_COLOUR'
+    stroke(f, 0, [BALL_IDS.GREEN], false, BALL_IDS.GREEN)
+    for (const colorId of COLOR_ORDER) {
+      if (f.phase === 'FRAME_END') break
+      const on = (f.ballOn as { colour: number }).colour
+      expect(ball(f, on).potted).toBe(false)
+      stroke(f, f.turnIndex, [on], false, on)
+      expect(colorId).toBeDefined()
+    }
+  })
+
+  it('calls potting a different colour while colouring up a foul, and respots it', () => {
+    const f = createFrame(0, 6)
+    for (const red of f.balls.filter((b) => b.isRed)) red.potted = true
+    f.remainingReds = 0
+    f.ballOn = { colour: BALL_IDS.YELLOW }
+    const end = stroke(f, 0, [BALL_IDS.BLUE], false, BALL_IDS.YELLOW)
+    expect(end.reason).toBe('wrong ball potted')
+    expect(f.scores.player0).toBe(0)
+    expect(f.scores.player1).toBe(5)
+    expect(ball(f, BALL_IDS.BLUE).potted).toBe(false)
+    expect(f.colorsRemaining.has(BALL_IDS.BLUE)).toBe(true)
+    expect(f.ballOn).toEqual({ colour: BALL_IDS.YELLOW })
   })
 
   it('re-spots a colour potted on a foul during colouring up', () => {

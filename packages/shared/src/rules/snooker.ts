@@ -42,6 +42,10 @@ export function resolveStroke(frame: FrameState, shooterIndex: number, pottedIds
   } else {
     if (pottedReds > 0) {
       foul = true
+    } else if (ballOn !== 'ANY_COLOUR' && pottedColours.length === 1 && pottedColours[0] !== requiredColorId) {
+      // Colouring up, the colour on is the only one that may be potted. Striking it
+      // first and then potting a different colour is still a foul.
+      foul = true
     } else if (pottedColours.length === 1 && legalContact) {
       // After a red the striker nominates a colour of their own choice, so any
       // colour they may legally hit scores at its own value. Requiring the lowest
@@ -82,12 +86,18 @@ export function resolveStroke(frame: FrameState, shooterIndex: number, pottedIds
     resolution.nextBallOn = pottedReds > 0 ? 'ANY_COLOUR' : nextBallOnAfterVisit(frame)
   } else {
     if (points > 0) {
-      const colorPotted = pottedColours.includes(requiredColorId)
-      if (redsAfter > 0) {
+      if (ballOn === 'ANY_COLOUR') {
+        // A colour potted after a red always goes back on its spot, and that includes the
+        // colour after the last red. Only then does colouring up begin, from the yellow.
+        // Leaving that colour down used to either take the yellow out of the frame early,
+        // or leave a potted colour still listed as on the table: the ball on became one
+        // nobody could hit, and the frame fouled back and forth for ever.
         respotIds = pottedColours
-        resolution.nextBallOn = 'RED'
+        resolution.nextBallOn = redsAfter > 0 ? 'RED' : { colour: lowestRemainingColour(frame) }
       } else {
-        resolution.nextBallOn = { colour: nextColouringUpColour(frame, requiredColorId, colorPotted) }
+        // Colouring up: the colour on stays down, and the next one in order is on.
+        frame.colorsRemaining.delete(requiredColorId)
+        resolution.nextBallOn = { colour: lowestRemainingColour(frame) }
       }
     } else {
       resolution.nextBallOn = nextBallOnAfterVisit(frame)
@@ -186,13 +196,6 @@ function nextBallOnAfterVisit(frame: FrameState): BallOn {
   return { colour: lowestRemainingColour(frame) }
 }
 
-function nextColouringUpColour(frame: FrameState, pottedColorId: number, wasPotted: boolean): number {
-  if (wasPotted && frame.remainingReds === 0) {
-    frame.colorsRemaining.delete(pottedColorId)
-  }
-  return lowestRemainingColour(frame)
-}
-
 export function lowestRemainingColour(frame: FrameState): number {
   for (const colorId of COLOR_ORDER) {
     if (frame.colorsRemaining.has(colorId)) return colorId
@@ -265,6 +268,7 @@ function foulReason(
   if (cuePotted) return 'cue ball potted'
   if (!legalContact) return firstContactId === null ? 'no legal contact' : 'wrong ball first'
   if (pottedReds > 0 && ballOn !== 'RED' || pottedColours.length > 0 && ballOn === 'RED' && pottedReds === 0) return 'wrong ball potted'
+  if (typeof ballOn === 'object' && pottedColours.some((id) => id !== ballOn.colour)) return 'wrong ball potted'
   return 'foul'
 }
 

@@ -159,6 +159,11 @@ function resolveCuePlacement(frame: FrameState, cuePos: { x: number; y: number }
   return vec(cuePos.x, cuePos.y)
 }
 
+/** Whether the cue ball in hand may be put down at `pos`, by the same rules a placement is judged by. */
+export function canPlaceCueBall(frame: FrameState, pos: { x: number; y: number }): boolean {
+  return frame.cueInHand && resolveCuePlacement(frame, pos) !== null
+}
+
 function isInsideD(pos: { x: number; y: number }): boolean {
   const dx = pos.x - BAULK_LINE_X
   const dy = pos.y - TABLE_WIDTH / 2

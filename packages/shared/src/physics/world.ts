@@ -32,6 +32,13 @@ export interface SimOptions {
    * allocations.
    */
   playback?: SimPlaybackOptions
+  /**
+   * Stop as soon as the cue ball has struck its first ball (or dropped). For the bot's
+   * escape search, which only asks what an angle reaches first: until then only the cue
+   * ball is moving, so a probe costs a fraction of a full stroke. The balls returned are
+   * mid-shot and must not be used as a resting position.
+   */
+  untilFirstContact?: boolean
 }
 
 export interface SimPlaybackOptions {
@@ -195,6 +202,7 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
     }
 
     simTime += TICK_DT
+    if (options.untilFirstContact && (firstContactId !== null || cuePotted)) break
     if (keyframes) {
       const due = simTime >= nextSampleAt
       // A pot always forces a sample: without one the ball would sit at the
