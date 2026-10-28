@@ -24,6 +24,7 @@ import { registerWithdrawalRoutes, registerAdminWithdrawalRoutes } from './withd
 import { registerSupportRoutes, registerAdminSupportRoutes } from './support/routes.js'
 import { registerProgressRoutes } from './progress/routes.js'
 import { registerAdminDeviceRoutes } from './push/routes.js'
+import { registerAnnouncementRoutes, registerAdminAnnouncementRoutes } from './announcements/routes.js'
 import { createGameServer, recoverMatchValidity } from './game/index.js'
 import { getPlatformUserId, getBotUserId } from './matches/service.js'
 import { ensureSeedSettings, getSettings, isMaintenance } from './settings/index.js'
@@ -89,6 +90,8 @@ export async function buildApp() {
   await registerAdminSupportRoutes(app)
   await registerProgressRoutes(app)
   await registerAdminDeviceRoutes(app)
+  await registerAnnouncementRoutes(app)
+  await registerAdminAnnouncementRoutes(app)
   await registerAdminAuthRoutes(app)
   await registerAdminRoutes(app)
 

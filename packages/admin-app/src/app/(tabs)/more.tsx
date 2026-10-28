@@ -18,6 +18,7 @@ import { colors, radius, spacing } from '@/theme'
 type IconName = keyof typeof Ionicons.glyphMap
 
 const ITEMS: Array<{ href: string; label: string; description: string; icon: IconName }> = [
+  { href: '/announcements', label: 'Announcements', description: 'Send a message to every player', icon: 'megaphone-outline' },
   { href: '/matches', label: 'Matches', description: 'History and stroke-by-stroke replay', icon: 'game-controller-outline' },
   { href: '/settings', label: 'Settings', description: 'Stakes, commission, maintenance mode', icon: 'options-outline' },
   { href: '/fraud', label: 'Fraud and ledger', description: 'Risk flags and balance reconciliation', icon: 'shield-checkmark-outline' },

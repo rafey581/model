@@ -183,6 +183,7 @@ export function Divider(): ReactNode {
 export function Field({
   label,
   hint,
+  style,
   ...inputProps
 }: { label: string; hint?: string } & TextInputProps): ReactNode {
   return (
@@ -190,10 +191,11 @@ export function Field({
       <Text style={styles.fieldLabel}>{label}</Text>
       <TextInput
         placeholderTextColor={colors.muted}
-        style={styles.input}
         autoCapitalize="none"
         autoCorrect={false}
         {...inputProps}
+        // Added to the field's own look, never instead of it (a taller box keeps its text colour).
+        style={[styles.input, style]}
       />
       {hint ? <Text style={styles.fieldHint}>{hint}</Text> : null}
     </View>

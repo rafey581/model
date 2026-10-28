@@ -497,3 +497,16 @@ model UserBadge {
   @@unique([userId, badgeId])
   @@index([userId])
 }
+/// A message from staff to every player: shown live to whoever is online, and on
+/// the next app open to everyone else, until it is withdrawn.
+model Announcement {
+  id          String    @id @default(cuid())
+  title       String
+  body        String
+  createdById String
+  createdAt   DateTime  @default(now())
+  /// Set when staff take it down; withdrawn announcements are no longer shown to players.
+  withdrawnAt DateTime?
+
+  @@index([withdrawnAt, createdAt])
+}

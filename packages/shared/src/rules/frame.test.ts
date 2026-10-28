@@ -955,9 +955,9 @@ describe('the choice after a foul', () => {
     const outcome = applyStroke(frame, 0, missShot)
     expect(outcome.resolution.foul).toBe(true)
     expect(frame.turnIndex).toBe(1)
-    expect(frame.foulChoice).toEqual({ offender: 0, chooser: 1 })
-    expect(frameSnapshot(frame).foulChoice).toEqual({ offender: 0, chooser: 1 })
-    expect(frameFromSnapshot(frameSnapshot(frame)).foulChoice).toEqual({ offender: 0, chooser: 1 })
+    expect(frame.foulChoice).toMatchObject({ offender: 0, chooser: 1 })
+    expect(frameSnapshot(frame).foulChoice).toMatchObject({ offender: 0, chooser: 1 })
+    expect(frameFromSnapshot(frameSnapshot(frame)).foulChoice).toMatchObject({ offender: 0, chooser: 1 })
   })
 
   it('puts the offender back at the table when asked to play again', () => {
@@ -969,6 +969,52 @@ describe('the choice after a foul', () => {
     expect(frame.foulChoice).toBeNull()
     // The penalty stands either way.
     expect(frame.scores).toEqual(scores)
+  })
+
+  it('puts every ball back where it was before the foul when the offender plays again', () => {
+    // A foul that moves things: the cue ball is driven hard into the reds and goes in-off
+    // or scatters them. Whatever it did, "play again" replays the same shot position.
+    const frame = createFrame(0, 6)
+    const cue = frame.balls.find((b) => b.id === BALL_IDS.CUE)!
+    cue.potted = false
+    cue.pos = vec(2000, 700)
+    frame.cueInHand = false
+    frame.cueInHandInD = false
+    frame.ballOn = { colour: BALL_IDS.BLACK } // hitting a red first is a foul
+    const before = frame.balls.map((b) => ({ id: b.id, x: b.pos.x, y: b.pos.y, potted: b.potted }))
+    const black = frame.balls.find((b) => b.id === BALL_IDS.BLACK)!
+    const towardReds = Math.atan2(889 - cue.pos.y, 2800 - cue.pos.x)
+    const outcome = applyStroke(frame, 0, { aimAngle: towardReds, power: 0.9, spin: { x: 0, y: 0 } })
+    expect(outcome.resolution.foul).toBe(true)
+    const moved = frame.balls.some((b) => {
+      const was = before.find((w) => w.id === b.id)!
+      return Math.hypot(b.pos.x - was.x, b.pos.y - was.y) > 5 || b.potted !== was.potted
+    })
+    expect(moved).toBe(true)
+    const scores = { ...frame.scores }
+
+    expect(applyFoulChoice(frame, 1, true)).toBe(true)
+    expect(frame.turnIndex).toBe(0)
+    for (const was of before) {
+      const ball = frame.balls.find((b) => b.id === was.id)!
+      expect(ball.potted).toBe(was.potted)
+      expect(ball.pos.x).toBeCloseTo(was.x, 6)
+      expect(ball.pos.y).toBeCloseTo(was.y, 6)
+    }
+    expect(frame.ballOn).toEqual({ colour: BALL_IDS.BLACK })
+    expect(frame.scores).toEqual(scores)
+    expect(black.pos).toBeDefined()
+  })
+
+  it('leaves the position as it is when the chooser plays on', () => {
+    const frame = missFrame()
+    applyStroke(frame, 0, missShot)
+    const after = frame.balls.find((b) => b.id === BALL_IDS.CUE)!.pos
+    const at = { x: after.x, y: after.y }
+    expect(applyFoulChoice(frame, 1, false)).toBe(true)
+    const cue = frame.balls.find((b) => b.id === BALL_IDS.CUE)!.pos
+    expect(cue.x).toBeCloseTo(at.x, 6)
+    expect(cue.y).toBeCloseTo(at.y, 6)
   })
 
   it('lets the chooser play on', () => {

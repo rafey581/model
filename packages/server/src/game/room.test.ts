@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { GameRoom, type RoomCallbacks, type ShotInputDto } from './room.js'
+import { GameRoom, PLAYBACK_FINISH_GRACE_MS, type RoomCallbacks, type ShotInputDto } from './room.js'
 
 /**
  * The playback hold is the room's pacing gate: a shot may not be broadcast until
@@ -200,6 +200,36 @@ describe('playback hold', () => {
     expect(blockedReason(room)).toBeNull()
   })
 
+  it('waits for both players to finish watching, not the first one', () => {
+    // The striker's phone always finishes first: it started the shot the moment it was
+    // struck, while the opponent's waited for the server and the cue wind-up. Letting
+    // the striker play on then put the opponent a shot further behind every time.
+    const { room, cbs } = seatedRoom({ connect: ['a', 'b'] })
+    expect(blockedReason(room)).toBeNull()
+    const token = lastToken(cbs)
+
+    room.noteShotPlayed('user-a', token, 'sock-a')
+    expect(isHeld(room)).toBe(true)
+
+    room.noteShotPlayed('user-b', token, 'sock-b')
+    expect(isHeld(room)).toBe(false)
+  })
+
+  it('gives a player who never reports back only a short grace once the other has finished', () => {
+    vi.useFakeTimers()
+    try {
+      const { room, cbs } = seatedRoom({ connect: ['a', 'b'] })
+      expect(blockedReason(room)).toBeNull()
+      room.noteShotPlayed('user-a', lastToken(cbs), 'sock-a')
+      vi.advanceTimersByTime(PLAYBACK_FINISH_GRACE_MS - 100)
+      expect(isHeld(room)).toBe(true)
+      vi.advanceTimersByTime(200)
+      expect(isHeld(room)).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('refuses an acknowledgement from a seated player who was not watching', () => {
     // The other player is in the match but has no socket, so they were never sent the
     // replay and have seen none of it. Their report carries a token they could only
@@ -352,28 +382,16 @@ describe('playback hold', () => {
     expect(isHeld(room)).toBe(true)
   })
 
-  it('releases a hold once the only watching socket has gone', () => {
+  it('releases a hold once the only watching seat has rejoined', () => {
     // A blip on the one watching connection, and the rejoin arrives before the old
-    // socket is reaped. The room therefore never sees a moment with nobody watching,
-    // and the reconnecting client is sent the settled snapshot, so it abandons the
-    // replay and will never report back. Once the abandoned socket is finally reaped
-    // there is nobody left who can end the hold, and the match must not sit stalled
-    // against the backstop.
+    // socket is reaped. The reconnecting client is sent the settled snapshot, so it
+    // abandons the replay and will never report back: that seat is no longer watching
+    // anything, and the match must not sit stalled against the backstop waiting for it.
     const { room } = seatedRoom()
     expect(blockedReason(room)).toBeNull()
     expect(isHeld(room)).toBe(true)
 
-    // The reconnected window lands while the original is still attached, so the room
-    // never sees a moment with nobody watching and the hold correctly stands. This
-    // socket arrived after the shot, so it is sent the settled snapshot and abandons
-    // the replay rather than being able to end it.
     room.registerSocket('user-a', 0, 'sock-a2')
-    expect(isHeld(room)).toBe(true)
-
-    // The original window finally drops. The reconnected one is still attached, so
-    // the old "is anybody connected" rule would have kept the hold and stalled the
-    // match against the backstop with nobody watching anything.
-    room.unregisterSocket('user-a', 'sock-a')
     expect(isHeld(room)).toBe(false)
   })
 
@@ -473,7 +491,9 @@ describe('turn clock', () => {
     placeCueIfInHand(room)
     const placed = room.handleShot('user-a', SHOT)
     expect(placed.accepted).toBe(true)
+    // Everyone at the table watches the break through; the hold ends when all have.
     room.noteShotPlayed('user-a', lastToken(cbs), 'sock-a')
+    room.noteShotPlayed('user-b', lastToken(cbs), 'sock-b')
   }
 
   it('runs from the opening ball in hand, and keeps running after the break is watched', () => {
@@ -1094,7 +1114,7 @@ describe('the choice after a foul', () => {
     const { room } = afterFoul()
     const frame = room.match.currentFrame!
     expect(frame.turnIndex).toBe(1)
-    expect(frame.foulChoice).toEqual({ offender: 0, chooser: 1 })
+    expect(frame.foulChoice).toMatchObject({ offender: 0, chooser: 1 })
     expect(room.handleFoulChoice('user-a', true).accepted).toBe(false)
   })
 

@@ -1,12 +1,11 @@
 import { Stack } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
-import { View, StyleSheet } from 'react-native'
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native'
 import { AuthProvider, useAuth } from '@/auth/AuthContext'
 import { ToastProvider } from '@/components/Toast'
 import { DialogProvider } from '@/components/ActionDialog'
 import { PendingCountsProvider } from '@/hooks/usePendingCounts'
 import { PhoneAlerts } from '@/components/PhoneAlerts'
-import { Loading } from '@/components/ui'
 import { colors } from '@/theme'
 
 /**
@@ -21,10 +20,14 @@ import { colors } from '@/theme'
 function RootNavigator() {
   const { ready, token } = useAuth()
 
+  // While a saved sign-in is being checked: the app's mark and a spinner, nothing that
+  // looks like a form, so opening the app never seems to log out and back in again.
   if (!ready) {
     return (
-      <View style={styles.splash}>
-        <Loading label="Checking session..." />
+      <View style={styles.splash} accessibilityRole="progressbar" accessibilityLabel="Opening Snooker Admin">
+        <View style={styles.logo} />
+        <Text style={styles.title}>Snooker Admin</Text>
+        <ActivityIndicator color={colors.accent} style={styles.spinner} />
       </View>
     )
   }
@@ -47,6 +50,7 @@ function RootNavigator() {
         <Stack.Screen name="fraud" options={{ headerShown: true, title: 'Fraud and ledger' }} />
         <Stack.Screen name="audit" options={{ headerShown: true, title: 'Admin audit log' }} />
         <Stack.Screen name="support/[id]" options={{ headerShown: true, title: 'Conversation' }} />
+        <Stack.Screen name="announcements" options={{ headerShown: true, title: 'Announcements' }} />
       </Stack.Protected>
       <Stack.Protected guard={token === null}>
         <Stack.Screen name="login" />
@@ -72,5 +76,8 @@ export default function RootLayout() {
 }
 
 const styles = StyleSheet.create({
-  splash: { flex: 1, backgroundColor: colors.background, justifyContent: 'center' }
+  splash: { flex: 1, backgroundColor: colors.background, justifyContent: 'center', alignItems: 'center', gap: 12 },
+  logo: { width: 52, height: 52, borderRadius: 26, backgroundColor: colors.accent, borderWidth: 6, borderColor: colors.background },
+  title: { color: colors.text, fontSize: 22, fontWeight: '800' },
+  spinner: { marginTop: 8 }
 })

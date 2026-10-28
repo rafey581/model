@@ -51,6 +51,7 @@ import { fillBalance } from './lobby/casino.js'
 import { xpBar } from './lobby/progress.js'
 import type { LobbyProgress } from './lobby/types.js'
 import { renderAuthScreen, setAuthOfflineNotice } from './auth.js'
+import { receiveAnnouncement, resetAnnouncements, setAnnouncements, showNextAnnouncement, type Announcement } from './announcements.js'
 import {
   confirmPlacement,
   initialPlacementFlow,
@@ -96,6 +97,12 @@ function formatCash(amount: number | string): string {
 }
 
 let token = readStoredToken()
+/**
+ * True while a saved sign-in is being checked at start-up. The screen shows a neutral
+ * loading card meanwhile: drawing the sign-in form first and swapping it for the lobby a
+ * moment later read as being logged out and back in again.
+ */
+let checkingSession = token !== ''
 let currentUser: SessionUser | null = null
 let wallet = { balance: 0, locked: 0 }
 let tiers: TierData[] = []
@@ -282,6 +289,21 @@ let shotStartBalls: FrameSnapshotData['balls'] | null = null
  * jump.
  */
 let queuedUpdate: GameUpdatePayload | null = null
+/**
+ * False from a shot's arrival until the server says the table is free again (the fresh
+ * turn clock it sends when it releases the shot). The server now waits for every player
+ * at the table to finish watching, so this phone finishing its own replay is not enough:
+ * firing before the other phone has caught up would only be refused. RELEASE_WAIT_MS is a
+ * safety net in case that message is lost.
+ */
+let tableReleased = true
+let releaseWaitTimer: number | null = null
+const RELEASE_WAIT_MS = 12_000
+function markTableReleased(): void {
+  tableReleased = true
+  if (releaseWaitTimer !== null) window.clearTimeout(releaseWaitTimer)
+  releaseWaitTimer = null
+}
 /**
  * True from the moment a shot's animation starts until the server has been told it
  * has finished. The server holds its next shot back for exactly this window, so
@@ -823,6 +845,18 @@ function refreshNotificationPanel(): void {
     list.appendChild(item)
   }
   panelEl.appendChild(list)
+}
+
+/** Staff announcements on show; any not yet seen are shown once the lobby is up. */
+async function fetchAnnouncements(): Promise<void> {
+  const userId = currentUser?.id
+  if (!userId) return
+  try {
+    setAnnouncements(userId, await api<Announcement[]>('/announcements'))
+    if (!activeMatchId) showNextAnnouncement()
+  } catch {
+    // Not worth troubling the player about: they will be fetched on the next open.
+  }
 }
 
 async function fetchNotifications(): Promise<void> {
@@ -1961,7 +1995,11 @@ function render(): void {
   if (shell === 'app-home') document.body.classList.add('home-mode')
   if (shell === 'app-practice') document.body.classList.add('practice-mode')
 
-  if (!currentUser) {
+  if (!currentUser && checkingSession) {
+    app.className = 'app-root'
+    document.body.classList.remove('home-mode', 'practice-mode')
+    app.appendChild(bootScreen())
+  } else if (!currentUser) {
     // The auth screen centres itself on the viewport, so the transition is applied to
     // the card rather than to a wrapper — the wrapper would be a full-height block
     // and the animation would be invisible behind the card's own entrance.
@@ -1997,6 +2035,26 @@ function render(): void {
   // The challenge layer floats above whichever screen was just built (or hides
   // itself during a match), so it is rebuilt last, against the fresh state.
   renderChallengeLayer()
+  // Back in the lobby: anything announced during the match is shown now.
+  if (currentUser && !activeMatchId) showNextAnnouncement()
+}
+
+/** The loading card shown while a saved sign-in is checked at start-up. */
+function bootScreen(): HTMLElement {
+  const wrap = document.createElement('div')
+  wrap.className = 'boot-screen'
+  wrap.setAttribute('role', 'status')
+  wrap.setAttribute('aria-live', 'polite')
+  const title = document.createElement('div')
+  title.className = 'boot-screen__title'
+  title.textContent = APP_TITLE
+  const spinner = document.createElement('div')
+  spinner.className = 'challenge-card__spinner'
+  const note = document.createElement('div')
+  note.className = 'boot-screen__note'
+  note.textContent = 'Signing you in...'
+  wrap.append(title, spinner, note)
+  return wrap
 }
 
 /**
@@ -2006,6 +2064,7 @@ function render(): void {
  * the auth screen is drawn, so a fast reload cannot race it.
  */
 async function signOut(): Promise<void> {
+  resetAnnouncements()
   token = ''
   clearStoredToken()
   disconnectSocket()
@@ -3724,7 +3783,15 @@ function handleGameUpdate(data: GameUpdatePayload): void {
  * worth of movement in a single frame.
  */
 function isVisitPlayable(): boolean {
-  return myTurn && shotPlayer === null && queuedUpdate === null && !shotInFlight && predictedShot === null && !myFoulChoicePending()
+  return (
+    myTurn &&
+    tableReleased &&
+    shotPlayer === null &&
+    queuedUpdate === null &&
+    !shotInFlight &&
+    predictedShot === null &&
+    !myFoulChoicePending()
+  )
 }
 
 /** Whether a foul was just committed against me and the choice of what happens next is mine. */
@@ -3747,12 +3814,12 @@ function ensureFoulChoiceUi(): void {
   card.hidden = true
   const head = el('div', 'foul-choice-head')
   head.appendChild(el('span', 'foul-choice-tag', 'FOUL'))
-  head.appendChild(el('span', 'foul-choice-text', 'Your opponent fouled. Play on, or make them play again?'))
+  head.appendChild(el('span', 'foul-choice-text', 'Your opponent fouled. Play on from here, or put the balls back and make them play it again?'))
   card.appendChild(head)
   const actions = el('div', 'foul-choice-actions')
   const play = el('button', 'foul-choice-play', 'Play on') as HTMLButtonElement
   play.type = 'button'
-  const again = el('button', 'ghost foul-choice-again', 'They play again') as HTMLButtonElement
+  const again = el('button', 'ghost foul-choice-again', 'Balls back, they replay') as HTMLButtonElement
   again.type = 'button'
   const send = (playAgain: boolean): void => {
     if (foulChoiceSent || !activeMatchId || !myFoulChoicePending()) return
@@ -3768,7 +3835,7 @@ function ensureFoulChoiceUi(): void {
   card.appendChild(actions)
   document.body.appendChild(card)
   foulChoiceCard = card
-  const wait = el('div', 'foul-choice-wait', 'Opponent is choosing: play on, or make you play again')
+  const wait = el('div', 'foul-choice-wait', 'Opponent is choosing: play on, or put the balls back and make you play again')
   wait.hidden = true
   document.body.appendChild(wait)
   foulChoiceWaitNote = wait
@@ -3869,6 +3936,7 @@ function abandonPlayback(): void {
   shotStartBalls = null
   queuedUpdate = null
   shotInFlight = false
+  markTableReleased()
   deferredPots = []
   // Nothing is being watched any more, so there is no shot to acknowledge. Clearing
   // the token stops a later finish from claiming credit for a replay that was
@@ -3907,8 +3975,12 @@ function applyGameUpdate(data: GameUpdatePayload): void {
   // Any other table message adopts the timing it carries — a fresh 30 when the table
   // has settled on the same visit or a new one, nothing when the server has stopped
   // the clock outright.
-  if (data.playback) shotTimer.freeze()
-  else applyTurnTiming(data.turn)
+  if (data.playback) {
+    shotTimer.freeze()
+    tableReleased = false
+  } else {
+    applyTurnTiming(data.turn)
+  }
 
   // What the shot turned out to be is reported when the balls have stopped moving, not
   // when the snapshot saying so arrives. That covers the verdict's sound and its message,
@@ -4136,6 +4208,7 @@ function handleSocketEvents(socket: Socket): void {
   // adopted like any other timing.
   socket.on('turn:clock', (data: { turn?: TurnTiming }) => {
     applyTurnTiming(data.turn ?? null)
+    markTableReleased()
   })
   socket.on('match:end', (data: { winnerSeat: number; reason?: string; framesWon?: [number, number] }) => {
     if (data.framesWon) framesWon = data.framesWon
@@ -4213,6 +4286,12 @@ function handleSocketEvents(socket: Socket): void {
       }
     }
     toast(`Server: ${data.code ?? 'unknown error'}`, 'error')
+  })
+  socket.on('announcement:new', (a: Announcement) => {
+    receiveAnnouncement(a)
+    // Never over a match: a line in the corner now, the card back in the lobby.
+    if (activeMatchId) toast(`Announcement: ${a.title}`)
+    else showNextAnnouncement()
   })
   socket.on('notification:new', (n: NotificationItem) => {
     notifications.unshift(n)
@@ -4729,6 +4808,7 @@ function finishShot(): void {
   // The token identifies the replay that was just watched, so an acknowledgement that
   // arrives after the server has moved on cannot release a newer hold.
   if (activeMatchId) getSocket().emit('shot:done', { matchId: activeMatchId, token: playedToken })
+  if (!tableReleased && releaseWaitTimer === null) releaseWaitTimer = window.setTimeout(markTableReleased, RELEASE_WAIT_MS)
   syncMusicDuck()
 }
 
@@ -4921,6 +5001,7 @@ async function init(): Promise<void> {
     handleSocketEvents(connectSocket(sessionToken))
     void fetchNotifications()
     void fetchIncomingChallenges()
+    void fetchAnnouncements()
   }
   // A stored token is checked before anything uses it; a stale one is dropped and a
   // still-valid session cookie is exchanged for a fresh one. When the server cannot be
@@ -4950,6 +5031,7 @@ async function init(): Promise<void> {
     }
   }
   if (!currentUser && unreachable) setAuthOfflineNotice(true)
+  checkingSession = false
   finishBoot()
 }
 

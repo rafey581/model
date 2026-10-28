@@ -120,6 +120,22 @@ export interface FrameState {
 export interface FoulChoice {
   offender: number
   chooser: number
+  /**
+   * The table as it stood before the foul. When the chooser makes the offender play again,
+   * every ball goes back here first, so the offender replays the shot they fouled rather
+   * than playing on from the mess it left. The penalty points stand.
+   */
+  restore?: FoulRestore
+}
+
+/** A copy of the parts of a frame a foul can change, taken just before the stroke. */
+export interface FoulRestore {
+  balls: BallState[]
+  ballOn: BallOn
+  colorsRemaining: number[]
+  remainingReds: number
+  cueInHand: boolean
+  cueInHandInD: boolean
 }
 
 export interface MatchState {

@@ -77,6 +77,8 @@ export type ExecutionState =
 
 /** How long the bot waits, after being given a settled table, before it fires. */
 export const BOT_SHOT_DELAY_MS = 1200
+/** After one player's phone has finished a replay, how long the other's gets (see `finishedSeats`). */
+export const PLAYBACK_FINISH_GRACE_MS = 10_000
 
 export class GameRoom {
   readonly matchId: string
@@ -174,6 +176,25 @@ export class GameRoom {
    * released rather than left to stall against the backstop.
    */
   private replayWatchers = new Set<string>()
+  /**
+   * The seats that were watching when the hold began, and the ones that have since
+   * reported the replay finished. The hold ends when every watching seat has reported,
+   * not at the first report.
+   *
+   * Ending it at the first report is what put two phones seconds apart. The striker's
+   * own phone plays their shot the instant it is struck, while the opponent's waits for
+   * the server and then shows the cue winding up, so the striker always finishes first.
+   * Released then, the striker could play again while the opponent was still watching
+   * the last shot, and every shot of a break pushed the opponent further behind.
+   */
+  private watchingSeats = new Set<number>()
+  private finishedSeats = new Set<number>()
+  /**
+   * Once one seat has finished, how long the others get. Enough for the opponent's cue
+   * wind-up and a highlight; short enough that a phone put in a pocket mid-replay (whose
+   * report will never come) holds the table for seconds, not for the whole backstop.
+   */
+  private finishGraceTimer: NodeJS.Timeout | null = null
   /**
    * Backstop for the playback gate. A client that never reports back, because it
    * was closed or its tab was backgrounded, must not stall the match for ever, so
@@ -296,8 +317,25 @@ export class GameRoom {
    */
   private releaseHoldIfNoWatchers(): void {
     if (!this.awaitingPlayback) return
-    if (this.replayWatchers.size > 0) return
+    if (this.seatsStillWatching().length > 0) return
     this.releasePlayback()
+  }
+
+  /**
+   * Seats that were watching the held shot, still have a socket that saw it start, and
+   * have not reported it finished. The hold lasts while this is not empty.
+   */
+  private seatsStillWatching(): number[] {
+    const waiting: number[] = []
+    for (const seat of this.watchingSeats) {
+      if (this.finishedSeats.has(seat)) continue
+      const sockets = [...(this.socketIds.get(seat) ?? [])]
+      // A seat that has joined again since the hold began was sent the settled table and
+      // dropped the replay, so it is not watching any more, whatever its old socket says.
+      const rejoined = sockets.some((id) => !this.replayWatchers.has(id))
+      if (!rejoined && sockets.length > 0) waiting.push(seat)
+    }
+    return waiting
   }
 
   /** True while at least one seated player still has a socket attached. */
@@ -957,6 +995,10 @@ return { accepted: true }
     // Everyone attached right now is about to start watching this shot, so each of
     // them is able to end the hold. Sockets that arrive later are not added.
     this.replayWatchers = new Set(this.allSocketIds())
+    this.watchingSeats = new Set([...this.socketIds.entries()].filter(([, sockets]) => sockets.size > 0).map(([seat]) => seat))
+    this.finishedSeats = new Set()
+    if (this.finishGraceTimer) clearTimeout(this.finishGraceTimer)
+    this.finishGraceTimer = null
     if (this.playbackTimer) clearTimeout(this.playbackTimer)
     const budgetMs = (playback.duration / SHOT_PLAYBACK_SPEED) * 1000
     this.playbackTimer = setTimeout(() => {
@@ -998,13 +1040,29 @@ return { accepted: true }
     // token it was sent, so there is no legitimate reason to accept one without it.
     if (token !== this.heldToken) return
     if (!this.replayWatchers.has(socketId)) return
-    this.releasePlayback()
+    const seat = this.seatOfUser.get(userId)!
+    this.finishedSeats.add(seat)
+    if (this.seatsStillWatching().length === 0) {
+      this.releasePlayback()
+      return
+    }
+    // Somebody is still watching. They get a short grace, not the whole backstop.
+    if (!this.finishGraceTimer) {
+      this.finishGraceTimer = setTimeout(() => {
+        this.finishGraceTimer = null
+        this.releasePlayback()
+      }, PLAYBACK_FINISH_GRACE_MS)
+    }
   }
 
   private releasePlayback(): void {
     if (this.playbackTimer) {
       clearTimeout(this.playbackTimer)
       this.playbackTimer = null
+    }
+    if (this.finishGraceTimer) {
+      clearTimeout(this.finishGraceTimer)
+      this.finishGraceTimer = null
     }
     if (!this.awaitingPlayback) return
     this.awaitingPlayback = false
@@ -1013,6 +1071,8 @@ return { accepted: true }
     // it to release.
     this.heldToken = null
     this.replayWatchers = new Set()
+    this.watchingSeats = new Set()
+    this.finishedSeats = new Set()
     this.armTurnTimer()
     // The release is the moment the next visit's clock actually starts, and no table
     // broadcast follows it, so the fresh deadline is announced here. This is what

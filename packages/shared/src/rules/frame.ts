@@ -3,7 +3,7 @@ import { layoutTableBalls, pocketPositions } from '../physics/layout.js'
 import { simulateStroke } from '../physics/world.js'
 import type { SimOptions } from '../physics/world.js'
 import type { SimKeyframe, SimResult, SimShot } from '../events.js'
-import { buildInitialBalls, type FrameState, type MatchState } from '../state.js'
+import { buildInitialBalls, type FoulChoice, type FoulRestore, type FrameState, type MatchState } from '../state.js'
 import { vec, type Vec2 } from '../vec.js'
 import { applyResolution, resolveStroke, respotBall, lowestRemainingColour, isColourId, isRedId } from './snooker.js'
 import type { StrokeResolution } from './snooker.js'
@@ -41,6 +41,8 @@ export function applyStroke(
   shot: SimShot & { cuePos?: { x: number; y: number } },
   simOptions: SimOptions = {}
 ): StrokeOutcome {
+  // Taken before the cue ball is placed, so a replay after a foul starts with it back in hand.
+  const before = restorePoint(frame)
   placeCueIfInHand(frame, shot)
   // A stroke played is the choice made: whoever plays it has chosen to play on.
   frame.foulChoice = null
@@ -68,17 +70,32 @@ export function applyStroke(
   const end = maybeEndFrame(frame)
   // A foul hands the opponent the choice of playing on or making the offender play again.
   if (resolution.foul && !end.frameEnded && frame.turnIndex !== shooterIndex) {
-    frame.foulChoice = { offender: shooterIndex, chooser: frame.turnIndex }
+    frame.foulChoice = { offender: shooterIndex, chooser: frame.turnIndex, restore: before }
   }
   alignPlaybackWithFrame(sim, frame)
   return { resolution, sim, frameEnded: end.frameEnded, frameWinner: end.frameWinner, pottedRedsCount }
 }
 
+function restorePoint(frame: FrameState): FoulRestore {
+  return {
+    balls: frame.balls.map(copyBall),
+    ballOn: typeof frame.ballOn === 'object' ? { ...frame.ballOn } : frame.ballOn,
+    colorsRemaining: [...frame.colorsRemaining],
+    remainingReds: frame.remainingReds,
+    cueInHand: frame.cueInHand,
+    cueInHandInD: frame.cueInHandInD
+  }
+}
+
+function copyBall<T extends { pos: Vec2; vel: Vec2; spin: Vec2 }>(ball: T): T {
+  return { ...ball, pos: { ...ball.pos }, vel: { ...ball.vel }, spin: { ...ball.spin } }
+}
+
 /**
- * The player a foul was committed against makes their choice. `playAgain` puts the
- * offender back at the table to play from the position as it is (with the cue ball in hand
- * if the foul left it in hand); otherwise the chooser plays on. Either way it is a fresh
- * visit, and the ball on is the one the foul left.
+ * The player a foul was committed against makes their choice. `playAgain` puts every ball
+ * back where it was before the foul and gives the offender the same shot again (the
+ * penalty points stand); otherwise the chooser plays on from the position as it is. Either
+ * way it is a fresh visit.
  *
  * Returns false, changing nothing, when there is no choice pending or this is not the
  * player whose choice it is.
@@ -90,6 +107,16 @@ export function applyFoulChoice(frame: FrameState, chooser: number, playAgain: b
   if (playAgain) {
     frame.turnIndex = choice.offender
     frame.breakScore = 0
+    const restore = choice.restore
+    if (restore) {
+      frame.balls = restore.balls.map(copyBall)
+      frame.ballOn = typeof restore.ballOn === 'object' ? { ...restore.ballOn } : restore.ballOn
+      frame.colorsRemaining = new Set(restore.colorsRemaining)
+      frame.remainingReds = restore.remainingReds
+      frame.cueInHand = restore.cueInHand
+      frame.cueInHandInD = restore.cueInHandInD
+      frame.phase = frame.remainingReds === 0 && frame.colorsRemaining.size > 0 ? 'COLOURING_UP' : 'PLAYING'
+    }
   }
   return true
 }
@@ -420,7 +447,7 @@ export interface FrameSnapshot {
   cueInHandInD?: boolean
   winnerIndex?: number
   /** A foul's choice still to be made (see FrameState.foulChoice); absent when there is none. */
-  foulChoice?: { offender: number; chooser: number } | null
+  foulChoice?: FoulChoice | null
 }
 
 export function frameSnapshot(frame: FrameState): FrameSnapshot {

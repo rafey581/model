@@ -10,6 +10,7 @@ import { noteRejectedShot, recordFraudFlag } from '../fraud/index.js'
 import { verifyToken } from '../auth/guards.js'
 import { settleMatch, refundMatch } from '../matches/service.js'
 import { notify, setNotificationPusher } from '../notifications/service.js'
+import { setAnnouncementBroadcaster } from '../announcements/service.js'
 import { setChallengeSenders, expireStaleChallenges } from '../challenges/service.js'
 import { isMaintenance, getSettings } from '../settings/index.js'
 import { PRACTICE_DAILY_FREE_LIMIT } from '@snooker/shared'
@@ -115,6 +116,11 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
 
   setNotificationPusher((userId, notification) => {
     io.to(`user:${userId}`).emit('notification:new', notification)
+  })
+
+  // Announcements go to every connected player at once; the rest see them on next open.
+  setAnnouncementBroadcaster((announcement) => {
+    io.emit('announcement:new', announcement)
   })
 
   // Challenge events are transient — a fresh table offer, or the news that one
