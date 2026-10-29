@@ -47,6 +47,14 @@ const envSchema = z.object({
   // welcome grant only; it is deliberately small (1 USDT) because the invitation
   // programme, not the grant, is what funds a new player.
   START_BALANCE: z.coerce.number().default(1),
+  // One account per phone: how many accounts may be created on one device (the app sends
+  // the phone's Android ID). Raise it to allow, say, a shared family phone.
+  MAX_ACCOUNTS_PER_DEVICE: z.coerce.number().int().min(1).default(1),
+  // Sign-up from an app too old to send a device id is refused (with "update the app").
+  REQUIRE_DEVICE_ID_FOR_SIGNUP: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
   MATCH_TURN_TIMEOUT_SEC: z.coerce.number().default(DEFAULT_TURN_TIMEOUT_SEC),
   MATCH_RECONNECT_GRACE_SEC: z.coerce.number().default(120),
   COMMISSION_PCT: z.coerce.number().default(0.1),

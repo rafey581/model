@@ -1,4 +1,5 @@
 import { APP_TITLE } from '@snooker/shared'
+import { getDeviceId } from './deviceId.js'
 import { api, storeToken } from './game/network.js'
 
 /**
@@ -225,7 +226,8 @@ function renderSignupForm(
           email,
           phone,
           password,
-          ref: refInput.value.trim() || undefined
+          ref: refInput.value.trim() || undefined,
+          deviceId: await getDeviceId()
         }
       })
       completeSignIn(res.token)
@@ -277,7 +279,7 @@ function renderLoginForm(
     try {
       const res = await api<{ user: AuthUserShape; token: string }>('/auth/login', {
         method: 'POST',
-        body: { username: usernameInput.value.trim(), password: passwordInput.value }
+        body: { username: usernameInput.value.trim(), password: passwordInput.value, deviceId: await getDeviceId() }
       })
       completeSignIn(res.token)
     } catch (error: unknown) {

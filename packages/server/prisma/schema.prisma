@@ -71,6 +71,7 @@ model User {
   // Support chat
   supportThread      SupportThread?
   supportMessages    SupportMessage[]
+  devices            DeviceAccount[]
   assignedSupportThreads SupportThread[] @relation("SupportAssigned")
   badges             UserBadge[]
   adminDevices       AdminDevice[]
@@ -509,4 +510,19 @@ model Announcement {
   withdrawnAt DateTime?
 
   @@index([withdrawnAt, createdAt])
+}
+
+/// Which accounts have been used from which phone, for the one-account-per-phone rule.
+/// `deviceId` is "android:<ANDROID_ID>" from the app, or "web:<random>" from a browser.
+model DeviceAccount {
+  deviceId    String
+  userId      String
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  /// True for the account that was created on this device (not merely logged in on it).
+  createdHere Boolean  @default(false)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([deviceId, userId])
+  @@index([userId])
 }

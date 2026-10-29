@@ -76,6 +76,8 @@ The file **must** be `packages/server/.env`. Set at least:
 | `DEPOSIT_WALLET_ADDRESS` | `7oK51mdQkub5kMsZoTMFRVpcsfcNvrGKTigu9wWbvMyR` (Solana; already the built-in default). The server will not start with an invalid Solana address |
 | `DEPOSIT_CURRENCIES` | `USDT,USDC` (both on Solana, each credited 1:1) |
 | `AUTH_ALLOW_DIRECT_REGISTER` | `true` (players sign up straight away; no email service is used) |
+| `MAX_ACCOUNTS_PER_DEVICE` | `1` (one account per phone; raise to allow e.g. a shared family phone) |
+| `REQUIRE_DEVICE_ID_FOR_SIGNUP` | `true` (an app too old to send its phone id is told to update before it can sign up) |
 | `ADMIN_ALLOWED_IPS` | **leave empty**: staff phones on mobile data change IP constantly |
 | `ADMIN_PUSH_ENABLED` | `false` (the staff app rings by itself while open; no Firebase or other service) |
 | `REAL_MONEY_ENABLED` | `false` |

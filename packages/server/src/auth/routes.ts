@@ -11,6 +11,7 @@ import { checkUsername, isValidUsernameFormat } from './username.js'
 import { normalizeEmail } from './otp.js'
 import { notify } from '../notifications/service.js'
 import { assertValidReferralCode, pickReferralCode, ReferralError } from '../referrals/service.js'
+import { assertDeviceCanSignUp, DEVICE_ID_PATTERN, DeviceIdRequiredError, DeviceLimitError, recordLoginDevice, recordSignupDevice } from '../devices/service.js'
 
 /**
  * Player authentication.
@@ -25,14 +26,17 @@ const registerSchema = z.object({
   password: z.string().min(6).max(72),
   name: z.string().trim().min(2).max(80).optional(),
   phone: z.string().trim().min(7).max(20),
-  ref: z.string().trim().max(32).optional()
+  ref: z.string().trim().max(32).optional(),
+  // Which phone this is (one account per phone). Malformed ids are ignored rather than refused.
+  deviceId: z.string().trim().max(130).optional()
 })
 
 const loginSchema = z
   .object({
     username: z.string().trim().min(1).max(160).optional(),
     email: z.string().trim().min(1).max(160).optional(),
-    password: z.string().min(1)
+    password: z.string().min(1),
+    deviceId: z.string().trim().max(130).optional()
   })
   .refine((value) => Boolean(value.username || value.email), { message: 'username or email is required' })
 
@@ -60,6 +64,7 @@ async function createAccount(
   }
 
   const { email, username, password, name, phone, ref } = body
+  const deviceId = body.deviceId && DEVICE_ID_PATTERN.test(body.deviceId) ? body.deviceId : undefined
   const value = username.trim()
   if (!isValidUsernameFormat(value)) {
     const check = await checkUsername(value)
@@ -89,6 +94,7 @@ async function createAccount(
 
   try {
     const user = await prisma.$transaction(async (tx) => {
+      await assertDeviceCanSignUp(tx, deviceId)
       const created = await tx.user.create({
         data: {
           email: normalizedEmail,
@@ -118,6 +124,7 @@ async function createAccount(
           meta: { description: 'welcome balance (USDT)' }
         }
       })
+      await recordSignupDevice(tx, deviceId, created.id)
       return created
     })
 
@@ -132,6 +139,8 @@ async function createAccount(
     }
     return reply.send({ ok: true, data: { user: toPublicUser(user), token } })
   } catch (error) {
+    if (error instanceof DeviceLimitError) return reply.code(409).send({ ok: false, error: error.message, code: 'device_limit' })
+    if (error instanceof DeviceIdRequiredError) return reply.code(426).send({ ok: false, error: error.message, code: 'update_required' })
     if (isUniqueViolation(error, 'email')) {
       return reply.code(409).send({ ok: false, error: 'That email address is already registered.' })
     }
@@ -250,6 +259,8 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     if ((await isMaintenance()) && user.role !== 'ADMIN' && user.role !== 'SUPERADMIN') {
       return reply.code(503).send({ ok: false, error: 'maintenance in progress' })
     }
+    const deviceId = parsed.data.deviceId && DEVICE_ID_PATTERN.test(parsed.data.deviceId) ? parsed.data.deviceId : undefined
+    await recordLoginDevice(deviceId, user.id)
     const token = issueSession(reply, user)
     return reply.send({ ok: true, data: { user: toPublicUser(user), token } })
   })

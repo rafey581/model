@@ -83,6 +83,9 @@ importers:
       '@capacitor/core':
         specifier: 7.6.9
         version: 7.6.9
+      '@capacitor/device':
+        specifier: ^7.0.5
+        version: 7.0.5(@capacitor/core@7.6.9)
       '@fontsource/inter':
         specifier: ^5.3.0
         version: 5.3.0
@@ -599,6 +602,11 @@ packages:
 
   '@capacitor/core@7.6.9':
     resolution: {integrity: sha512-4DOh/xySC9S5ryhUIqpOppasIyi2WiTdF0JuZ/2DEs+vf5eunRzHDdNYBp1snA3faHciTw/3SVGXfR+WkYxsMA==}
+
+  '@capacitor/device@7.0.5':
+    resolution: {integrity: sha512-tf6BYeQMBARNLKELQq2RGsvG3z03oM/ga+aqVhvE8M4IM8+h/516eeSz07Eqm4+yySGaQFT+2rIkpJrvA7gaAA==}
+    peerDependencies:
+      '@capacitor/core': '>=7.0.0'
 
   '@dimforge/rapier3d-compat@0.12.0':
     resolution: {integrity: sha512-uekIGetywIgopfD97oDL5PfeezkFpNhwlzlaEYNOA0N6ghdsOvh/HYjSMek5Q2O1PYvRSDFcqFVJl4r4ZBwOow==}
@@ -4969,6 +4977,10 @@ snapshots:
   '@capacitor/core@7.6.9':
     dependencies:
       tslib: 2.8.1
+
+  '@capacitor/device@7.0.5(@capacitor/core@7.6.9)':
+    dependencies:
+      '@capacitor/core': 7.6.9
 
   '@dimforge/rapier3d-compat@0.12.0': {}
 

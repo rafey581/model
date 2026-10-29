@@ -173,7 +173,10 @@ export async function api<T>(
     // asked first. After that, a status we have better wording for wins over the
     // server's own phrasing, and only then does the server's string get used.
     if (isFlattenedValidation(serverError)) throw new Error(describeValidation(serverError))
-    const spoken = serverErrorWording[response.status]
+    // An answer that names its own reason (`code`, e.g. one account per phone) was written
+    // for the player already, so it is shown as sent rather than replaced.
+    const coded = typeof (json as { code?: unknown } | null)?.code === 'string'
+    const spoken = coded ? undefined : serverErrorWording[response.status]
     if (spoken) throw new Error(spoken)
     if (typeof serverError === 'string' && serverError.length > 0) throw new Error(serverError)
     throw new Error(statusMessage(response.status))
