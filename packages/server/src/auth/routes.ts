@@ -359,6 +359,10 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       if (!payload) return reply.send({ ok: true, data: { authenticated: false } })
       const user = await prisma.user.findUnique({ where: { id: payload.id } })
       if (!user || user.status !== 'ACTIVE') return reply.send({ ok: true, data: { authenticated: false } })
+      // A player who stays signed in never types a password again, so the phone is
+      // recorded here too, on the check the app makes every time it opens.
+      const deviceId = (request.query as { deviceId?: string } | undefined)?.deviceId
+      if (deviceId && DEVICE_ID_PATTERN.test(deviceId)) await recordLoginDevice(deviceId, user.id)
       return reply.send({ ok: true, data: { authenticated: true, user: toPublicUser(user) } })
     } catch {
       return reply.send({ ok: true, data: { authenticated: false } })

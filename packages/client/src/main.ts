@@ -51,6 +51,7 @@ import { fillBalance } from './lobby/casino.js'
 import { xpBar } from './lobby/progress.js'
 import type { LobbyProgress } from './lobby/types.js'
 import { renderAuthScreen, setAuthOfflineNotice } from './auth.js'
+import { getDeviceId } from './deviceId.js'
 import { receiveAnnouncement, resetAnnouncements, setAnnouncements, showNextAnnouncement, type Announcement } from './announcements.js'
 import {
   confirmPlacement,
@@ -5010,7 +5011,10 @@ async function init(): Promise<void> {
   let unreachable = false
   if (token) {
     try {
-      const data = await api<{ authenticated: boolean; user?: SessionUser }>('/auth/status', { timeoutMs: FAST_TIMEOUT_MS })
+      const deviceId = await getDeviceId()
+      const data = await api<{ authenticated: boolean; user?: SessionUser }>(`/auth/status?deviceId=${encodeURIComponent(deviceId)}`, {
+        timeoutMs: FAST_TIMEOUT_MS
+      })
       if (data.authenticated && data.user) startSession(data.user, token)
       else throw new Error('stale session')
     } catch (error) {

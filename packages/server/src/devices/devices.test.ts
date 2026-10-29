@@ -79,6 +79,16 @@ describe('one account per phone', () => {
     expect(codes).toEqual([200, 409, 409])
   })
 
+  it('records the phone of a player who stays signed in, when the app opens', async () => {
+    const own = await signup(`android:${TAG}gggg`)
+    expect(own.statusCode).toBe(200)
+    const token = (own.json() as { data: { token: string } }).data.token
+    const status = await app.inject({ method: 'GET', url: `/api/auth/status?deviceId=android:${TAG}hhhh`, headers: { authorization: `Bearer ${token}` } })
+    expect(status.statusCode).toBe(200)
+    const res = await signup(`android:${TAG}hhhh`)
+    expect(res.statusCode).toBe(409)
+  })
+
   it('never blocks a login, whatever the phone', async () => {
     const own = await signup(`android:${TAG}ffff`)
     expect(own.statusCode).toBe(200)
