@@ -360,6 +360,19 @@ export class GameRoom {
   }
 
   /**
+   * Whether this player may show their aim to the table right now: it is their visit and
+   * the balls are at rest. Their aim is relayed live so the other phone sees the real
+   * player lining up, not a made-up cue (see `aim:live` in index.ts).
+   */
+  canShowAim(userId: string): number | null {
+    const frame = this.match.currentFrame
+    const seat = this.seatOfUser.get(userId)
+    if (!frame || seat === undefined || seat !== frame.turnIndex) return null
+    if (this.matchType === 'PRACTICE' || this.simulating || this.awaitingPlayback) return null
+    return seat
+  }
+
+  /**
    * Which execution state the room is in right now.
    *
    * Derived, never stored: every branch below reads a flag that is already

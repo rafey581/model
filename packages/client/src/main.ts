@@ -3671,6 +3671,7 @@ function renderGame(): void {
       return isInputAllowed()
     },
     onChange: (aim) => {
+      sendLiveAim(aim.angle, aim.power)
       hud?.setPower(aim.power)
       // The dial mirrors whatever wrote the spin — arrows, its own drag, a reset —
       // because both controls are views of this one pair of numbers.
@@ -3795,6 +3796,30 @@ function isVisitPlayable(): boolean {
     !myFoulChoicePending()
   )
 }
+
+/**
+ * My aim, live, for the other player's screen (online matches only): where my cue points
+ * and how far back I am pulling. Sent at most ten times a second, with the last position
+ * always delivered, so their screen shows me lining up rather than a cue moving by itself.
+ */
+let liveAimSentAt = 0
+let liveAimTimer: number | null = null
+let liveAimPending: { angle: number; power: number } | null = null
+function sendLiveAim(angle: number, power: number): void {
+  if (!activeMatchId || activeMatchIsPractice || !isVisitPlayable()) return
+  liveAimPending = { angle, power }
+  const flush = (): void => {
+    liveAimTimer = null
+    if (!liveAimPending || !activeMatchId) return
+    getSocket().emit('aim:live', { matchId: activeMatchId, ...liveAimPending })
+    liveAimPending = null
+    liveAimSentAt = performance.now()
+  }
+  const wait = LIVE_AIM_INTERVAL_MS - (performance.now() - liveAimSentAt)
+  if (wait <= 0) flush()
+  else if (liveAimTimer === null) liveAimTimer = window.setTimeout(flush, wait)
+}
+const LIVE_AIM_INTERVAL_MS = 100
 
 /** Whether a foul was just committed against me and the choice of what happens next is mine. */
 function myFoulChoicePending(): boolean {
@@ -4208,6 +4233,10 @@ function handleSocketEvents(socket: Socket): void {
   // — a fresh turn the moment a replay is released, a stop when the striker goes away
   // — and those moments carry no frame of their own, so they are announced here and
   // adopted like any other timing.
+  socket.on('opponent:aim', (data: { seat: number; angle: number; power: number }) => {
+    if (data.seat === mySeat || !Number.isFinite(data.angle) || !Number.isFinite(data.power)) return
+    scene3d?.setOpponentLiveAim(data.angle, data.power)
+  })
   socket.on('turn:clock', (data: { turn?: TurnTiming }) => {
     applyTurnTiming(data.turn ?? null)
     markTableReleased()
@@ -5039,6 +5068,20 @@ async function init(): Promise<void> {
   if (!currentUser && unreachable) setAuthOfflineNotice(true)
   checkingSession = false
   finishBoot()
+}
+
+// Debug only: opened with ?tabledebug, the page reports how its drawn table compares
+// with the server's (see Scene3D.debugTableCheck). Nothing is exposed otherwise.
+if (new URLSearchParams(window.location.search).has('tabledebug')) {
+  ;(window as unknown as { __tableCheck: () => unknown }).__tableCheck = () => ({
+    matchId: activeMatchId,
+    seat: mySeat,
+    settled: shotPlayer === null && predictedShot === null && queuedUpdate === null && !shotInFlight,
+    turn: frame?.turnIndex ?? null,
+    balls: frame?.balls ?? [],
+    frame,
+    issues: frame && scene3d ? scene3d.debugTableCheck(frame.balls) : ['no table']
+  })
 }
 
 void init()

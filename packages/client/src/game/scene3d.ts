@@ -271,6 +271,8 @@ const SPIN_GUIDE_DOT_MM = 1.9
 /** The vertical, for turning a ball about it (side spin). */
 const UP_AXIS = new THREE.Vector3(0, 1, 0)
 const tableX = (x: number): number => x - HALF_L
+/** How long a relayed opponent aim is followed after the last update before the cue rests again. */
+const OPPONENT_AIM_FRESH_MS = 4000
 const tableZ = (y: number): number => y - HALF_W
 /** Stands in for an undrawn table, so the camera's per-frame walk allocates nothing. */
 const NO_BALLS: readonly FrameSnapshotData['balls'][number][] = []
@@ -1693,6 +1695,12 @@ export class Scene3D implements VenueHost {
   /** Whose turn and whether a shot is replaying, as the game has it right now. */
   private liveSeatKnown = false
   private liveOpponentTurn = false
+  /**
+   * The opponent's real aim, relayed from their phone while they line up (opponent:aim):
+   * where their cue points and how far it is drawn back. The cue on this screen follows it,
+   * so what is shown is the opponent playing, not a cue moving on its own.
+   */
+  private opponentLiveAim: { angle: number; power: number; at: number } | null = null
   private liveReplay = false
   /** Whether the shot being replayed was the opponent's. Latched when the replay starts. */
   private replayByOpponent = false
@@ -4463,7 +4471,11 @@ const outerL = APRON_OUTER_L
     // played it; the snapshot arriving with it may already name the other player.
     if (replaying && !this.liveReplay) this.replayByOpponent = this.liveOpponentTurn
     this.liveSeatKnown = snapshot !== null && options.youSeat !== undefined
+    const wasOpponentTurn = this.liveOpponentTurn
     this.liveOpponentTurn = this.liveSeatKnown && snapshot!.turnIndex !== options.youSeat
+    // A new visit, or a shot under way, starts the relayed aim afresh: the last line must
+    // not reappear on the next visit.
+    if (this.liveOpponentTurn !== wasOpponentTurn || (replaying && !this.liveReplay)) this.opponentLiveAim = null
     this.liveReplay = replaying
     if (SPECTATOR_CAM.enabled && snapshot && options.youSeat !== undefined) {
       // The venue cannot show an opponent's cue without knowing which seat is the
@@ -5525,7 +5537,14 @@ const outerL = APRON_OUTER_L
       this.venue.stopAddressingCue()
       return
     }
-    this.venue.addressCue(cue.x, cue.y, addressHeading(cue, snapshot.balls, snapshot.ballOn))
+    const live = this.opponentLiveAim && performance.now() - this.opponentLiveAim.at < OPPONENT_AIM_FRESH_MS ? this.opponentLiveAim : null
+    if (live) this.venue.addressCue(cue.x, cue.y, live.angle, live.power)
+    else this.venue.addressCue(cue.x, cue.y, addressHeading(cue, snapshot.balls, snapshot.ballOn), 0)
+  }
+
+  /** The opponent's live aim, as their phone reports it. Picture only. */
+  setOpponentLiveAim(angle: number, power: number): void {
+    this.opponentLiveAim = { angle, power, at: performance.now() }
   }
 
   /**
@@ -5839,6 +5858,35 @@ const outerL = APRON_OUTER_L
     }
     this.renderer.render(this.scene, this.camera)
   }
+
+  /**
+   * Debug only (the page is opened with ?tabledebug): what is drawn for each ball that
+   * disagrees with the table it was given. Empty when every ball is where the table
+   * says, shown or hidden as it says, and wearing its own colour.
+   */
+  debugTableCheck(balls: ReadonlyArray<{ id: number; x: number; y: number; potted: boolean }>): string[] {
+    const issues: string[] = []
+    for (const ball of balls) {
+      const rig = this.balls.get(ball.id)
+      if (!rig) {
+        if (!ball.potted) issues.push(`ball ${ball.id}: on the table but never drawn`)
+        continue
+      }
+      const shown = rig.group.visible && !rig.sinking
+      if (ball.potted && shown) issues.push(`ball ${ball.id}: potted but still drawn`)
+      if (!ball.potted && !rig.group.visible) issues.push(`ball ${ball.id}: on the table but hidden`)
+      if (!ball.potted && rig.group.visible && !rig.rising) {
+        const off = Math.hypot(rig.group.position.x - tableX(ball.x), rig.group.position.z - tableZ(ball.y))
+        if (off > 25) issues.push(`ball ${ball.id}: drawn ${Math.round(off)}mm from where it is`)
+      }
+      const material = rig.material as { color?: THREE.Color }
+      if (ball.id !== BALL_IDS.CUE && material.color && material.color.getHex() !== ballColor(ball.id)) {
+        issues.push(`ball ${ball.id}: drawn #${material.color.getHex().toString(16)} instead of #${ballColor(ball.id).toString(16)}`)
+      }
+    }
+    return issues
+  }
+
 
   dispose(): void {
     this.venue?.dispose()

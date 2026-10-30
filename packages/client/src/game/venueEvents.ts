@@ -74,7 +74,7 @@ export interface VenueEvents {
   /** True while the opponent's cue is lining up or drawing back, before it strikes. */
   cueWinding(): boolean
   /** Stands the opponent's cue at the cue ball, before their shot is known. Table coordinates. */
-  addressCue(x: number, y: number, angle: number): void
+  addressCue(x: number, y: number, angle: number, power?: number): void
   /** Takes an addressing cue away; a shot being played is left alone. */
   stopAddressingCue(): void
   /**
@@ -438,8 +438,8 @@ export function buildVenueEvents(host: VenueHost, config: VenueConfig = VENUE_CO
     cueWinding(): boolean {
       return cue.winding()
     },
-    addressCue(x: number, y: number, angle: number): void {
-      cue.address(x, y, angle)
+    addressCue(x: number, y: number, angle: number, power?: number): void {
+      cue.address(x, y, angle, power)
     },
     stopAddressingCue(): void {
       cue.stopAddressing()

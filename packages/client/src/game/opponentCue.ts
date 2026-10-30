@@ -66,7 +66,7 @@ export interface OpponentCue {
    * the shot's own line is not known yet, and when it arrives through `show` the cue
    * swings round to it rather than jumping. Does nothing while a shot is being played.
    */
-  address(x: number, y: number, angle: number): void
+  address(x: number, y: number, angle: number, power?: number): void
   /** Takes an addressing cue away. Leaves a shot that is being played alone. */
   stopAddressing(): void
   /** Takes it down immediately, for a frame that ended or a match that did. */
@@ -218,11 +218,16 @@ export function buildOpponentCue(config: VenueConfig = VENUE_CONFIG): OpponentCu
       clock = 0
       place(gap, shot.power)
     },
-    address(x: number, y: number, angle: number): void {
+    address(x: number, y: number, angle: number, power?: number): void {
       if (phase !== 'idle' && phase !== 'address') return
-      if (phase === 'address' && shot && shot.x === x && shot.y === y) return
+      if (phase === 'address' && shot && shot.x === x && shot.y === y) {
+        // Same ball: the player is turning the cue or drawing it back. Follow them.
+        shot.angle = angle
+        shot.power = Math.min(1, Math.max(0, power ?? 0))
+        return
+      }
       const arriving = phase === 'idle'
-      shot = { x, y, angle, power: 0 }
+      shot = { x, y, angle, power: Math.min(1, Math.max(0, power ?? 0)) }
       phase = 'address'
       if (arriving) clock = 0
       group.visible = true
@@ -244,7 +249,8 @@ export function buildOpponentCue(config: VenueConfig = VENUE_CONFIG): OpponentCu
         const arrive = 1 - ease(Math.min(1, clock / ADDRESS_ARRIVE_SECONDS))
         const settled = Math.max(0, clock - ADDRESS_ARRIVE_SECONDS)
         const feather = (1 - Math.cos(settled * Math.PI * 2 * ADDRESS_FEATHER_HZ)) * 0.5 * ADDRESS_FEATHER_MM
-        place(cfg.restGapMm + arrive * ADDRESS_ARRIVE_MM + feather, 0)
+        // Drawn back as far as the player is pulling (their live power), feathering on top.
+        place(cfg.restGapMm + arrive * ADDRESS_ARRIVE_MM + feather + cfg.drawBackMm * power, power)
         return
       }
       if (phase === 'turn') {

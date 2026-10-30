@@ -110,6 +110,28 @@ function isHeld(room: GameRoom): boolean {
   return room.handleShot(userId, SHOT).error === 'wait for the table to settle'
 }
 
+describe('live aim', () => {
+  it('lets only the striker show their aim, and only while the balls are at rest', () => {
+    const { room, cbs } = seatedRoom({ connect: ['a', 'b'] })
+    const striker = currentStriker(room)
+    const other = striker === 'user-a' ? 'user-b' : 'user-a'
+    expect(room.canShowAim(striker)).toBe(room.getSeat(striker))
+    expect(room.canShowAim(other)).toBeNull()
+    expect(room.canShowAim('stranger')).toBeNull()
+    // A shot is being watched: nobody is lining up.
+    expect(blockedReason(room)).toBeNull()
+    expect(room.canShowAim(currentStriker(room))).toBeNull()
+    void cbs
+  })
+
+  it('is never relayed in practice', () => {
+    const cbs = callbacks()
+    const room = new GameRoom(MATCH_ID, 'PRACTICE', 'BO1', 0, 'EASY', cbs, 30)
+    room.registerSocket('user-a', 0, 'sock-a')
+    expect(room.canShowAim('user-a')).toBeNull()
+  })
+})
+
 describe('playback hold', () => {
   it('refuses a second shot until the current one has been acknowledged', () => {
     const { room, cbs } = seatedRoom()

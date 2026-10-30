@@ -525,6 +525,24 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
     // message is ever broadcast. Echoing ids to the room (rather than the text)
     // keeps the render on every client in sync with the same list that validated
     // this message, and leaves the door open to localised copy later.
+    // The striker's aim, live, for the other player's screen: where the cue points and how
+    // far back it is drawn. Picture only: nothing here is a shot or changes the game. At
+    // most ten a second per socket; anything faster, malformed, or sent out of turn is
+    // dropped without a reply.
+    let lastAimAt = 0
+    socket.on('aim:live', (payload: { matchId: string; angle: number; power: number }) => {
+      const { matchId, angle, power } = payload ?? {}
+      if (typeof matchId !== 'string' || !Number.isFinite(angle) || !Number.isFinite(power)) return
+      if (Math.abs(angle) > 100 || power < 0 || power > 1) return
+      const now = Date.now()
+      if (now - lastAimAt < 90) return
+      const room = rooms.get(matchId)
+      const seat = room?.canShowAim(userId)
+      if (seat === null || seat === undefined) return
+      lastAimAt = now
+      socket.to(`match:${matchId}`).emit('opponent:aim', { seat, angle, power })
+    })
+
     socket.on('match:chat', (payload: { matchId: string; phraseId: string }) => {
       const { matchId, phraseId } = payload ?? {}
       if (!matchId || typeof phraseId !== 'string' || phraseId.length === 0) {
