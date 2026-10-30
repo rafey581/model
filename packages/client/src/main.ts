@@ -2027,9 +2027,9 @@ function render(): void {
     // The auth screen centres itself on the viewport, so the transition is applied to
     // the card rather than to a wrapper — the wrapper would be a full-height block
     // and the animation would be invisible behind the card's own entrance.
+    // The auth screen brings its own wordmark, so the header bar is left off it.
     app.className = 'app-root'
     document.body.classList.remove('home-mode', 'practice-mode')
-    app.appendChild(header())
     renderAuthScreen(app, app, toast)
   } else if (activeMatchId) {
     // No page transition here: the game fits itself to the space the header and HUD

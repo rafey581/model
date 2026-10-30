@@ -1,6 +1,7 @@
 import { APP_TITLE } from '@snooker/shared'
 import { getDeviceId } from './deviceId.js'
 import { api, storeToken } from './game/network.js'
+import './auth.css'
 
 /**
  * The public sign-in screen.
@@ -9,7 +10,7 @@ import { api, storeToken } from './game/network.js'
  * verification or one-time code is required.
  */
 
-type AuthMode = 'login' | 'signup'
+type AuthMode = 'login' | 'signup' | 'forgot'
 
 export interface AuthUserShape {
   id: string
@@ -25,15 +26,47 @@ function el(tag: string, className?: string, text?: string): HTMLElement {
   return node
 }
 
-function brandCard(): HTMLElement {
-  const brand = el('div', 'auth-brand')
-  const logo = el('div', 'auth-logo')
-  logo.innerHTML =
-    '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" fill="#0a0a0f"/><circle cx="12" cy="12" r="7" fill="#c9a84c"/><circle cx="9.5" cy="9.5" r="2.5" fill="#e8c872"/></svg>'
-  brand.appendChild(logo)
-  brand.appendChild(el('h1', 'auth-title', APP_TITLE))
-  brand.appendChild(el('p', 'auth-subtitle', 'Premium Snooker Experience'))
-  return brand
+const CROWN_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 10H5z" fill="currentColor" fill-opacity="0.25"/></svg>'
+
+/** The lobby's wordmark: crown over the name, the last word in red. */
+function wordmark(big = false): HTMLElement {
+  const mark = el('div', big ? 'ax-wordmark ax-wordmark--big' : 'ax-wordmark')
+  const crown = el('span', 'ax-wordmark__crown')
+  crown.innerHTML = CROWN_SVG
+  const word = el('span', 'ax-wordmark__word')
+  const space = APP_TITLE.lastIndexOf(' ')
+  if (space > 0) {
+    word.append(document.createTextNode(APP_TITLE.slice(0, space + 1)), el('span', 'ax-wordmark__x', APP_TITLE.slice(space + 1)))
+  } else {
+    word.textContent = APP_TITLE
+  }
+  mark.append(crown, word)
+  mark.setAttribute('role', 'heading')
+  mark.setAttribute('aria-level', '1')
+  mark.setAttribute('aria-label', APP_TITLE)
+  return mark
+}
+
+/** The picture side of the screen: the lobby's hero shot with the name over it. */
+function heroPanel(): HTMLElement {
+  const hero = el('div', 'ax-hero')
+  const img = document.createElement('img')
+  img.className = 'ax-hero__img'
+  img.src = '/lobby/hero.webp'
+  img.alt = ''
+  img.decoding = 'async'
+  hero.append(img, el('div', 'ax-hero__shade'))
+  const body = el('div', 'ax-hero__body')
+  body.appendChild(wordmark(true))
+  body.appendChild(el('p', 'ax-hero__tagline', 'Real players. Real stakes.'))
+  const perks = el('ul', 'ax-hero__perks')
+  for (const text of ['Live 1v1 matches', 'Tournaments', 'Practice vs the bot']) {
+    perks.appendChild(el('li', '', text))
+  }
+  body.appendChild(perks)
+  hero.appendChild(body)
+  return hero
 }
 
 function errorSlot(): { node: HTMLElement; show: (m: string) => void; clear: () => void } {
@@ -54,12 +87,38 @@ function errorSlot(): { node: HTMLElement; show: (m: string) => void; clear: () 
   }
 }
 
-function inputGroup(labelText: string, input: HTMLElement, extra?: HTMLElement): HTMLElement {
+let fieldSeq = 0
+
+const EYE_OPEN =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>'
+const EYE_SHUT =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7c1.6 0 3-.4 4.3-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>'
+
+function inputGroup(labelText: string, input: HTMLInputElement, extra?: HTMLElement): HTMLElement {
   const group = el('div', 'auth-input-group')
   const label = document.createElement('label')
   label.textContent = labelText
+  input.id ||= `auth-field-${++fieldSeq}`
+  label.htmlFor = input.id
   group.appendChild(label)
-  group.appendChild(input)
+  if (input.type === 'password') {
+    const wrap = el('div', 'ax-secret-wrap')
+    const eye = document.createElement('button')
+    eye.type = 'button'
+    eye.className = 'ax-eye'
+    eye.setAttribute('aria-label', 'Show password')
+    eye.innerHTML = EYE_OPEN
+    eye.addEventListener('click', () => {
+      const show = input.type === 'password'
+      input.type = show ? 'text' : 'password'
+      eye.innerHTML = show ? EYE_SHUT : EYE_OPEN
+      eye.setAttribute('aria-label', show ? 'Hide password' : 'Show password')
+    })
+    wrap.append(input, eye)
+    group.appendChild(wrap)
+  } else {
+    group.appendChild(input)
+  }
   if (extra) group.appendChild(extra)
   return group
 }
@@ -96,6 +155,11 @@ function linkButton(text: string, onClick: () => void): HTMLButtonElement {
   btn.textContent = text
   btn.addEventListener('click', onClick)
   return btn
+}
+
+/** Puts the cursor in the first field, except on a touch screen, where it would throw the keyboard over the page. */
+function focusOnDesktop(input: HTMLInputElement): void {
+  if (window.matchMedia('(pointer: fine)').matches) input.focus()
 }
 
 function completeSignIn(token: string): void {
@@ -182,6 +246,7 @@ function renderSignupForm(
 
   const submit = primaryButton('CREATE ACCOUNT')
   const switchToLogin = linkButton('Already have an account? Sign in', () => onSwitchMode('login'))
+  switchToLogin.classList.add('ax-switch')
   form.append(submit, el('div', 'auth-footer', ''), switchToLogin)
   container.replaceChildren(form)
 
@@ -257,7 +322,7 @@ function renderSignupForm(
     }
   })
 
-  nameInput.focus()
+  focusOnDesktop(nameInput)
 }
 
 function renderLoginForm(
@@ -280,12 +345,15 @@ function renderLoginForm(
   form.appendChild(inputGroup('Password', passwordInput))
 
   const submit = primaryButton('SIGN IN')
-  const forgot = linkButton('Forgot your password?', () => renderForgotForm(container, errs))
+  const forgot = linkButton('Forgot your password?', () => onSwitchMode('forgot'))
   const switchToSignup = linkButton('Create an account', () => onSwitchMode('signup'))
   const customerSupport = linkButton('Customer Support', () => {
     alert('Sign in and open Support from the menu to chat with our team. If you cannot sign in, use "Forgot your password?" to reset it first.')
   })
-  form.append(submit, el('div', 'auth-footer', ''), forgot, switchToSignup, customerSupport)
+  forgot.classList.add('ax-forgot')
+  switchToSignup.classList.add('ax-switch')
+  customerSupport.classList.add('ax-support')
+  form.append(forgot, submit, el('div', 'auth-footer', ''), switchToSignup, customerSupport)
   container.replaceChildren(form)
 
   form.addEventListener('submit', async (event) => {
@@ -303,20 +371,23 @@ function renderLoginForm(
     } catch (error: unknown) {
       submit.disabled = false
       submit.textContent = 'SIGN IN'
-      errs.show(error instanceof Error ? error.message : 'Sign in failed')
+      const message = error instanceof Error ? error.message : 'Sign in failed'
+      errs.show(message === 'invalid credentials' ? 'Wrong username or password.' : message)
       passwordInput.focus()
     }
   })
 
-  usernameInput.focus()
+  focusOnDesktop(usernameInput)
 }
 
-function renderForgotForm(container: HTMLElement, errs: ReturnType<typeof errorSlot>): void {
+function renderForgotForm(
+  container: HTMLElement,
+  errs: ReturnType<typeof errorSlot>,
+  onSwitchMode: (mode: AuthMode) => void
+): void {
   const form = document.createElement('form')
   form.className = 'auth-form'
   form.noValidate = true
-
-  form.appendChild(el('p', 'auth-help', 'Enter every detail exactly as on your account to reset your password.'))
 
   const nameInput = textInput('text', 'your full name', 'name')
   nameInput.required = true
@@ -340,8 +411,7 @@ function renderForgotForm(container: HTMLElement, errs: ReturnType<typeof errorS
   form.appendChild(inputGroup('Date of birth', dobInput))
 
   const verifyBtn = primaryButton('VERIFY DETAILS')
-  const back = linkButton('Back to sign in', () => renderLoginForm(container, errs, () => {}))
-  
+  const back = linkButton('Back to sign in', () => onSwitchMode('login'))
   form.append(verifyBtn, el('div', 'auth-footer', ''), back)
   container.replaceChildren(form)
 
@@ -369,7 +439,7 @@ function renderForgotForm(container: HTMLElement, errs: ReturnType<typeof errorS
       newPass.required = true
       form.appendChild(inputGroup('New Password', newPass))
       const resetBtn = primaryButton('RESET PASSWORD')
-      const back2 = linkButton('Back to sign in', () => renderLoginForm(container, errs, () => {}))
+      const back2 = linkButton('Back to sign in', () => onSwitchMode('login'))
       form.append(resetBtn, el('div', 'auth-footer', ''), back2)
       resetBtn.addEventListener('click', async () => {
         if (resetBtn.disabled) return
@@ -386,7 +456,7 @@ function renderForgotForm(container: HTMLElement, errs: ReturnType<typeof errorS
             body: { resetToken: res.resetToken, password: newPass.value }
           })
           errs.show('Password reset successful. Please sign in.')
-          setTimeout(() => renderLoginForm(container, errs, () => {}), 1500)
+          setTimeout(() => onSwitchMode('login'), 1500)
         } catch (error: unknown) {
           resetBtn.disabled = false
           resetBtn.textContent = 'RESET PASSWORD'
@@ -401,12 +471,15 @@ function renderForgotForm(container: HTMLElement, errs: ReturnType<typeof errorS
   })
 }
 
-function renderAuthTabs(
-  container: HTMLElement,
-  activeMode: AuthMode,
-  onSwitchMode: (mode: AuthMode) => void
-): HTMLElement {
+const HEADINGS: Record<AuthMode, { title: string; sub: string }> = {
+  login: { title: 'Welcome back', sub: 'Sign in to get back to the table.' },
+  signup: { title: 'Create your account', sub: 'One account per player. It takes a minute.' },
+  forgot: { title: 'Reset your password', sub: 'Enter every detail exactly as on your account.' }
+}
+
+function renderAuthTabs(onSwitchMode: (mode: AuthMode) => void): HTMLElement {
   const tabs = el('div', 'auth-tabs')
+  tabs.setAttribute('role', 'tablist')
   const modes: { key: AuthMode; label: string }[] = [
     { key: 'login', label: 'Login' },
     { key: 'signup', label: 'Sign Up' }
@@ -414,7 +487,9 @@ function renderAuthTabs(
   for (const { key, label } of modes) {
     const tab = document.createElement('button')
     tab.type = 'button'
-    tab.className = `auth-tab${key === activeMode ? ' active' : ''}`
+    tab.className = 'auth-tab'
+    tab.dataset.mode = key
+    tab.setAttribute('role', 'tab')
     tab.textContent = label
     tab.addEventListener('click', () => onSwitchMode(key))
     tabs.appendChild(tab)
@@ -423,37 +498,42 @@ function renderAuthTabs(
 }
 
 function renderAuthCard(root: HTMLElement, errs: ReturnType<typeof errorSlot>, initialMode: AuthMode): void {
-  const screen = el('div', 'auth-screen')
-  const card = el('div', 'auth-card')
-  card.appendChild(brandCard())
+  const screen = el('div', 'auth-screen ax-screen')
+  screen.appendChild(el('div', 'ax-backdrop'))
+  const layout = el('div', 'ax-layout')
+  layout.appendChild(heroPanel())
+
+  const card = el('div', 'auth-card ax-card')
+  card.appendChild(wordmark())
+  const title = el('h2', 'ax-card__title')
+  const sub = el('p', 'ax-card__sub')
+  card.append(title, sub)
   if (showOfflineNotice) card.appendChild(el('p', 'auth-offline', SERVER_OFFLINE_NOTICE))
-  card.appendChild(errs.node)
 
-  const body = el('div')
-  let currentMode: AuthMode = initialMode
-
+  const body = el('div', 'ax-card__body')
   const switchMode = (mode: AuthMode) => {
-    currentMode = mode
-    const tabs = card.querySelector('.auth-tabs')
-    if (tabs) {
-      for (const tab of tabs.querySelectorAll('.auth-tab')) {
-        tab.classList.toggle('active', tab.textContent?.toLowerCase().replace(' ', '') === mode)
-      }
+    screen.dataset.mode = mode
+    title.textContent = HEADINGS[mode].title
+    sub.textContent = HEADINGS[mode].sub
+    for (const tab of card.querySelectorAll<HTMLElement>('.auth-tab')) {
+      const on = tab.dataset.mode === mode
+      tab.classList.toggle('active', on)
+      tab.setAttribute('aria-selected', String(on))
     }
     errs.clear()
-    if (mode === 'login') {
-      renderLoginForm(body, errs, switchMode)
-    } else if (mode === 'signup') {
-      renderSignupForm(body, errs, switchMode)
-    }
+    if (mode === 'login') renderLoginForm(body, errs, switchMode)
+    else if (mode === 'signup') renderSignupForm(body, errs, switchMode)
+    else renderForgotForm(body, errs, switchMode)
   }
 
-  card.appendChild(renderAuthTabs(card, currentMode, switchMode))
+  card.appendChild(renderAuthTabs(switchMode))
+  card.appendChild(errs.node)
   card.appendChild(body)
-  screen.appendChild(card)
+  layout.appendChild(card)
+  screen.appendChild(layout)
   root.appendChild(screen)
 
-  switchMode(currentMode)
+  switchMode(initialMode)
 }
 
 const SERVER_OFFLINE_NOTICE = 'Server offline. Check your connection and try again in a moment.'
