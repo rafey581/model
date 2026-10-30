@@ -1066,6 +1066,7 @@ function leaveGameState(): void {
   players = []
   activeMatchIsPractice = false
   opponentGone = false
+  stopOpponentCountdown()
   // The chat chrome belongs to the match being torn down; dropping the references
   // keeps a stray incoming line from appending to a detached element.
   chatMenuEl = null
@@ -1183,10 +1184,42 @@ function updateHud(): void {
   )
 }
 
+/**
+ * When the opponent's connection drops, the room gives them a short time to come back
+ * before the match is awarded to the player still here. The banner counts it down, so
+ * nobody is left wondering whether the game is stuck.
+ */
+let opponentReturnBy: number | null = null
+let opponentCountdownTimer: number | null = null
+
+function stopOpponentCountdown(): void {
+  opponentReturnBy = null
+  if (opponentCountdownTimer !== null) window.clearInterval(opponentCountdownTimer)
+  opponentCountdownTimer = null
+}
+
+function startOpponentCountdown(seconds: number): void {
+  stopOpponentCountdown()
+  opponentReturnBy = Date.now() + Math.max(1, seconds) * 1000
+  opponentCountdownTimer = window.setInterval(updateOpponentGone, 250)
+  updateOpponentGone()
+}
+
 function updateOpponentGone(): void {
   const holder = document.getElementById('opp-holder')
   holder?.replaceChildren()
-  if (opponentGone && !activeMatchIsPractice) {
+  if (!opponentGone || activeMatchIsPractice) return
+  if (opponentReturnBy !== null) {
+    const left = Math.max(0, Math.ceil((opponentReturnBy - Date.now()) / 1000))
+    const banner = el('div', 'opp-gone opp-gone--countdown')
+    banner.setAttribute('role', 'status')
+    banner.append(
+      el('span', 'opp-gone__title', 'Opponent left the match'),
+      el('span', 'opp-gone__count', String(left)),
+      el('span', 'opp-gone__note', left > 0 ? 'seconds to come back, or you win' : 'Awarding the match to you...')
+    )
+    holder?.appendChild(banner)
+  } else {
     holder?.appendChild(el('div', 'opp-gone', 'Opponent disconnected — waiting for them to return'))
   }
 }
@@ -1876,7 +1909,17 @@ async function finishMatch(winnerSeat: number, reason?: string): Promise<void> {
   emblem.innerHTML = END_TROPHY_SVG
   box.appendChild(emblem)
   box.appendChild(el('div', 'end-title', watching ? 'MATCH OVER' : iWon ? 'YOU WIN' : 'YOU LOSE'))
-  box.appendChild(el('div', 'end-sub', reason === 'concede' ? `${winnerName} wins by concession` : `${winnerName} wins the match`))
+  box.appendChild(
+    el(
+      'div',
+      'end-sub',
+      reason === 'concede'
+        ? `${winnerName} wins by concession`
+        : reason === 'abandon'
+          ? `${winnerName} wins: the opponent left the match`
+          : `${winnerName} wins the match`
+    )
+  )
 
   // The last frame's points, mine on the left. The snapshot still holds them: the match
   // ending does not clear the table.
@@ -4248,6 +4291,9 @@ function handleSocketEvents(socket: Socket): void {
     markTableReleased()
   })
   socket.on('match:end', (data: { winnerSeat: number; reason?: string; framesWon?: [number, number] }) => {
+    stopOpponentCountdown()
+    opponentGone = false
+    updateOpponentGone()
     if (data.framesWon) framesWon = data.framesWon
     if (activeMatchIsPractice) framesWon = [0, 0]
     myTurn = false
@@ -4265,9 +4311,16 @@ function handleSocketEvents(socket: Socket): void {
     updateOpponentGone()
     toast('Opponent disconnected — waiting for reconnect')
   })
+  socket.on('opponent:countdown', (data: { seats?: number[]; seconds?: number }) => {
+    // Only the player still here is shown it; a seat that is itself counted down is gone.
+    if (mySeat === undefined || (data.seats ?? []).includes(mySeat) || activeMatchIsPractice) return
+    opponentGone = true
+    startOpponentCountdown(Number(data.seconds) || 30)
+  })
   socket.on('opponent:reconnected', (data: { seat: number }) => {
     if (data.seat === mySeat) return
     opponentGone = false
+    stopOpponentCountdown()
     updateOpponentGone()
     toast('Opponent reconnected')
   })

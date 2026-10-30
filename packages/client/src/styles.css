@@ -6682,3 +6682,72 @@ html[data-hidden] *::after {
   font-size: 14px;
   cursor: pointer;
 }
+
+
+/*
+ * The result card on a short screen (a phone held sideways is about 360px tall): the card
+ * scrolls instead of cutting off its bottom, the way out stays pinned in view, and the
+ * trophy and XP bar step aside so the buttons fit. The overlay also sits above the game's
+ * own controls, so nothing on the table can cover the card.
+ */
+.overlay {
+  z-index: 1200;
+  padding: 12px;
+  overflow-y: auto;
+}
+.overlay .card.end-screen {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.overlay .card.end-screen .end-actions {
+  position: sticky;
+  bottom: 0;
+  padding-top: 8px;
+  z-index: 2;
+}
+@media (max-height: 520px) {
+  .overlay .card.end-screen {
+    gap: 4px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+  .overlay .card.end-screen .end-emblem,
+  .overlay .card.end-screen .end-xp {
+    display: none;
+  }
+}
+
+/* The opponent-left countdown: big, central, impossible to miss. */
+.opp-gone--countdown {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px 24px;
+  border-radius: 14px;
+  border: 1px solid rgba(243, 199, 90, 0.6);
+  background: rgba(10, 10, 15, 0.9);
+  color: #f1f1f1;
+  text-align: center;
+  pointer-events: none;
+}
+.opp-gone__title {
+  font-weight: 700;
+  font-size: 15px;
+}
+.opp-gone__count {
+  font-size: 44px;
+  font-weight: 800;
+  color: #f3c75a;
+  line-height: 1;
+}
+.opp-gone__note {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+}
