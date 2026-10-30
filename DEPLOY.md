@@ -222,6 +222,48 @@ changes. Server-only changes never need an app rebuild.
 
 ---
 
+## Security
+
+### Staff password
+The staff login refuses the seed's default password (`admin123`), because it is public.
+Set a strong one (12+ characters) on the server:
+```bash
+cd ~/snooker/packages/server
+NEW_PASS='Your-strong-password' npx tsx --env-file=.env -e "const bcrypt=require('bcryptjs');const {PrismaClient}=require('@prisma/client');const p=new PrismaClient();(async()=>{const u=await p.user.update({where:{email:'admin@snooker.test'},data:{passwordHash:bcrypt.hashSync(process.env.NEW_PASS,12),failedLoginAttempts:0,lockedUntil:null,status:'ACTIVE'},select:{email:true}});console.log('Password reset for',u.email);await p.\$disconnect()})().catch(e=>{console.error(e.message);process.exit(1)})"
+sudo systemctl restart snooker
+```
+
+### Demo players
+Older seeds created `player@snooker.test` and `player2@snooker.test` with the default
+password. Switch them off on the live database (new seeds no longer create them in
+production):
+```bash
+docker exec -it snooker-postgres psql -U snooker -c "UPDATE \"User\" SET status='SUSPENDED' WHERE email IN ('player@snooker.test','player2@snooker.test');"
+```
+
+### What the server does
+- Password reset needs a 10-minute, single-use token from the "forgot password" step;
+  staff accounts can never be reset that way. A reset signs the account out everywhere.
+- New passwords: 8+ characters, hashed with bcrypt (cost 12).
+- Withdrawals ask for the account password every time.
+- Per-address limits: login 20 per 5 min, sign-up 10 per hour, forgot/reset 5-10 per
+  15 min, withdrawals 5 per 15 min, staff login 10 per 5 min, 600 requests a minute
+  overall. Players also lock for 15 minutes after 5 wrong passwords.
+- One account per phone (`MAX_ACCOUNTS_PER_DEVICE`).
+
+### HTTPS (strongly recommended before real money)
+Right now the apps talk to `http://54.252.128.235:4000`: anyone on the same Wi-Fi as a
+player can read their password and session as it goes past. To encrypt it:
+1. Buy a domain (any registrar) and point `api.yourdomain.com` (an A record) at
+   `54.252.128.235`.
+2. On the server: `sudo apt install -y nginx certbot python3-certbot-nginx`, proxy
+   `/api` and `/socket.io` to port 4000 (deployment.md section 1.7), then
+   `sudo certbot --nginx -d api.yourdomain.com`.
+3. In `packages/server/.env` set `TRUST_PROXY=true` (so limits see real addresses), restart.
+4. Change `packages/client/.env.app` to `VITE_API_ORIGIN=https://api.yourdomain.com` and
+   `packages/admin-app/eas.json` to `https://api.yourdomain.com/api`; rebuild both APKs.
+5. Close port 4000 in the EC2 security group (only 80/443 open, 22 for your IP only).
+
 ## 4. Checklist after deploying
 
 - [ ] `curl <SERVER>/api/health` shows `"db":"up"`

@@ -28,12 +28,14 @@ import { registerAnnouncementRoutes, registerAdminAnnouncementRoutes } from './a
 import { createGameServer, recoverMatchValidity } from './game/index.js'
 import { getPlatformUserId, getBotUserId } from './matches/service.js'
 import { ensureSeedSettings, getSettings, isMaintenance } from './settings/index.js'
+import rateLimit from '@fastify/rate-limit'
 
 const require = createRequire(import.meta.url)
 const pkg = require('../package.json') as { version: string }
 
 export async function buildApp() {
   const app = Fastify({
+    trustProxy: config.TRUST_PROXY,
     logger: {
       level: config.LOG_LEVEL,
       transport: undefined,
@@ -55,6 +57,29 @@ export async function buildApp() {
     credentials: true
   })
   await app.register(cookie)
+  // Per-address request limits. Generous across the whole API (players on one mobile
+  // network can share an address); the sign-in, sign-up, password and withdrawal routes
+  // set much tighter limits of their own, which is what stops password guessing.
+  if (config.RATE_LIMIT_ENABLED) {
+    await app.register(rateLimit, {
+      global: true,
+      max: 600,
+      timeWindow: '1 minute',
+      allowList: (request) => request.url === '/api/health' || request.url === '/api/ready',
+      errorResponseBuilder: (_request, context) => ({
+        statusCode: 429,
+        ok: false,
+        error: `Too many attempts. Please wait ${Math.ceil(context.ttl / 1000)} seconds and try again.`
+      })
+    })
+  }
+  // Basic browser protections for anything the API returns.
+  app.addHook('onSend', async (_request, reply, payload) => {
+    reply.header('X-Content-Type-Options', 'nosniff')
+    reply.header('X-Frame-Options', 'DENY')
+    reply.header('Referrer-Policy', 'no-referrer')
+    return payload
+  })
 
   app.addHook('onRequest', async (request, reply) => {
     const path = request.url.split('?')[0] ?? ''

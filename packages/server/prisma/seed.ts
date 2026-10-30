@@ -50,6 +50,13 @@ async function main(): Promise<void> {
     }
   })
 
+  // Two demo players for local testing only. On a live server they would be accounts
+  // anyone can log into (they share the seed password), so production gets none.
+  if (process.env.NODE_ENV === 'production') {
+    console.log('seeded:', { admin: admin.username, demoPlayers: 'skipped (production)', usesDefaultPassword: seedPassword === 'admin123' })
+    return
+  }
+
   const player = await prisma.user.upsert({
     where: { email: 'player@snooker.test' },
     update: {},

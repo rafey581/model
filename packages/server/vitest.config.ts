@@ -5,6 +5,9 @@ import { defineConfig } from 'vitest/config'
 // keeps those assertions exact; the bot suite dominates the run time either way.
 export default defineConfig({
   test: {
-    fileParallelism: false
+    fileParallelism: false,
+    // The suites create many accounts from one address; security.test.ts turns the
+    // limits back on to check them.
+    env: { RATE_LIMIT_ENABLED: 'false' }
   }
 })

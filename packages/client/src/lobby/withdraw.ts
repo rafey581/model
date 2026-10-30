@@ -157,6 +157,16 @@ function renderForm(info: WithdrawInfo, actions: WithdrawActions): HTMLElement {
   address.autocomplete = 'off'
   panel.appendChild(address)
 
+  // --- Password ---------------------------------------------------------------
+  // Asked again for every payout, so a stolen phone or login cannot empty the balance.
+  panel.appendChild(el('div', 'gl-deposit-label', 'YOUR PASSWORD'))
+  const password = el('input', 'gl-deposit-input') as HTMLInputElement
+  password.type = 'password'
+  password.placeholder = 'confirm with your account password'
+  password.autocomplete = 'current-password'
+  password.maxLength = 72
+  panel.appendChild(password)
+
   // --- Submit --------------------------------------------------------------------
   const submit = el('button', 'gl-deposit-submit') as HTMLButtonElement
   submit.type = 'button'
@@ -185,18 +195,24 @@ function renderForm(info: WithdrawInfo, actions: WithdrawActions): HTMLElement {
       actions.toast('enter the wallet address that should receive the funds', 'error')
       return
     }
+    if (!password.value) {
+      actions.toast('enter your password to confirm the withdrawal', 'error')
+      return
+    }
     setSubmitting(true)
     try {
       await api<{ id: string }>('/withdrawals', {
         method: 'POST',
-        body: { amountUsdt: value, address: addr }
+        body: { amountUsdt: value, address: addr, password: password.value }
       })
       actions.toast(WITHDRAW_COPY.submitted)
       amount.value = ''
       address.value = ''
+      password.value = ''
       actions.onSubmitted()
     } catch (error) {
       actions.toast((error as Error).message, 'error')
+      password.value = ''
       setSubmitting(false)
     }
   }

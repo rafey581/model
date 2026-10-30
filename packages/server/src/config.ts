@@ -49,6 +49,17 @@ const envSchema = z.object({
   START_BALANCE: z.coerce.number().default(1),
   // One account per phone: how many accounts may be created on one device (the app sends
   // the phone's Android ID). Raise it to allow, say, a shared family phone.
+  // Set to true when nginx (or another proxy) sits in front of the server, so rate limits
+  // and logs see the player's real address instead of the proxy's.
+  // Request limits per address (see app.ts). Only ever turned off for the test suite.
+  RATE_LIMIT_ENABLED: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
+  TRUST_PROXY: z
+    .string()
+    .default('false')
+    .transform((v) => v.toLowerCase() === 'true'),
   MAX_ACCOUNTS_PER_DEVICE: z.coerce.number().int().min(1).default(1),
   // Sign-up from an app too old to send a device id is refused (with "update the app").
   REQUIRE_DEVICE_ID_FOR_SIGNUP: z

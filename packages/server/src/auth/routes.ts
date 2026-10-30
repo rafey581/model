@@ -4,7 +4,9 @@ import bcrypt from 'bcryptjs'
 import { Prisma } from '@prisma/client'
 import { prisma } from '../db/index.js'
 import { config } from '../config.js'
-import { signToken, verifyToken } from './guards.js'
+import { signToken, tokenIsCurrent, verifyToken } from './guards.js'
+import { createHash } from 'node:crypto'
+import jwt from 'jsonwebtoken'
 import { toPublicUser } from '../users/types.js'
 import { isMaintenance } from '../settings/index.js'
 import { checkUsername, isValidUsernameFormat } from './username.js'
@@ -20,10 +22,19 @@ import { assertDeviceCanSignUp, DEVICE_ID_PATTERN, DeviceIdRequiredError, Device
  * email verification is required. Login is username + password.
  */
 
+/** Shortest password accepted for a new account or a reset (logins accept older, shorter ones). */
+const PASSWORD_MIN = 8
+const RESET_TOKEN_TTL = '10m'
+
+/** Changes whenever the password does, so a reset token works once and dies with a new password. */
+function passwordFingerprint(passwordHash: string | null): string {
+  return createHash('sha256').update(passwordHash ?? '').digest('hex').slice(0, 24)
+}
+
 const registerSchema = z.object({
   email: z.string().trim().email().max(160),
   username: z.string().trim().min(3).max(24),
-  password: z.string().min(6).max(72),
+  password: z.string().min(PASSWORD_MIN, `password must be at least ${PASSWORD_MIN} characters`).max(72),
   name: z.string().trim().min(2).max(80).optional(),
   phone: z.string().trim().min(7).max(20),
   ref: z.string().trim().max(32).optional(),
@@ -40,8 +51,8 @@ const loginSchema = z
   })
   .refine((value) => Boolean(value.username || value.email), { message: 'username or email is required' })
 
-function issueSession(reply: FastifyReply, user: { id: string; username: string; role: string; status: string }) {
-  const token = signToken({ id: user.id, username: user.username, role: user.role, status: user.status })
+function issueSession(reply: FastifyReply, user: { id: string; username: string; role: string; status: string; tokenVersion: number }) {
+  const token = signToken({ id: user.id, username: user.username, role: user.role, status: user.status, tv: user.tokenVersion })
   reply.setCookie('token', token, { httpOnly: true, sameSite: 'lax', path: '/' })
   return token
 }
@@ -88,7 +99,7 @@ async function createAccount(
     }
   }
 
-  const passwordHash = bcrypt.hashSync(password, 10)
+  const passwordHash = bcrypt.hashSync(password, 12)
   const referralCode = await pickReferralCode()
   const normalizedEmail = normalizeEmail(email)
 
@@ -168,7 +179,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
    *
    * Create an account directly with email + username + password. No OTP required.
    */
-  app.post('/api/auth/signup', { config: { public: true } }, async (request, reply) => {
+  app.post('/api/auth/signup', { config: { public: true, rateLimit: { max: 10, timeWindow: '1 hour' } } }, async (request, reply) => {
     const parsed = registerSchema.safeParse(request.body)
     if (!parsed.success) return reply.code(400).send({ ok: false, error: parsed.error.flatten() })
     return createAccount(app, request, reply, parsed.data)
@@ -179,7 +190,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
    *
    * Create an account directly with email + username + password. No OTP required.
    */
-  app.post('/api/auth/register', { config: { public: true } }, async (request, reply) => {
+  app.post('/api/auth/register', { config: { public: true, rateLimit: { max: 10, timeWindow: '1 hour' } } }, async (request, reply) => {
     const parsed = registerSchema.safeParse(request.body)
     if (!parsed.success) return reply.code(400).send({ ok: false, error: parsed.error.flatten() })
     return createAccount(app, request, reply, parsed.data)
@@ -190,7 +201,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
    *
    * Username + password with login attempt limiting.
    */
-  app.post('/api/auth/login', { config: { public: true } }, async (request, reply) => {
+  app.post('/api/auth/login', { config: { public: true, rateLimit: { max: 20, timeWindow: '5 minutes' } } }, async (request, reply) => {
     const parsed = loginSchema.safeParse(request.body)
     if (!parsed.success) return reply.code(400).send({ ok: false, error: 'invalid input' })
 
@@ -208,6 +219,10 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(429).send({ ok: false, error: 'Account temporarily locked due to too many failed login attempts. Try again later.' })
     }
 
+    // The seed's fallback password is public; an account still on it cannot be used.
+    if (password === 'admin123') {
+      return reply.code(403).send({ ok: false, error: 'This password is no longer allowed. Use "Forgot password" to set a new one.' })
+    }
     if (!user.passwordHash || !bcrypt.compareSync(password, user.passwordHash)) {
       const attempts = (user.failedLoginAttempts || 0) + 1
       const maxAttempts = 5
@@ -266,7 +281,16 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   })
 
   /** POST /api/auth/password/forgot */
-  app.post('/api/auth/password/forgot', { config: { public: true } }, async (request, reply) => {
+  /**
+   * POST /api/auth/password/forgot
+   *
+   * Step one of a reset: the player proves who they are with the email, username and
+   * phone on the account, and gets back a reset token. The token is what step two needs;
+   * it lasts 10 minutes, works once (it is tied to the current password), and is never
+   * issued for a staff account. The same answer is given for "no such account" and for a
+   * staff account, so the form cannot be used to find out which details are real.
+   */
+  app.post('/api/auth/password/forgot', { config: { public: true, rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
     const schema = z.object({
       email: z.string().trim().email(),
       phone: z.string().trim().min(7).max(20),
@@ -288,32 +312,51 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         phone: normalizedPhone
       }
     })
-    if (!user) {
+    if (!user || user.role !== 'PLAYER' || user.status !== 'ACTIVE') {
       return reply.code(400).send({ ok: false, error: 'No account matches the provided details.' })
     }
-    return reply.send({ ok: true, data: { userId: user.id, username: user.username } })
+    const resetToken = jwt.sign(
+      { sub: user.id, purpose: 'password-reset', pv: passwordFingerprint(user.passwordHash) },
+      config.JWT_SECRET,
+      { expiresIn: RESET_TOKEN_TTL, algorithm: 'HS256' }
+    )
+    return reply.send({ ok: true, data: { resetToken, username: user.username } })
   })
 
-  /** POST /api/auth/password/reset */
-  app.post('/api/auth/password/reset', { config: { public: true } }, async (request, reply) => {
+  /**
+   * POST /api/auth/password/reset
+   *
+   * Step two: a new password, with the reset token from step one. Nothing else is
+   * accepted as proof. A successful reset signs the account out everywhere.
+   */
+  app.post('/api/auth/password/reset', { config: { public: true, rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
     const schema = z.object({
-      userId: z.string().min(1),
-      password: z.string().min(6).max(72)
+      resetToken: z.string().min(20).max(1000),
+      password: z.string().min(PASSWORD_MIN, `password must be at least ${PASSWORD_MIN} characters`).max(72)
     })
     const parsed = schema.safeParse(request.body)
     if (!parsed.success) {
-      return reply.code(400).send({ ok: false, error: 'invalid request' })
+      const message = parsed.error.issues.find((i) => i.path[0] === 'password')?.message
+      return reply.code(400).send({ ok: false, error: message ?? 'This reset link is not valid. Please start again.' })
     }
-    const { userId, password } = parsed.data
-    const user = await prisma.user.findUnique({ where: { id: userId } })
-    if (!user || user.status !== 'ACTIVE') {
-      return reply.code(400).send({ ok: false, error: 'Account not available.' })
+    const expired = () => reply.code(400).send({ ok: false, error: 'This reset has expired or was already used. Please start again.' })
+    let claims: { sub?: string; purpose?: string; pv?: string }
+    try {
+      claims = jwt.verify(parsed.data.resetToken, config.JWT_SECRET, { algorithms: ['HS256'] }) as typeof claims
+    } catch {
+      return expired()
     }
-    const passwordHash = bcrypt.hashSync(password, 10)
+    if (claims.purpose !== 'password-reset' || !claims.sub) return expired()
+    const user = await prisma.user.findUnique({ where: { id: claims.sub } })
+    if (!user || user.status !== 'ACTIVE' || user.role !== 'PLAYER') return expired()
+    if (claims.pv !== passwordFingerprint(user.passwordHash)) return expired()
+
+    const passwordHash = bcrypt.hashSync(parsed.data.password, 12)
     await prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash, failedLoginAttempts: 0, lockedUntil: null }
+      data: { passwordHash, failedLoginAttempts: 0, lockedUntil: null, tokenVersion: { increment: 1 } }
     })
+    reply.clearCookie('token', { path: '/' })
     return reply.send({ ok: true, data: { reset: true } })
   })
 
@@ -341,7 +384,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     const payload = cookieToken ? verifyToken(cookieToken) : null
     if (!payload) return reply.code(401).send({ ok: false, error: 'no active session' })
     const user = await prisma.user.findUnique({ where: { id: payload.id } })
-    if (!user || user.status !== 'ACTIVE') {
+    if (!user || user.status !== 'ACTIVE' || !tokenIsCurrent(payload, user)) {
       reply.clearCookie('token', { path: '/' })
       return reply.code(401).send({ ok: false, error: 'no active session' })
     }
@@ -358,7 +401,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       const payload = verifyToken(token)
       if (!payload) return reply.send({ ok: true, data: { authenticated: false } })
       const user = await prisma.user.findUnique({ where: { id: payload.id } })
-      if (!user || user.status !== 'ACTIVE') return reply.send({ ok: true, data: { authenticated: false } })
+      if (!user || user.status !== 'ACTIVE' || !tokenIsCurrent(payload, user)) return reply.send({ ok: true, data: { authenticated: false } })
       // A player who stays signed in never types a password again, so the phone is
       // recorded here too, on the check the app makes every time it opens.
       const deviceId = (request.query as { deviceId?: string } | undefined)?.deviceId

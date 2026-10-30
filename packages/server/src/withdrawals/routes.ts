@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
+import bcrypt from 'bcryptjs'
 import { prisma } from '../db/index.js'
 import { requireAdminSession } from '../admin/auth.js'
 import {
@@ -20,7 +21,10 @@ const createWithdrawalSchema = z.object({
   // The player's own Solana address — where the payout goes. Real addresses are
   // 32-44 base58 chars; be permissive (the admin verifies the account before any
   // payout) but short enough to reject obvious junk.
-  address: z.string().trim().min(20, 'enter the wallet address that should receive the funds').max(120, 'that address looks too long')
+  address: z.string().trim().min(20, 'enter the wallet address that should receive the funds').max(120, 'that address looks too long'),
+  // The account password, asked again for every payout: a stolen login or an unlocked
+  // phone is not enough to send the balance away.
+  password: z.string({ errorMap: () => ({ message: 'enter your password to confirm the withdrawal' }) }).min(1).max(72)
 })
 
 const rejectSchema = z.object({
@@ -40,11 +44,15 @@ export async function registerWithdrawalRoutes(app: FastifyInstance): Promise<vo
     return reply.send({ ok: true, data: withdrawInfo() })
   })
 
-  app.post('/api/withdrawals', async (request, reply) => {
+  app.post('/api/withdrawals', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
     const parsed = createWithdrawalSchema.safeParse(request.body)
     if (!parsed.success) return reply.code(400).send({ ok: false, error: parsed.error.flatten() })
 
-    const { amountUsdt, address } = parsed.data
+    const { amountUsdt, address, password } = parsed.data
+    const account = await prisma.user.findUnique({ where: { id: request.authUser!.id }, select: { passwordHash: true } })
+    if (!account?.passwordHash || !bcrypt.compareSync(password, account.passwordHash)) {
+      return reply.code(403).send({ ok: false, error: 'Wrong password. The withdrawal was not requested.', code: 'wrong_password' })
+    }
     const info = withdrawInfo()
 
     if (!info.enabled) return reply.code(403).send({ ok: false, error: 'withdrawals are currently disabled' })

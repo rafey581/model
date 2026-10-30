@@ -7,7 +7,7 @@ import { GameRoom } from './room.js'
 import type { GameUpdateEvent, ShotInputDto } from './room.js'
 import { ShotEnforcement } from './throttle.js'
 import { noteRejectedShot, recordFraudFlag } from '../fraud/index.js'
-import { verifyToken } from '../auth/guards.js'
+import { tokenIsCurrent, verifyToken } from '../auth/guards.js'
 import { settleMatch, refundMatch } from '../matches/service.js'
 import { notify, setNotificationPusher } from '../notifications/service.js'
 import { setAnnouncementBroadcaster } from '../announcements/service.js'
@@ -170,6 +170,10 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
     const user = await prisma.user.findUnique({ where: { id: payload.id } })
     if (!user || user.status !== 'ACTIVE') {
       next(new Error('forbidden'))
+      return
+    }
+    if (!tokenIsCurrent(payload, user)) {
+      next(new Error('unauthorized'))
       return
     }
     if (await isMaintenance()) {

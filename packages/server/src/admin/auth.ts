@@ -231,7 +231,7 @@ export function setAdminCookie(reply: FastifyReply, token: string): void {
 // Login
 // ---------------------------------------------------------------------------
 
-export type AdminLoginFailure = 'ip_blocked' | 'locked' | 'invalid'
+export type AdminLoginFailure = 'ip_blocked' | 'locked' | 'invalid' | 'default_password'
 
 export interface AdminLoginResult {
   ok: boolean
@@ -268,6 +268,8 @@ async function audit(
  * account" from "wrong password" would let an attacker confirm the first, which
  * is most of the work of an online attack.
  */
+const KNOWN_DEFAULT_PASSWORDS = new Set(['admin123'])
+
 export async function loginAdmin(
   request: FastifyRequest,
   email: string,
@@ -299,6 +301,14 @@ export async function loginAdmin(
     recordFailure(ip, byIp, ipThreshold())
     await audit(request, 'admin.login.failed', key, { reason: 'credentials' })
     return { ok: false, failure: 'invalid' }
+  }
+
+  // The seed's fallback password is public (it is in the source). An account still on it
+  // is refused until its password is reset on the server, so a forgotten setting can never
+  // leave the staff app open to anyone who has read the code.
+  if (KNOWN_DEFAULT_PASSWORDS.has(password)) {
+    await audit(request, 'admin.login.default_password', key, { userId: user.id })
+    return { ok: false, failure: 'default_password' }
   }
 
   // Password verified and the account is active: that is the whole check.

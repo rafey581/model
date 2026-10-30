@@ -160,7 +160,7 @@ function renderSignupForm(
   form.appendChild(inputGroup('Invite code (optional)', refInput))
 
   const passwordInput = textInput('password', '••••••••', 'new-password')
-  passwordInput.minLength = 6
+  passwordInput.minLength = 8
   passwordInput.required = true
   form.appendChild(inputGroup('Password', passwordInput))
 
@@ -208,8 +208,8 @@ function renderSignupForm(
       phoneInput.focus()
       return
     }
-    if (password.length < 6) {
-      errs.show('Password must be at least 6 characters.')
+    if (password.length < 8) {
+      errs.show('Password must be at least 8 characters.')
       passwordInput.focus()
       return
     }
@@ -333,7 +333,7 @@ function renderForgotForm(container: HTMLElement, errs: ReturnType<typeof errorS
     verifyBtn.disabled = true
     verifyBtn.textContent = 'VERIFYING…'
     try {
-      const res = await api<{ userId: string; username: string }>('/auth/password/forgot', {
+      const res = await api<{ resetToken: string; username: string }>('/auth/password/forgot', {
         method: 'POST',
         body: { email, phone, username }
       })
@@ -347,8 +347,8 @@ function renderForgotForm(container: HTMLElement, errs: ReturnType<typeof errorS
       resetBtn.addEventListener('click', async () => {
         if (resetBtn.disabled) return
         errs.clear()
-        if ((newPass.value || '').length < 6) {
-          errs.show('Password must be at least 6 characters.')
+        if ((newPass.value || '').length < 8) {
+          errs.show('Password must be at least 8 characters.')
           return
         }
         resetBtn.disabled = true
@@ -356,7 +356,7 @@ function renderForgotForm(container: HTMLElement, errs: ReturnType<typeof errorS
         try {
           await api('/auth/password/reset', {
             method: 'POST',
-            body: { userId: res.userId, password: newPass.value }
+            body: { resetToken: res.resetToken, password: newPass.value }
           })
           errs.show('Password reset successful. Please sign in.')
           setTimeout(() => renderLoginForm(container, errs, () => {}), 1500)

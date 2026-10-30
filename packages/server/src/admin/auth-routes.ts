@@ -47,7 +47,7 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
    * Email + password, and nothing else. Every failure is reported as the same
    * "invalid credentials" so the endpoint cannot be used to enumerate accounts.
    */
-  app.post('/api/admin/auth/login', { config: { public: true } }, async (request, reply) => {
+  app.post('/api/admin/auth/login', { config: { public: true, rateLimit: { max: 10, timeWindow: '5 minutes' } } }, async (request, reply) => {
     const parsed = loginSchema.safeParse(request.body)
     if (!parsed.success) {
       // Not audited: a malformed body is noise, not an attack worth a row.
@@ -77,6 +77,12 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
     }
     if (result.failure === 'ip_blocked') {
       return reply.code(403).send({ ok: false, error: 'not allowed from this address' })
+    }
+    if (result.failure === 'default_password') {
+      return reply.code(403).send({
+        ok: false,
+        error: 'This account still uses the default password, which is disabled. Reset it on the server first (DEPLOY.md, "Staff password").'
+      })
     }
     return reply.code(401).send({ ok: false, error: 'invalid credentials' })
   })

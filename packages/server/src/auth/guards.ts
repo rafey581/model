@@ -9,6 +9,8 @@ export interface AuthUser {
   username: string
   role: string
   status: string
+  /** The account's tokenVersion when this token was issued (absent on tokens from before it existed, read as 0). */
+  tv?: number
 }
 
 declare module 'fastify' {
@@ -30,15 +32,28 @@ declare module 'fastify' {
 }
 
 export function signToken(user: AuthUser, expiresInSeconds = 60 * 60 * 24 * 7): string {
-  return jwt.sign(user, config.JWT_SECRET, { expiresIn: expiresInSeconds })
+  const claims: AuthUser = { id: user.id, username: user.username, role: user.role, status: user.status, tv: user.tv ?? 0 }
+  return jwt.sign(claims, config.JWT_SECRET, { expiresIn: expiresInSeconds, algorithm: 'HS256' })
 }
 
 export function verifyToken(token: string): AuthUser | null {
   try {
-    return jwt.verify(token, config.JWT_SECRET) as AuthUser
+    const payload = jwt.verify(token, config.JWT_SECRET, { algorithms: ['HS256'] }) as AuthUser & { purpose?: string }
+    // A password-reset token is signed with the same key, and must never pass as a login.
+    if (payload.purpose) return null
+    return payload
   } catch {
     return null
   }
+}
+
+/**
+ * Whether a token still belongs to the account as it is now. A password reset bumps
+ * the account's tokenVersion, which signs it out of every phone that was logged in
+ * (including whoever had stolen the old password or token).
+ */
+export function tokenIsCurrent(payload: AuthUser, user: { tokenVersion: number }): boolean {
+  return (payload.tv ?? 0) === user.tokenVersion
 }
 
 export async function registerAuthHooks(app: FastifyInstance): Promise<void> {
@@ -58,6 +73,10 @@ export async function registerAuthHooks(app: FastifyInstance): Promise<void> {
     const user = await prisma.user.findUnique({ where: { id: payload.id } })
     if (!user || user.status !== 'ACTIVE') {
       await reply.code(403).send({ ok: false, error: 'account not active' })
+      return
+    }
+    if (!tokenIsCurrent(payload, user)) {
+      await reply.code(401).send({ ok: false, error: 'session expired, please log in again' })
       return
     }
     request.authUser = { id: user.id, username: user.username, role: user.role, status: user.status }
