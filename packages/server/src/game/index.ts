@@ -52,6 +52,14 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
         void resolveDisconnected(matchId, room)
       }, graceMs)
       graceTimers.set(matchId, timer)
+      // The player still at the table is shown how long the other has to come back
+      // before the match is theirs: the deadline itself, so every screen counts to the
+      // same moment however late the message arrives.
+      room.broadcast('opponent:countdown', {
+        seats: room.disconnectedSeats(),
+        deadline: Date.now() + graceMs,
+        seconds: Math.round(graceMs / 1000)
+      })
     })
   }
 

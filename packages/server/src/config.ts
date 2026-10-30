@@ -69,7 +69,9 @@ const envSchema = z.object({
     .default('true')
     .transform((v) => v.toLowerCase() !== 'false'),
   MATCH_TURN_TIMEOUT_SEC: z.coerce.number().default(DEFAULT_TURN_TIMEOUT_SEC),
-  MATCH_RECONNECT_GRACE_SEC: z.coerce.number().default(120),
+  // A player who leaves a match mid-game loses once this runs out (the other player sees
+  // the countdown).
+  MATCH_RECONNECT_GRACE_SEC: z.coerce.number().default(30),
   COMMISSION_PCT: z.coerce.number().default(0.1),
   MIN_STAKE: z.coerce.number().default(1),
   // High enough for Master Match (5000 USDT). An operator can still lower it in
