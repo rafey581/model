@@ -5131,7 +5131,9 @@ async function init(): Promise<void> {
 // Debug only: opened with ?tabledebug, the page reports how its drawn table compares
 // with the server's (see Scene3D.debugTableCheck). Nothing is exposed otherwise.
 if (new URLSearchParams(window.location.search).has('tabledebug')) {
+  ;(window as unknown as { __tableDebugOn: boolean }).__tableDebugOn = true
   ;(window as unknown as { __tableCheck: () => unknown }).__tableCheck = () => ({
+    motionStarts: scene3d ? [...scene3d.debugMotionStarts] : [],
     matchId: activeMatchId,
     seat: mySeat,
     settled: shotPlayer === null && predictedShot === null && queuedUpdates.length === 0 && !shotInFlight,

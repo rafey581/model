@@ -1701,6 +1701,9 @@ export class Scene3D implements VenueHost {
    * so what is shown is the opponent playing, not a cue moving on its own.
    */
   private opponentLiveAim: { angle: number; power: number; at: number } | null = null
+  /** Debug only (?tabledebug): when the cue ball was seen to start moving, for timing checks. */
+  readonly debugMotionStarts: number[] = []
+  private debugCueWas: { x: number; z: number; moving: boolean } | null = null
   private liveReplay = false
   /** Whether the shot being replayed was the opponent's. Latched when the replay starts. */
   private replayByOpponent = false
@@ -5542,6 +5545,18 @@ const outerL = APRON_OUTER_L
     else this.venue.addressCue(cue.x, cue.y, addressHeading(cue, snapshot.balls, snapshot.ballOn), 0)
   }
 
+  /** Debug only: notes the moment the drawn cue ball starts to move. */
+  private debugTrackCueMotion(): void {
+    const cue = this.balls.get(BALL_IDS.CUE)
+    if (!cue || !cue.group.visible) return
+    const { x, z } = cue.group.position
+    const was = this.debugCueWas
+    const moved = was ? Math.hypot(x - was.x, z - was.z) : 0
+    const moving = moved > 0.5
+    if (moving && was && !was.moving) this.debugMotionStarts.push(Date.now())
+    this.debugCueWas = { x, z, moving: moving || (was?.moving === true && moved > 0.05) }
+  }
+
   /** The opponent's live aim, as their phone reports it. Picture only. */
   setOpponentLiveAim(angle: number, power: number): void {
     this.opponentLiveAim = { angle, power, at: performance.now() }
@@ -5723,6 +5738,7 @@ const outerL = APRON_OUTER_L
           rig.stepTurn(dt, this.turnScale)
         }
       }
+      if ((window as unknown as { __tableDebugOn?: boolean }).__tableDebugOn) this.debugTrackCueMotion()
       for (const rig of this.balls.values()) {
         if (rig.rising) {
           // Eased out, so the ball leaves the cloth briskly and settles onto it, which is
