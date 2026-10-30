@@ -76,6 +76,7 @@ The file **must** be `packages/server/.env`. Set at least:
 | `DEPOSIT_WALLET_ADDRESS` | `7oK51mdQkub5kMsZoTMFRVpcsfcNvrGKTigu9wWbvMyR` (Solana; already the built-in default). The server will not start with an invalid Solana address |
 | `DEPOSIT_CURRENCIES` | `USDT,USDC` (both on Solana, each credited 1:1) |
 | `AUTH_ALLOW_DIRECT_REGISTER` | `true` (players sign up straight away; no email service is used) |
+| `MIN_SIGNUP_AGE` | `18` (sign-up asks for the date of birth and refuses anyone younger) |
 | `MAX_ACCOUNTS_PER_DEVICE` | `1` (one account per phone; raise to allow e.g. a shared family phone) |
 | `REQUIRE_DEVICE_ID_FOR_SIGNUP` | `true` (an app too old to send its phone id is told to update before it can sign up) |
 | `ADMIN_ALLOWED_IPS` | **leave empty**: staff phones on mobile data change IP constantly |
@@ -250,6 +251,9 @@ docker exec -it snooker-postgres psql -U snooker -c "UPDATE \"User\" SET status=
   15 min, withdrawals 5 per 15 min, staff login 10 per 5 min, 600 requests a minute
   overall. Players also lock for 15 minutes after 5 wrong passwords.
 - One account per phone (`MAX_ACCOUNTS_PER_DEVICE`).
+- "Forgot password" needs every detail on the account: full name, username, email, phone
+  and date of birth. Accounts made before the date of birth was asked are prompted once to
+  add it; until they do, they cannot reset here and must contact support.
 
 ### HTTPS (strongly recommended before real money)
 Right now the apps talk to `http://54.252.128.235:4000`: anyone on the same Wi-Fi as a

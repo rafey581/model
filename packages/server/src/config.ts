@@ -60,6 +60,8 @@ const envSchema = z.object({
     .string()
     .default('false')
     .transform((v) => v.toLowerCase() === 'true'),
+  // Youngest age allowed to create an account (real-money play).
+  MIN_SIGNUP_AGE: z.coerce.number().int().min(0).default(18),
   MAX_ACCOUNTS_PER_DEVICE: z.coerce.number().int().min(1).default(1),
   // Sign-up from an app too old to send a device id is refused (with "update the app").
   REQUIRE_DEVICE_ID_FOR_SIGNUP: z

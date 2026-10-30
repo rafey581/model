@@ -33,6 +33,8 @@ model User {
   lockedUntil         DateTime?
   /// Bumped when the password is reset: every login token issued before it stops working.
   tokenVersion        Int      @default(0)
+  /// Asked at sign-up; one of the details "forgot password" checks. Date only.
+  dateOfBirth         DateTime? @db.Date
   lastLoginIp         String?
   lastLoginAt         DateTime?
   // Last authenticated request or game connection, refreshed at most every few

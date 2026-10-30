@@ -6655,3 +6655,30 @@ html[data-hidden] *::after {
   font-size: 15px;
   cursor: pointer;
 }
+
+/* Date pickers on the dark screens: the calendar icon and popup follow the dark theme. */
+.auth-input-group input[type='date'],
+.dob-input {
+  color-scheme: dark;
+}
+.dob-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px;
+  margin-bottom: 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: #0d0f14;
+  color: #f1f1f1;
+  font-size: 16px;
+}
+.dob-later {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 14px;
+  cursor: pointer;
+}

@@ -27,6 +27,8 @@ async function player(name: string, opts: { role?: string; balance?: number } = 
       username: `${name}${TAG}`.slice(0, 24),
       phone: `+1${String(Date.now()).slice(-9)}${userIds.length}`,
       passwordHash: bcrypt.hashSync(PASSWORD, 4),
+      name: 'Test Person',
+      dateOfBirth: new Date(Date.UTC(1990, 4, 20)),
       role: opts.role ?? 'PLAYER',
       status: 'ACTIVE',
       wallet: { create: { available: 0 } }
@@ -80,7 +82,7 @@ describe('password reset', () => {
     const forgot = await app.inject({
       method: 'POST',
       url: '/api/auth/password/forgot',
-      payload: { email: owner.email, username: owner.username, phone: owner.phone }
+      payload: { email: owner.email, username: owner.username, phone: owner.phone, name: 'Test Person', dateOfBirth: '1990-05-20' }
     })
     expect(forgot.statusCode).toBe(200)
     const data = (forgot.json() as { data: { resetToken: string; userId?: string } }).data
@@ -111,10 +113,78 @@ describe('password reset', () => {
     const forgot = await app.inject({
       method: 'POST',
       url: '/api/auth/password/forgot',
-      payload: { email: staff.email, username: staff.username, phone: staff.phone }
+      payload: { email: staff.email, username: staff.username, phone: staff.phone, name: 'Test Person', dateOfBirth: '1990-05-20' }
     })
     expect(forgot.statusCode).toBe(400)
     expect(JSON.stringify(forgot.json())).not.toContain('resetToken')
+  })
+})
+
+describe('forgot password needs every detail', () => {
+  it('refuses when any one detail is wrong or missing, and works when all match', async () => {
+    const owner = await player('dob')
+    const all = { email: owner.email, username: owner.username, phone: owner.phone, name: 'Test Person', dateOfBirth: '1990-05-20' }
+    const attempts: Array<Record<string, unknown>> = [
+      { ...all, dateOfBirth: '1990-05-21' },
+      { ...all, name: 'Someone Else' },
+      { ...all, phone: '+10000000000' },
+      { ...all, dateOfBirth: undefined },
+      { ...all, name: undefined },
+      { ...all, dateOfBirth: '1990-02-30' }
+    ]
+    for (const payload of attempts) {
+      const res = await app.inject({ method: 'POST', url: '/api/auth/password/forgot', payload })
+      expect(res.statusCode).toBe(400)
+      expect(JSON.stringify(res.json())).not.toContain('resetToken')
+    }
+    // Capitals and extra spaces in the name do not matter.
+    const ok = await app.inject({ method: 'POST', url: '/api/auth/password/forgot', payload: { ...all, name: '  test   PERSON ' } })
+    expect(ok.statusCode).toBe(200)
+    expect((ok.json() as { data: { resetToken: string } }).data.resetToken).toBeTruthy()
+  })
+
+  it('cannot reset an account with no date of birth saved, which can set it once', async () => {
+    const old = await prisma.user.create({
+      data: { email: `old-${TAG}@test.local`, username: `old${TAG}`.slice(0, 24), phone: `+1777${String(Date.now()).slice(-6)}`, name: 'Old Timer', passwordHash: bcrypt.hashSync(PASSWORD, 4), role: 'PLAYER', status: 'ACTIVE', wallet: { create: { available: 0 } } }
+    })
+    userIds.push(old.id)
+    const payload = { email: old.email, username: old.username, phone: old.phone, name: 'Old Timer', dateOfBirth: '1980-01-01' }
+    const res = await app.inject({ method: 'POST', url: '/api/auth/password/forgot', payload })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'no_dob' })
+
+    const token = ((await login(old.username)).json() as { data: { token: string } }).data.token
+    const auth = { authorization: `Bearer ${token}` }
+    const me = await app.inject({ method: 'GET', url: '/api/me', headers: auth })
+    expect((me.json() as { data: { user: { needsDateOfBirth: boolean } } }).data.user.needsDateOfBirth).toBe(true)
+
+    const young = await app.inject({ method: 'POST', url: '/api/me/date-of-birth', headers: auth, payload: { dateOfBirth: `${new Date().getUTCFullYear() - 10}-01-01` } })
+    expect(young.statusCode).toBe(400)
+    const set = await app.inject({ method: 'POST', url: '/api/me/date-of-birth', headers: auth, payload: { dateOfBirth: '1980-01-01' } })
+    expect(set.statusCode).toBe(200)
+    const again = await app.inject({ method: 'POST', url: '/api/me/date-of-birth', headers: auth, payload: { dateOfBirth: '1999-09-09' } })
+    expect(again.statusCode).toBe(409)
+    const meAfter = await app.inject({ method: 'GET', url: '/api/me', headers: auth })
+    expect(JSON.stringify(meAfter.json())).not.toContain('1980')
+
+    const works = await app.inject({ method: 'POST', url: '/api/auth/password/forgot', payload })
+    expect(works.statusCode).toBe(200)
+  })
+})
+
+describe('sign-up asks for the date of birth', () => {
+  it('refuses a missing, impossible or under-age date', async () => {
+    const base = (n: string) => ({ email: `su${n}-${TAG}@test.local`, username: `su${n}${TAG}`.slice(0, 24), password: 'Password-123', phone: `+1555${String(Date.now()).slice(-6)}${n}`, name: 'New Player', deviceId: `web:${TAG}${n}xyz` })
+    const year = new Date().getUTCFullYear()
+    for (const [n, dateOfBirth] of [['a', undefined], ['b', '2001-13-01'], ['c', `${year - 17}-06-01`], ['d', `${year + 1}-01-01`]] as const) {
+      const res = await app.inject({ method: 'POST', url: '/api/auth/signup', payload: { ...base(n), ...(dateOfBirth ? { dateOfBirth } : {}) } })
+      expect(res.statusCode).toBe(400)
+    }
+    const ok = await app.inject({ method: 'POST', url: '/api/auth/signup', payload: { ...base('e'), dateOfBirth: '2000-02-29' } })
+    expect(ok.statusCode).toBe(200)
+    const created = await prisma.user.findUniqueOrThrow({ where: { username: base('e').username } })
+    userIds.push(created.id)
+    expect(created.dateOfBirth?.toISOString().slice(0, 10)).toBe('2000-02-29')
   })
 })
 

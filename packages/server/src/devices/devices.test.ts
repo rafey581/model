@@ -22,6 +22,7 @@ function signup(deviceId?: string) {
       username,
       password: 'Password123!',
       phone: `+1999${String(Date.now()).slice(-5)}${n}`,
+      dateOfBirth: '1995-06-15',
       ...(deviceId ? { deviceId } : {})
     }
   })

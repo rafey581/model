@@ -64,6 +64,15 @@ function inputGroup(labelText: string, input: HTMLElement, extra?: HTMLElement):
   return group
 }
 
+/** A date picker for the date of birth ("YYYY-MM-DD"), limited to plausible dates. */
+function dateOfBirthInput(): HTMLInputElement {
+  const input = textInput('date', undefined, 'bday')
+  input.required = true
+  input.min = '1900-01-01'
+  input.max = new Date().toISOString().slice(0, 10)
+  return input
+}
+
 function textInput(type: string, placeholder?: string, autocomplete?: string): HTMLInputElement {
   const input = document.createElement('input')
   input.type = type
@@ -132,6 +141,9 @@ function renderSignupForm(
   nameInput.required = true
   form.appendChild(inputGroup('Full name', nameInput))
 
+  const dobInput = dateOfBirthInput()
+  form.appendChild(inputGroup('Date of birth (for password recovery)', dobInput))
+
   const usernameInput = textInput('text', 'e.g. cue_king', 'off')
   usernameInput.maxLength = 24
   usernameInput.setAttribute('autocapitalize', 'off')
@@ -193,6 +205,11 @@ function renderSignupForm(
       nameInput.focus()
       return
     }
+    if (!dobInput.value) {
+      errs.show('Please enter your date of birth.')
+      dobInput.focus()
+      return
+    }
     if (username.length < 3) {
       errs.show('Username must be at least 3 characters.')
       usernameInput.focus()
@@ -227,6 +244,7 @@ function renderSignupForm(
           phone,
           password,
           ref: refInput.value.trim() || undefined,
+          dateOfBirth: dobInput.value,
           deviceId: await getDeviceId()
         }
       })
@@ -298,7 +316,11 @@ function renderForgotForm(container: HTMLElement, errs: ReturnType<typeof errorS
   form.className = 'auth-form'
   form.noValidate = true
 
-  form.appendChild(el('p', 'auth-help', 'Verify your account details to reset password.'))
+  form.appendChild(el('p', 'auth-help', 'Enter every detail exactly as on your account to reset your password.'))
+
+  const nameInput = textInput('text', 'your full name', 'name')
+  nameInput.required = true
+  form.appendChild(inputGroup('Full name', nameInput))
 
   const emailInput = textInput('email', 'you@example.com', 'email')
   emailInput.required = true
@@ -314,6 +336,9 @@ function renderForgotForm(container: HTMLElement, errs: ReturnType<typeof errorS
   usernameInput.required = true
   form.appendChild(inputGroup('Username', usernameInput))
 
+  const dobInput = dateOfBirthInput()
+  form.appendChild(inputGroup('Date of birth', dobInput))
+
   const verifyBtn = primaryButton('VERIFY DETAILS')
   const back = linkButton('Back to sign in', () => renderLoginForm(container, errs, () => {}))
   
@@ -326,8 +351,10 @@ function renderForgotForm(container: HTMLElement, errs: ReturnType<typeof errorS
     const email = emailInput.value.trim()
     const phone = phoneInput.value.trim()
     const username = usernameInput.value.trim()
-    if (!email || !phone || !username) {
-      errs.show('Please fill all fields.')
+    const name = nameInput.value.trim()
+    const dateOfBirth = dobInput.value
+    if (!email || !phone || !username || !name || !dateOfBirth) {
+      errs.show('Please fill in every detail.')
       return
     }
     verifyBtn.disabled = true
@@ -335,7 +362,7 @@ function renderForgotForm(container: HTMLElement, errs: ReturnType<typeof errorS
     try {
       const res = await api<{ resetToken: string; username: string }>('/auth/password/forgot', {
         method: 'POST',
-        body: { email, phone, username }
+        body: { email, phone, username, name, dateOfBirth }
       })
       form.replaceChildren(el('p', 'auth-help', `Reset password for ${res.username}`))
       const newPass = textInput('password', 'New password', 'new-password')

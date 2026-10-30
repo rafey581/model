@@ -6,6 +6,7 @@ import { prisma } from '../db/index.js'
 import { config } from '../config.js'
 import { signToken, tokenIsCurrent, verifyToken } from './guards.js'
 import { createHash } from 'node:crypto'
+import { dateOfBirthProblem, normalizeName, parseDateOfBirth, sameDate } from './dob.js'
 import jwt from 'jsonwebtoken'
 import { toPublicUser } from '../users/types.js'
 import { isMaintenance } from '../settings/index.js'
@@ -39,7 +40,9 @@ const registerSchema = z.object({
   phone: z.string().trim().min(7).max(20),
   ref: z.string().trim().max(32).optional(),
   // Which phone this is (one account per phone). Malformed ids are ignored rather than refused.
-  deviceId: z.string().trim().max(130).optional()
+  deviceId: z.string().trim().max(130).optional(),
+  // "YYYY-MM-DD"; checked (real date, old enough) in createAccount.
+  dateOfBirth: z.string({ errorMap: () => ({ message: 'Please enter your date of birth.' }) }).trim().max(10)
 })
 
 const loginSchema = z
@@ -75,6 +78,9 @@ async function createAccount(
   }
 
   const { email, username, password, name, phone, ref } = body
+  const dobProblem = dateOfBirthProblem(body.dateOfBirth, config.MIN_SIGNUP_AGE)
+  if (dobProblem) return reply.code(400).send({ ok: false, error: dobProblem })
+  const dateOfBirth = parseDateOfBirth(body.dateOfBirth)!
   const deviceId = body.deviceId && DEVICE_ID_PATTERN.test(body.deviceId) ? body.deviceId : undefined
   const value = username.trim()
   if (!isValidUsernameFormat(value)) {
@@ -113,6 +119,7 @@ async function createAccount(
           emailVerified: true,
           phoneVerified: false,
           name: name?.trim() || value,
+          dateOfBirth,
           username: value,
           passwordHash,
           role: 'PLAYER',
@@ -295,13 +302,15 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       email: z.string().trim().email(),
       phone: z.string().trim().min(7).max(20),
       username: z.string().trim().min(3).max(24),
-      name: z.string().trim().min(2).max(80).optional()
+      name: z.string().trim().min(1).max(80),
+      dateOfBirth: z.string().trim().max(10)
     })
     const parsed = schema.safeParse(request.body)
     if (!parsed.success) {
-      return reply.code(400).send({ ok: false, error: 'Please provide matching account details.' })
+      return reply.code(400).send({ ok: false, error: 'Please fill in every detail: full name, username, email, phone and date of birth.' })
     }
-    const { email, phone, username } = parsed.data
+    const { email, phone, username, name } = parsed.data
+    const givenDob = parseDateOfBirth(parsed.data.dateOfBirth)
     const normalizedEmail = normalizeEmail(email)
     const normalizedPhone = phone.trim().replace(/[^+0-9]/g, '')
 
@@ -312,9 +321,18 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         phone: normalizedPhone
       }
     })
-    if (!user || user.role !== 'PLAYER' || user.status !== 'ACTIVE') {
-      return reply.code(400).send({ ok: false, error: 'No account matches the provided details.' })
+    const noMatch = () => reply.code(400).send({ ok: false, error: 'No account matches the provided details.' })
+    if (!user || user.role !== 'PLAYER' || user.status !== 'ACTIVE') return noMatch()
+    // Every detail has to match, the full name and the date of birth included.
+    if (normalizeName(user.name ?? '') !== normalizeName(name)) return noMatch()
+    if (!user.dateOfBirth) {
+      return reply.code(400).send({
+        ok: false,
+        error: 'This account has no date of birth saved, so it cannot be reset here. Please contact customer support.',
+        code: 'no_dob'
+      })
     }
+    if (!givenDob || !sameDate(user.dateOfBirth, givenDob)) return noMatch()
     const resetToken = jwt.sign(
       { sub: user.id, purpose: 'password-reset', pv: passwordFingerprint(user.passwordHash) },
       config.JWT_SECRET,

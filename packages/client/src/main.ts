@@ -52,6 +52,7 @@ import { xpBar } from './lobby/progress.js'
 import type { LobbyProgress } from './lobby/types.js'
 import { renderAuthScreen, setAuthOfflineNotice } from './auth.js'
 import { getDeviceId } from './deviceId.js'
+import { askForDateOfBirthIfMissing } from './dobPrompt.js'
 import { receiveAnnouncement, resetAnnouncements, setAnnouncements, showNextAnnouncement, type Announcement } from './announcements.js'
 import {
   confirmPlacement,
@@ -5003,6 +5004,7 @@ async function init(): Promise<void> {
     void fetchNotifications()
     void fetchIncomingChallenges()
     void fetchAnnouncements()
+    void askForDateOfBirthIfMissing(() => activeMatchId !== null, (message, kind) => toast(message, kind))
   }
   // A stored token is checked before anything uses it; a stale one is dropped and a
   // still-valid session cookie is exchanged for a fresh one. When the server cannot be
