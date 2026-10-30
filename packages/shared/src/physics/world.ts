@@ -321,9 +321,16 @@ const ROLL_MATCH = 0.5
 /**
  * Share of sliding friction that sidespin may spend curving the cue ball while it is
  * still skidding. Pure rolling has no swerve: the contact point is at rest, so side
- * english only shows once the ball is sliding (an elevated cue's tilted spin axis).
+ * english only shows once the ball is sliding.
+ *
+ * A real swerve needs the cue raised (a tilted spin axis); every shot here is played
+ * with a level cue, so side spin must leave the cue ball on the line it was aimed along
+ * until it meets something. At 0.38 a soft shot with full side drifted 119 mm over two
+ * metres and missed the ball it was aimed at; at this value the same shot drifts about
+ * 5 mm. What side spin is for — throwing the object ball and changing the angle off a
+ * cushion — is handled at the contact, not here.
  */
-const SWERVE_FRACTION = 0.38
+const SWERVE_FRACTION = 0.015
 
 /**
  * A ball slower than this, in mm/s, is allowed a wider pocket mouth. Faster balls

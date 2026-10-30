@@ -350,9 +350,11 @@ describe('spin', () => {
     // collision with a long clear run-out, making the resting offset a direct
     // read-out of the launch direction.
     const deviation = (sideSpin: number): number => {
+      // Soft, but firm enough that the thrown object ball travels far enough to show it:
+      // at 0.06 it only rolls a few centimetres, so even a full 3 degrees is under 2 mm.
       const result = simulateStroke(twoBallRack(BALL_IDS.RED_MIN, 1000), {
         aimAngle: 0,
-        power: 0.06,
+        power: 0.1,
         spin: { x: sideSpin, y: 0 }
       })
       const object = result.balls.find((b) => b.id === BALL_IDS.RED_MIN)!

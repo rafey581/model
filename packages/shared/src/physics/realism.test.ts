@@ -105,15 +105,30 @@ describe('tip spin', () => {
 })
 
 describe('sidespin', () => {
-  it('swerves a sliding ball and throws the object ball the other way', () => {
-    const left = simulateStroke(loneCue(700, MID), { aimAngle: 0, power: 0.55, spin: { x: -1, y: 0 } }, { maxTicks: 36 })
-    const right = simulateStroke(loneCue(700, MID), { aimAngle: 0, power: 0.55, spin: { x: 1, y: 0 } }, { maxTicks: 36 })
-    const ly = left.balls.find((ball) => ball.isCue)!.pos.y
-    const ry = right.balls.find((ball) => ball.isCue)!.pos.y
-    expect(ry - ly).toBeGreaterThan(4)
-    expect(ly).toBeLessThan(MID)
-    expect(ry).toBeGreaterThan(MID)
+  it('keeps a level-cue shot on the line it was aimed along', () => {
+    // Side spin from a level cue does not curve the ball: over two metres, at any pace,
+    // the cue ball stays within a few millimetres of its aim line. A big curve here is
+    // what made a shot aimed at a red with side on miss it altogether.
+    for (const power of [0.2, 0.4, 0.7]) {
+      for (const side of [-1, 1]) {
+        const out = simulateStroke(loneCue(400, MID), { aimAngle: 0, power, spin: { x: side, y: 0 } }, { playback: { rate: 240 } })
+        const track = (out.keyframes ?? []).map((k) => k.balls.find((row) => row[0] === 0)!).filter(Boolean)
+        const twoMetres = track.find((row) => row[1] - 400 >= 2000)
+        if (twoMetres) expect(Math.abs(twoMetres[2] - MID)).toBeLessThanOrEqual(6)
+      }
+    }
+  })
 
+  it('hits the ball it was aimed at, with side on, at any pace', () => {
+    for (const power of [0.15, 0.3, 0.5, 0.8]) {
+      for (const side of [-1, 1]) {
+        const out = simulateStroke(cueAndRed(1500), { aimAngle: 0, power, spin: { x: side, y: 0 } })
+        expect(out.firstContactId).toBe(1)
+      }
+    }
+  })
+
+  it('still throws the object ball the other way', () => {
     const hit = (side: number) =>
       simulateStroke(cueAndRed(240), { aimAngle: 0, power: 0.5, spin: { x: side, y: 0 } }).balls.find((ball) => ball.id === 1)!
     const thrownLeft = hit(-1)
