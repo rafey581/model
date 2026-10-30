@@ -596,12 +596,9 @@ function header(_options: { home?: boolean } = {}): HTMLElement {
 
     right.appendChild(renderBell())
 
-    // Avatar opens a compact menu for account actions so the HUD stays one balance + face.
+    // The player's face and name. It opens nothing: there are no account actions to offer.
     const menuWrap = el('div', 'profile-menu')
-    const chip = el('button', 'user-chip user-chip-btn') as HTMLButtonElement
-    chip.type = 'button'
-    chip.setAttribute('aria-haspopup', 'menu')
-    chip.setAttribute('aria-expanded', 'false')
+    const chip = el('div', 'user-chip user-chip-btn')
     chip.title = currentUser.username
     const badge = el('span', 'profile-badge')
     badge.innerHTML = profileBadgeFrameSvg()
@@ -615,32 +612,8 @@ function header(_options: { home?: boolean } = {}): HTMLElement {
     name.appendChild(el('strong', undefined, currentUser.username))
     chip.appendChild(name)
 
-    const dropdown = el('div', 'profile-menu-panel')
-    dropdown.setAttribute('role', 'menu')
-    dropdown.hidden = true
-
-    const logout = el('button', 'profile-menu-item', 'Logout') as HTMLButtonElement
-    logout.type = 'button'
-    logout.setAttribute('role', 'menuitem')
-    logout.onclick = () => void signOut()
-    dropdown.appendChild(logout)
-
-    chip.onclick = (e) => {
-      e.stopPropagation()
-      const open = dropdown.hidden
-      dropdown.hidden = !open
-      chip.setAttribute('aria-expanded', String(open))
-      if (open) {
-        const onDoc = (): void => {
-          dropdown.hidden = true
-          chip.setAttribute('aria-expanded', 'false')
-          document.removeEventListener('click', onDoc)
-        }
-        Promise.resolve().then(() => document.addEventListener('click', onDoc))
-      }
-    }
-
-    menuWrap.append(chip, dropdown)
+    // No log-out menu: one account per phone, and the phone stays signed in to it.
+    menuWrap.append(chip)
     right.appendChild(menuWrap)
   }
   head.appendChild(right)

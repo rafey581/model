@@ -38,15 +38,12 @@ export function renderSettings(bridge: LobbyBridge, actions: SettingsActions): H
   panel.appendChild(renderMusic(actions))
   panel.appendChild(renderQualityRow(actions))
 
+  // The account a phone is signed in to stays signed in: there is no log-out button.
+  // One account per phone is the rule, so there is no other account to switch to.
   const account = el('div', 'gl-settings-row')
   const accountCopy = el('div')
   accountCopy.append(el('div', undefined, SETTINGS_COPY.accountLabel), el('p', undefined, SETTINGS_COPY.accountHint(bridge.username)))
-  const signOut = el('button', 'gl-chip gl-settings-signout', SETTINGS_COPY.signOut) as HTMLButtonElement
-  signOut.type = 'button'
-  signOut.onclick = () => {
-    if (window.confirm(SETTINGS_COPY.signOutConfirm)) actions.onSignOut()
-  }
-  account.append(accountCopy, signOut)
+  account.append(accountCopy)
   panel.appendChild(account)
 
   screen.appendChild(panel)
