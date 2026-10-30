@@ -290,7 +290,13 @@ let shotStartBalls: FrameSnapshotData['balls'] | null = null
  * played out in full and no two shots' worth of movement are ever applied in one
  * jump.
  */
-let queuedUpdate: GameUpdatePayload | null = null
+/**
+ * Shots that arrived while one was still on screen, oldest first. Every one is played in
+ * turn: keeping only the latest (as this once did) skipped the shot in between, so the
+ * next replay started from a table a shot out of date and balls appeared, vanished or
+ * jumped on the opponent's screen.
+ */
+const queuedUpdates: GameUpdatePayload[] = []
 /**
  * False from a shot's arrival until the server says the table is free again (the fresh
  * turn clock it sends when it releases the shot). The server now waits for every player
@@ -1721,7 +1727,7 @@ function tableSettled(): Promise<void> {
   return new Promise((resolve) => {
     const started = performance.now()
     const check = (): void => {
-      if ((shotPlayer === null && predictedShot === null && queuedUpdate === null) || performance.now() - started > FINAL_SHOT_WAIT_MS) resolve()
+      if ((shotPlayer === null && predictedShot === null && queuedUpdates.length === 0) || performance.now() - started > FINAL_SHOT_WAIT_MS) resolve()
       else window.setTimeout(check, 100)
     }
     check()
@@ -3216,7 +3222,7 @@ function enterMatch(matchId: string, isPractice = false): void {
 }
 
 function syncMusicDuck(): void {
-  setMusicDucked(shotInFlight || shotPlayer !== null || predictedShot !== null || queuedUpdate !== null)
+  setMusicDucked(shotInFlight || shotPlayer !== null || predictedShot !== null || queuedUpdates.length > 0)
 }
 
 /**
@@ -3767,7 +3773,7 @@ function handleGameUpdate(data: GameUpdatePayload): void {
   // been watched once, and the new one has not.
   if (shotInFlight && skipHighlight) skipHighlight()
   if (shotInFlight) {
-    queuedUpdate = data
+    queuedUpdates.push(data)
     return
   }
   applyGameUpdate(data)
@@ -3778,7 +3784,7 @@ function handleGameUpdate(data: GameUpdatePayload): void {
  * has taken delivery of the previous shot's "finished" acknowledgement.
  *
  * All three conditions matter. `shotPlayer` is the replay that is on screen,
- * `queuedUpdate` is a shot still waiting behind it, and `shotInFlight` stays set
+ * `queuedUpdates` are shots still waiting behind it, and `shotInFlight` stays set
  * from the moment a replay starts until the server has confirmed it finished, so
  * it also covers the brief window where the animation has ended but the server is
  * still holding the table. Aiming or firing in that window would hand the server a
@@ -3790,7 +3796,7 @@ function isVisitPlayable(): boolean {
     myTurn &&
     tableReleased &&
     shotPlayer === null &&
-    queuedUpdate === null &&
+    queuedUpdates.length === 0 &&
     !shotInFlight &&
     predictedShot === null &&
     !myFoulChoicePending()
@@ -3874,7 +3880,7 @@ function ensureFoulChoiceUi(): void {
  */
 function syncFoulChoiceUi(): void {
   const choice = activeMatchId ? frame?.foulChoice : null
-  const settled = shotPlayer === null && predictedShot === null && queuedUpdate === null && !shotInFlight && recapPlayer === null
+  const settled = shotPlayer === null && predictedShot === null && queuedUpdates.length === 0 && !shotInFlight && recapPlayer === null
   const mine = !!choice && mySeat !== undefined && choice.chooser === mySeat && settled
   const theirs = !!choice && mySeat !== undefined && choice.offender === mySeat && settled && !activeMatchIsPractice
   if (!choice) foulChoiceSent = false
@@ -3905,7 +3911,7 @@ function removeFoulChoiceUi(): void {
  */
 function predictMyShot(shot: Omit<ShotInput, 'timestamp'>): void {
   predictedShot = null
-  if (!frame || frame.cueInHand || shotPlayer || queuedUpdate || shotInFlight) return
+  if (!frame || frame.cueInHand || shotPlayer || queuedUpdates.length > 0 || shotInFlight) return
   try {
     const playback = predictShot(frame.balls, { aimAngle: shot.aimAngle, power: shot.power, spin: shot.spin })
     if (!playback) return
@@ -3961,7 +3967,7 @@ function abandonPlayback(): void {
   replaySfx?.shotEnded()
   shotPreRoll = 0
   shotStartBalls = null
-  queuedUpdate = null
+  queuedUpdates.length = 0
   shotInFlight = false
   markTableReleased()
   deferredPots = []
@@ -4917,15 +4923,14 @@ function stepShotPlayback(target: FrameSnapshotData, dtSeconds: number): FrameSn
     // turn's clock while it is on screen. Not when another shot is already waiting.
     const highlight = pendingHighlight
     pendingHighlight = null
-    if (highlight && !queuedUpdate) playHighlight(highlight)
+    if (highlight && queuedUpdates.length === 0) playHighlight(highlight)
     else finishShot()
   }
 
   // This shot is done, so the table shows its settled state and any shot that was
   // held up starts animating now.
-  if (queuedUpdate) {
-    const next = queuedUpdate
-    queuedUpdate = null
+  if (queuedUpdates.length > 0) {
+    const next = queuedUpdates.shift()!
     applyGameUpdate(next)
     if (shotPlayer && frame) {
       // The queued shot has a replay of its own, so show its first frame at once
@@ -5076,7 +5081,7 @@ if (new URLSearchParams(window.location.search).has('tabledebug')) {
   ;(window as unknown as { __tableCheck: () => unknown }).__tableCheck = () => ({
     matchId: activeMatchId,
     seat: mySeat,
-    settled: shotPlayer === null && predictedShot === null && queuedUpdate === null && !shotInFlight,
+    settled: shotPlayer === null && predictedShot === null && queuedUpdates.length === 0 && !shotInFlight,
     turn: frame?.turnIndex ?? null,
     balls: frame?.balls ?? [],
     frame,
