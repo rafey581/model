@@ -5105,6 +5105,12 @@ async function init(): Promise<void> {
 // with the server's (see Scene3D.debugTableCheck). Nothing is exposed otherwise.
 if (new URLSearchParams(window.location.search).has('tabledebug')) {
   ;(window as unknown as { __tableDebugOn: boolean }).__tableDebugOn = true
+  ;(window as unknown as { __settleDebug: () => unknown }).__settleDebug = () => ({
+    shotPlayer: shotPlayer !== null,
+    predictedShot: predictedShot !== null,
+    queued: queuedUpdates.length,
+    shotInFlight
+  })
   ;(window as unknown as { __tableCheck: () => unknown }).__tableCheck = () => ({
     motionStarts: scene3d ? [...scene3d.debugMotionStarts] : [],
     matchId: activeMatchId,
