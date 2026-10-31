@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { BALL_RADIUS } from '@snooker/shared'
+import { BALL_IDS, BALL_RADIUS } from '@snooker/shared'
 import {
   COLOURED_BALL_CLEARCOAT,
   COLOURED_BALL_CLEARCOAT_ROUGHNESS,
@@ -34,6 +34,7 @@ import {
   cueShadowPixels
 } from './ballVisuals.js'
 import { BallRig } from './scene3d.js'
+import { ballColor } from './palette.js'
 
 const fakeShadow = (): THREE.CanvasTexture => new THREE.Texture() as THREE.CanvasTexture
 
@@ -191,7 +192,7 @@ describe('BallRig material wiring', () => {
 
   it('rolls the sphere when the ball translates across the cloth', () => {
     const cue = new BallRig(BALL_RADIUS, 0xffffff, fakeShadow(), { cue: true })
-    cue.aim(0, 0, false, true)
+    cue.aim(0, 0, true)
     cue.group.position.set(0, BALL_RADIUS, 0)
     cue.stepRoll()
     const before = cue.sphere.quaternion.clone()
@@ -261,7 +262,7 @@ describe('cue ball contact shadow', () => {
 
   it('sits the cue disc just off the cloth, leaning and stretched', () => {
     const cue = new BallRig(BALL_RADIUS, 0xffffff, fakeShadow(), { cue: true })
-    cue.aim(600, 0, false, true)
+    cue.aim(600, 0, true)
     const worldY = cue.group.position.y + cue.blob.position.y
     expect(worldY).toBeCloseTo(CUE_SHADOW_Y_MM, 9)
     expect(CUE_SHADOW_Y_MM).toBe(0.8)
@@ -272,9 +273,17 @@ describe('cue ball contact shadow', () => {
 
   it('sits a circular contact disc directly under a coloured ball', () => {
     const red = new BallRig(BALL_RADIUS, 0xd91515, fakeShadow())
-    red.aim(600, 0, false, true)
+    red.aim(600, 0, true)
     expect(red.group.position.y + red.blob.position.y).toBeCloseTo(0.5, 9)
     expect(Math.hypot(red.blob.position.x, red.blob.position.z)).toBeCloseTo(0, 9)
     expect(red.blob.scale.x).toBeCloseTo(1, 9)
+  })
+
+  it('never tints a ball: the black stays black when it is the ball on', () => {
+    const black = new BallRig(BALL_RADIUS, ballColor(BALL_IDS.BLACK), fakeShadow())
+    black.aim(600, 0, true)
+    black.aim(620, 10, false)
+    expect(ballGlow(black.material)).toBe(0x000000)
+    expect((black.material as THREE.MeshPhysicalMaterial).color.getHex()).toBe(ballColor(BALL_IDS.BLACK))
   })
 })

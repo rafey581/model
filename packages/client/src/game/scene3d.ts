@@ -22,7 +22,7 @@ import type { ShotPlayback } from '@snooker/shared'
 import { ballColor } from './palette.js'
 import {
   createBallMaterial,
-  setBallGlow,
+  ballGlow,
   type BallMaterial,
   cueShadowPixels,
   CUE_SHADOW_OFFSET_MM,
@@ -1490,7 +1490,7 @@ export class BallRig {
     ;(smear.material as THREE.MeshBasicMaterial).opacity = 0.1 + amount * 0.16
   }
 
-  aim(targetX: number, targetZ: number, highlight: boolean, reset: boolean): void {
+  aim(targetX: number, targetZ: number, reset: boolean): void {
     if (reset) {
       this.group.position.set(targetX, BALL_RADIUS, targetZ)
       this.fresh = true
@@ -1516,7 +1516,9 @@ export class BallRig {
       this.blob.position.set(0, shadowY - BALL_RADIUS, 0)
       this.blob.scale.set(1, 1, 1)
     }
-    setBallGlow(this.material, highlight ? 0x7a5c10 : 0x000000)
+    // No glow for the ball that is on. It used to light up with a gold emissive, and a
+    // glow adds to a ball's own colour: the black came out brown and the pink orange, so
+    // the ball on looked like a different ball. A ball is always drawn in its own colour.
   }
 
   dispose(): void {
@@ -4542,7 +4544,6 @@ const outerL = APRON_OUTER_L
     }
 
     if (!this.shadowTexCache) this.shadowTexCache = contactShadowTexture()
-    const highlightId = this.resolveHighlight(snapshot)
     const seen = new Set<number>()
 
     // The server has taken the placement once its snapshot stops saying the cue ball is
@@ -4592,12 +4593,12 @@ const outerL = APRON_OUTER_L
         // Not a rise: it was never potted as far as the player is concerned, it was
         // placed. Snapping rather than rising is the difference between a ball staying
         // where it was put and a ball popping up from a pocket it never went in.
-        rig.aim(lx, lz, ball.id === highlightId, rig.firstSeen || lockMoved > 500)
+        rig.aim(lx, lz, rig.firstSeen || lockMoved > 500)
       } else if (!ball.potted) {
         const x = tableX(ball.x)
         const z = tableZ(ball.y)
         const moved = Math.hypot(rig.group.position.x - x, rig.group.position.z - z)
-        rig.aim(x, z, ball.id === highlightId, rig.firstSeen || moved > 500)
+        rig.aim(x, z, rig.firstSeen || moved > 500)
         // A ball that was potted and is now on the table has been re-racked rather than
         // moved, so it rises onto its spot instead of being snapped there. The cue ball
         // into hand after an in-off is the case this exists for; a colour the rules
@@ -4645,7 +4646,7 @@ const outerL = APRON_OUTER_L
       const locked = this.balls.get(BALL_IDS.CUE)
       if (locked) {
         locked.setVisible(true)
-        locked.aim(tableX(this.placementCueLock.x), tableZ(this.placementCueLock.y), false, locked.firstSeen)
+        locked.aim(tableX(this.placementCueLock.x), tableZ(this.placementCueLock.y), locked.firstSeen)
       }
     }
 
@@ -4670,12 +4671,6 @@ const outerL = APRON_OUTER_L
     } else {
       this.hideAim()
     }
-  }
-
-  private resolveHighlight(snapshot: FrameSnapshotData): number | null {
-    if (snapshot.ballOn === 'RED') return null
-    const match = /colour:(\d+)/.exec(snapshot.ballOn)
-    return match ? Number(match[1]) : null
   }
 
   private showAim(cueBall: { x: number; y: number }, aim: AimState, balls: AimGuideBall[], ballOn = ''): void {
@@ -5899,6 +5894,7 @@ const outerL = APRON_OUTER_L
       if (ball.id !== BALL_IDS.CUE && material.color && material.color.getHex() !== ballColor(ball.id)) {
         issues.push(`ball ${ball.id}: drawn #${material.color.getHex().toString(16)} instead of #${ballColor(ball.id).toString(16)}`)
       }
+      if (ballGlow(rig.material) !== 0) issues.push(`ball ${ball.id}: glowing #${ballGlow(rig.material).toString(16)} over its own colour`)
     }
     return issues
   }
