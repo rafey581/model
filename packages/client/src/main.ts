@@ -2039,10 +2039,10 @@ function render(): void {
   } else if (activeTournamentId) {
     app.appendChild(header())
     void renderTournament()
-  } else if (USE_NEW_LOBBY && activeScreen !== 'tournaments') {
+  } else if (USE_NEW_LOBBY && activeScreen !== 'tournaments' && activeScreen !== 'leaderboard') {
     // New gaming lobby UI (presentation only). Flip USE_NEW_LOBBY in lobby/flag.ts to restore the old lobby.
-    // `tournaments` is the exception: its tile hands back to the existing screen below,
-    // which is the same one the old lobby's Tournament card has always opened.
+    // `tournaments` and `leaderboard` are the exceptions: their menu items hand back to the
+    // existing screens below, the same ones the old lobby has always opened.
     app.className = 'app-root app-home'
     lobbySession = mountGamingLobby(app, createLobbyBridge())
   } else if (activeScreen === 'home') {
@@ -2182,6 +2182,10 @@ function createLobbyBridge(): LobbyBridge {
     },
     openTournaments: () => {
       activeScreen = 'tournaments'
+      render()
+    },
+    openLeaderboard: () => {
+      activeScreen = 'leaderboard'
       render()
     },
     openSupport: () => openSupportChat(),

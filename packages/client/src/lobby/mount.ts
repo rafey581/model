@@ -124,7 +124,7 @@ export function mountGamingLobby(host: HTMLElement, bridge: LobbyBridge): LobbyS
         paint()
         return
       case 'leaderboard':
-        bridge.toast('The leaderboard is coming soon.', 'info')
+        bridge.openLeaderboard()
         return
       case 'friends':
         state.view = 'friends'

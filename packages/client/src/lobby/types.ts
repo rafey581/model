@@ -92,6 +92,8 @@ export interface LobbyBridge {
   onProfileActivate: () => void
   /** Hands back to main.ts for the existing tournaments screen (create / join / bracket). */
   openTournaments: () => void
+  /** Hands back to main.ts for the existing leaderboard screen (stats and rankings). */
+  openLeaderboard: () => void
   /** Opens the customer support chat over the lobby. */
   openSupport: () => void
   /** Ends the session and returns to the sign-in screen. */
