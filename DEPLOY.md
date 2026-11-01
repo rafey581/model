@@ -171,7 +171,7 @@ pnpm install
 pnpm --filter @snooker/shared build
 cd packages/client
 pnpm build:app          # web build with the server address baked in
-npx cap sync android    # copies it into the Android project
+pnpm cap:sync           # copies it into the Android project (npx cap can fail to find the local CLI)
 cd android
 ./gradlew assembleDebug        # Windows: gradlew.bat assembleDebug
 ```
