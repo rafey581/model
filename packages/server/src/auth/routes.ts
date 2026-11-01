@@ -412,7 +412,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   /**
    * GET /api/auth/status
    */
-  app.get('/api/auth/status', async (request, reply) => {
+  app.get('/api/auth/status', { config: { public: true } }, async (request, reply) => {
     const token = (request as any).cookies?.token || request.headers.authorization?.replace('Bearer ', '')
     if (!token) return reply.send({ ok: true, data: { authenticated: false } })
     try {
