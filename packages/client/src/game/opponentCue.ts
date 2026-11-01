@@ -59,7 +59,7 @@ export interface OpponentCue {
    */
   setSpectator(on: boolean, thickness: number, aimSeconds: number): void
   /** Seconds from the cue coming up to the moment it strikes, as it is dressed now. */
-  preRoll(): number
+  preRoll(angle?: number): number
   /**
    * Stands the cue at the cue ball before any shot is known: the opponent at the table,
    * feathering, from the moment their visit starts. `angle` is only where the cue rests —
@@ -85,6 +85,16 @@ const ADDRESS_FEATHER_MM = 38
 const ADDRESS_FEATHER_HZ = 0.75
 /** How long the cue takes to swing from where it was resting onto the shot's line. */
 const TURN_SECONDS = 0.5
+/** A cue resting within this of a shot's line is already on it: no turn is played. */
+const ON_LINE_RAD = (3 * Math.PI) / 180
+
+/** The short way round from one heading to another, in radians (-PI..PI]. */
+function turnTo(from: number, to: number): number {
+  let by = (to - from) % (Math.PI * 2)
+  if (by > Math.PI) by -= Math.PI * 2
+  if (by <= -Math.PI) by += Math.PI * 2
+  return by
+}
 
 export function buildOpponentCue(config: VenueConfig = VENUE_CONFIG): OpponentCue {
   const cfg = config.cue
@@ -200,12 +210,18 @@ export function buildOpponentCue(config: VenueConfig = VENUE_CONFIG): OpponentCu
       gap = cfg.restGapMm
       group.visible = true
       if (phase === 'address' && shot) {
-        // Already at the table: swing from where the cue is resting onto the shot's line,
-        // the short way round, and only then line up.
+        // Already at the table, lined up by the player's live aim: the viewer has watched
+        // them line up, so the cue does not do it again. It draws back and strikes. Only a
+        // cue resting on a different line (no live aim came through) swings onto it first.
+        const by = turnTo(shot.angle, next.angle)
+        if (Math.abs(by) <= ON_LINE_RAD) {
+          shot = { ...next, power }
+          phase = 'backswing'
+          clock = 0
+          place(gap, power)
+          return
+        }
         turnFrom = shot.angle
-        let by = (next.angle - turnFrom) % (Math.PI * 2)
-        if (by > Math.PI) by -= Math.PI * 2
-        if (by <= -Math.PI) by += Math.PI * 2
         turnBy = by
         shot = { ...next, angle: turnFrom, power }
         phase = 'turn'
@@ -258,7 +274,8 @@ export function buildOpponentCue(config: VenueConfig = VENUE_CONFIG): OpponentCu
         shot.angle = turnFrom + turnBy * ease(t)
         place(gap, 0)
         if (t >= 1) {
-          phase = 'aim'
+          // Turned from an address onto the line: the player has already lined up.
+          phase = 'backswing'
           clock = 0
         }
         return
@@ -314,9 +331,14 @@ export function buildOpponentCue(config: VenueConfig = VENUE_CONFIG): OpponentCu
     power(): number {
       return phase === 'idle' ? 0 : shown
     },
-    preRoll(): number {
-      // A cue that is already addressing has to turn onto the line first.
-      return (phase === 'address' ? TURN_SECONDS : 0) + aimSeconds + cfg.backswingSeconds + cfg.strikeSeconds
+    preRoll(angle?: number): number {
+      // A cue already addressing the ball skips lining up (see `show`), and turns onto the
+      // line first only when it is resting on a different one.
+      if (phase === 'address' && shot) {
+        const onLine = angle !== undefined && Math.abs(turnTo(shot.angle, angle)) <= ON_LINE_RAD
+        return (onLine ? 0 : TURN_SECONDS) + cfg.backswingSeconds + cfg.strikeSeconds
+      }
+      return aimSeconds + cfg.backswingSeconds + cfg.strikeSeconds
     },
     setSpectator(on: boolean, thickness: number, spectatorAimSeconds: number): void {
       // The stick lies along its own Z, so X and Y are its thickness and Z its length.

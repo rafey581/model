@@ -68,7 +68,7 @@ export interface VenueEvents {
    * The scene needs this to line the strike up with the first frame of the replay: the
    * cue is a picture that has to meet a picture that arrives later.
    */
-  cuePreRoll(): number
+  cuePreRoll(angle?: number): number
   /** Takes it down. */
   hideCue(): void
   /** True while the opponent's cue is lining up or drawing back, before it strikes. */
@@ -429,8 +429,8 @@ export function buildVenueEvents(host: VenueHost, config: VenueConfig = VENUE_CO
     showCue(shot: OpponentShot): void {
       cue.show(shot)
     },
-    cuePreRoll(): number {
-      return cue.preRoll()
+    cuePreRoll(angle?: number): number {
+      return cue.preRoll(angle)
     },
     hideCue(): void {
       cue.hide()

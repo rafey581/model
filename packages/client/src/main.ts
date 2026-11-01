@@ -282,6 +282,7 @@ const END_TROPHY_SVG =
  * and read is what is being seen.
  */
 let shotPreRoll = 0
+let debugFps = 0
 /** Where the balls stood before the shot being held, which is what is drawn while it waits. */
 let shotStartBalls: FrameSnapshotData['balls'] | null = null
 /**
@@ -297,6 +298,9 @@ let shotStartBalls: FrameSnapshotData['balls'] | null = null
  * jumped on the opponent's screen.
  */
 const queuedUpdates: GameUpdatePayload[] = []
+/** Debug only (?tabledebug): when each shot reached this phone and what happened to it, for timing checks. */
+const debugShotLog: Array<Record<string, number | boolean | string>> = []
+const debugTiming = new URLSearchParams(window.location.search).has('tabledebug')
 /**
  * False from a shot's arrival until the server says the table is free again (the fresh
  * turn clock it sends when it releases the shot). The server now waits for every player
@@ -3792,6 +3796,7 @@ function handleGameUpdate(data: GameUpdatePayload): void {
   // A highlight gives way at once to the next shot: the replay it is showing has already
   // been watched once, and the new one has not.
   if (shotInFlight && skipHighlight) skipHighlight()
+  if (debugTiming && data.playback) debugShotLog.push({ arrived: Date.now(), queuedBehind: shotInFlight, queueLength: queuedUpdates.length })
   if (shotInFlight) {
     queuedUpdates.push(data)
     return
@@ -4068,6 +4073,7 @@ function applyGameUpdate(data: GameUpdatePayload): void {
       // The opponent's cue winds up before their replay runs; my own shot's replay waits for
       // the rest of my stroke, so the ball leaves as the tip meets it, never before.
       shotPreRoll = opponentsShot ? (scene3d?.opponentShotPreRoll(data.playback) ?? 0) : (scene3d?.strikeRemainingSeconds() ?? 0)
+      if (debugTiming) debugShotLog.push({ applied: Date.now(), preRoll: shotPreRoll, opponentsShot })
       // Sound only: tells the effects a replay has been set up. Nothing comes back.
       replaySfx?.shotStarted(data.playback, previous.balls)
       // Picture only: lets the camera know whether a ball is going to drop, and where.
@@ -4756,7 +4762,13 @@ function loop(): void {
     nextFrameAt = frameNow - nextFrameAt > 100 ? frameNow + 1000 / MAX_FPS : nextFrameAt + 1000 / MAX_FPS
     if (canvas && frame) {
       const now = performance.now()
+      if (debugTiming) debugFps = debugFps * 0.95 + (1000 / Math.max(1, now - lastFrameTime)) * 0.05
       const fdt = Math.min(200, now - lastFrameTime)
+      // Shots replay on the wall clock, not on capped frame steps: a phone drawing few
+      // frames a second skips frames of the replay instead of slowing it down, so the
+      // opponent's screen stays in time with the shooter's. (Capped at a few seconds so a
+      // phone coming back from the background catches up rather than leaping a whole match.)
+      const shotDt = Math.min(5000, now - lastFrameTime) / 1000
       lastFrameTime = now
       // High is watched as well as Auto. A player who picks High is asking for the
       // sharpest picture the machine can hold smoothly, not for a slideshow: if frames run
@@ -4773,7 +4785,7 @@ function loop(): void {
       }
       // While a shot replays, the table shows sampled simulation positions; the
       // authoritative snapshot above still drives the HUD and turn state.
-      const shown = stepShotPlayback(frame, fdt / 1000)
+      const shown = stepShotPlayback(frame, shotDt)
       const cue = shown.balls.find((b) => b.id === 0 && !b.potted)
       if (cue) cueController?.setCuePosition(cue.x, cue.y)
       // Ball-in-hand placement runs before the camera is set, because it is one
@@ -4919,6 +4931,7 @@ function stepShotPlayback(target: FrameSnapshotData, dtSeconds: number): FrameSn
     // The opponent's cue is still winding up: the table stands exactly as it was before
     // the shot, and the replay has not been started.
     shotPreRoll -= dtSeconds
+    if (debugTiming && shotPreRoll <= 0) debugShotLog.push({ replayStarts: Date.now() })
     return { ...target, balls: shotStartBalls }
   }
   if (shotPlayer) {
@@ -5117,6 +5130,8 @@ if (new URLSearchParams(window.location.search).has('tabledebug')) {
   })
   ;(window as unknown as { __tableCheck: () => unknown }).__tableCheck = () => ({
     motionStarts: scene3d ? [...scene3d.debugMotionStarts] : [],
+    shotLog: [...debugShotLog],
+    fps: debugFps,
     matchId: activeMatchId,
     seat: mySeat,
     settled: shotPlayer === null && predictedShot === null && queuedUpdates.length === 0 && !shotInFlight,

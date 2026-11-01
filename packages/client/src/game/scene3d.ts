@@ -5675,14 +5675,15 @@ const outerL = APRON_OUTER_L
    */
   opponentShotPreRoll(playback: ShotPlayback | undefined): number {
     if (!SPECTATOR_CAM.enabled || !this.venue) return 0
-    if (!readOpponentShot(playback)) return 0
+    const shot = readOpponentShot(playback)
+    if (!shot) return 0
     // A quick opponent can play before the view has gone up. It goes up on the next frame
     // for their shot, so the cue is dressed for it now: the wind-up being timed here has
     // to be the one that is about to be shown.
     if (!this.spectating) {
       this.venue.setSpectator(true, SPECTATOR_CAM.cueThicknessScale, SPECTATOR_CAM.cueAimSeconds)
     }
-    return this.venue.cuePreRoll()
+    return this.venue.cuePreRoll(shot.angle)
   }
 
   /**
@@ -5702,7 +5703,9 @@ const outerL = APRON_OUTER_L
 
   render(): void {
     const now = performance.now()
-    const dt = Math.min(0.05, (now - this.lastTime) / 1000)
+    // Real time down to 4 frames a second. It was capped at 0.05 s, so below 20 fps the
+    // opponent's cue wound up in slow motion and their shot was seen seconds late.
+    const dt = Math.min(0.25, (now - this.lastTime) / 1000)
     this.lastTime = now
     // The venue is stepped first and on the same clock as everything else: the crowd keeps
     // time, the banner counts down, and the opponent's cue advances, all on this frame's
