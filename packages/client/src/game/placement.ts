@@ -52,18 +52,19 @@ export function isCrowded(pos: { x: number; y: number }, balls: Array<{ id: numb
  *
  * Pure and mirrored from the server's own `resolveCuePlacement`, so the client can
  * show an honest ghost without ever deciding the rule itself: the server still
- * rejects illegal placements authoritatively. `inD` says which restriction is in
- * force, which the snapshot's `cueInHandInD` carries.
+ * rejects illegal placements authoritatively. Ball in hand is always the D, at the
+ * break-off and after the cue ball leaves the table. `inD` is kept so older call
+ * sites still compile; it cannot turn the D off.
  */
 export function placementStatus(
   pos: { x: number; y: number },
-  inD: boolean,
+  _inD: boolean,
   balls: Array<{ id: number; x: number; y: number; potted: boolean }>
 ): { ok: boolean; reason: 'off-table' | 'in-pocket' | 'crowded' | 'outside-D' | null } {
   if (!isOnTable(pos)) return { ok: false, reason: 'off-table' }
   if (isInsideAPocket(pos)) return { ok: false, reason: 'in-pocket' }
   if (isCrowded(pos, balls)) return { ok: false, reason: 'crowded' }
-  if (inD && !isInsideD(pos)) return { ok: false, reason: 'outside-D' }
+  if (!isInsideD(pos)) return { ok: false, reason: 'outside-D' }
   return { ok: true, reason: null }
 }
 

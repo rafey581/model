@@ -762,9 +762,9 @@ const CLOTH_BAKED_LEVEL = 1.25
 const CLOTH_LIT_LEVEL = 1.22
 
 /** How strongly the fibre tile shows in the bed's colour. */
-const CLOTH_DETAIL_STRENGTH = 0.04
+const CLOTH_DETAIL_STRENGTH = 0.07
 /** How strongly the fibre shows on the cushions, and how much cloth one repeat of it covers in mm. */
-const CUSHION_DETAIL_STRENGTH = 0.04
+const CUSHION_DETAIL_STRENGTH = 0.08
 const CLOTH_DETAIL_TILE_MM = 270
 
 /**
@@ -818,7 +818,7 @@ function withWorldClothDetail<T extends ClothMaterial>(material: T, strength = C
       // This is one instruction on the colour, not a second lighting model.
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <opaque_fragment>',
-        'outgoingLight += vec3(0.01, 0.022, 0.006) * pow(clamp(1.0 - abs(normalize(normal).z), 0.0, 1.0), 3.2);\n#include <opaque_fragment>'
+        'outgoingLight += vec3(0.04, 0.085, 0.028) * pow(clamp(1.0 - abs(normalize(normal).z), 0.0, 1.0), 2.15);\n#include <opaque_fragment>'
       )
     }
   }
@@ -847,7 +847,7 @@ function withClothDetail<T extends ClothMaterial>(material: T): T {
     if (lit) {
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <opaque_fragment>',
-        'outgoingLight += vec3(0.01, 0.022, 0.006) * pow(clamp(1.0 - abs(normalize(normal).z), 0.0, 1.0), 3.2);\n#include <opaque_fragment>'
+        'outgoingLight += vec3(0.04, 0.085, 0.028) * pow(clamp(1.0 - abs(normalize(normal).z), 0.0, 1.0), 2.15);\n#include <opaque_fragment>'
       )
     }
   }
@@ -876,7 +876,6 @@ function withClothDetail<T extends ClothMaterial>(material: T): T {
 function tableMaterials(clothMat: ClothMaterial): TableMaterials {
   const tier = qualityConfig()
   const isLow = tier.name === 'low'
-  const isHighTier = tier.name === 'high'
 
   const wood = new THREE.MeshPhysicalMaterial({
     map: woodTexture(),
@@ -906,20 +905,25 @@ function tableMaterials(clothMat: ClothMaterial): TableMaterials {
   })
   if (!isLow) brass.roughnessMap = brassRoughnessTexture()
 
-  // The cushions are the same cloth as the bed and follow it: diffuse below the high tier.
+  // The cushions are the same cloth as the bed. Above the low tier they carry a nap
+  // sheen and a whisper of clearcoat along the nose, which is where a cushion reads
+  // as cloth rather than as a flat green strip. The bed stays diffuse: it fills half
+  // the frame, and a sheen lobe there is what the frame rate cannot afford.
   let jawCloth: ClothMaterial
-  if (isHighTier && !BAKED_LIGHT_ON_EVERY_TIER) {
+  if (!isLow) {
     jawCloth = new THREE.MeshPhysicalMaterial({
       map: cushionFeltTexture(),
       color: new THREE.Color(CLOTH_COLOR_MID),
       vertexColors: true,
-      roughness: 0.9,
+      roughness: 0.72,
       metalness: 0,
-      sheen: CLOTH_SHEEN,
-      sheenColor: new THREE.Color(CLOTH_SHEEN_COLOR),
-      sheenRoughness: CLOTH_SHEEN_ROUGHNESS,
+      sheen: 0.58,
+      sheenColor: new THREE.Color('#e7ffd6'),
+      sheenRoughness: 0.42,
+      clearcoat: 0.1,
+      clearcoatRoughness: 0.38,
       side: THREE.DoubleSide,
-      envMapIntensity: 0.12
+      envMapIntensity: 0.22
     })
   } else {
     jawCloth = new THREE.MeshLambertMaterial({
@@ -1151,11 +1155,23 @@ function ballEnvTexture(): THREE.CanvasTexture {
     grad.addColorStop(1, '#091c0c')
     ctx.fillStyle = grad
     ctx.fillRect(0, 0, w, h)
-    // One light bank, hard-edged. A ball mirrors it as a crisp white rectangle.
-    ctx.fillStyle = '#ffffff'
-    const bankW = w * 0.5
-    const bankH = h * 0.07
-    ctx.fillRect(w * 0.5 - bankW / 2, h * 0.14, bankW, bankH)
+    // Soft canopy lamps. A ball mirrors a hard rectangle as a sticker; an ellipse with
+    // a bright core and a falloff reads as lacquer under a tournament light.
+    const lamp = (cx: number, cy: number, rx: number, ry: number): void => {
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(rx, ry))
+      g.addColorStop(0, '#ffffff')
+      g.addColorStop(0.18, 'rgba(255,252,244,0.96)')
+      g.addColorStop(0.5, 'rgba(255,236,206,0.4)')
+      g.addColorStop(1, 'rgba(255,236,206,0)')
+      ctx.fillStyle = g
+      ctx.beginPath()
+      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    lamp(w * 0.5, h * 0.2, w * 0.2, h * 0.055)
+    lamp(w * 0.5, h * 0.2, w * 0.05, h * 0.015)
+    lamp(w * 0.22, h * 0.28, w * 0.042, h * 0.018)
+    lamp(w * 0.78, h * 0.28, w * 0.042, h * 0.018)
     ctx.fillStyle = '#0c3d18'
     ctx.fillRect(0, h * 0.62, w, h * 0.38)
     const texture = new THREE.CanvasTexture(canvas)
@@ -1203,8 +1219,8 @@ function canopyEnvTexture(): THREE.CanvasTexture {
  * Held a little under full so a ball keeps its own colour and falls into shade below its
  * middle, with a crisp highlight on top, rather than every ball washed bright all over.
  */
-const BALL_ENV_INTENSITY = 6.2
-const CUE_BALL_ENV_INTENSITY = 6.6
+const BALL_ENV_INTENSITY = 7.1
+const CUE_BALL_ENV_INTENSITY = 7.6
 
 /**
  * The back wall: blue paint, brightest at the height the lamp reaches, falling to
@@ -4206,10 +4222,11 @@ const outerL = APRON_OUTER_L
     this.dZoneFill = new THREE.Mesh(
       new THREE.CircleGeometry(D_RADIUS, 48, Math.PI * 0.5, Math.PI),
       new THREE.MeshBasicMaterial({
-        color: 0x9fe8b0,
+        color: 0xb6f0c4,
         transparent: true,
-        opacity: 0.14,
-        depthWrite: false
+        opacity: 0.22,
+        depthWrite: false,
+        toneMapped: false
       })
     )
     this.dZoneFill.rotation.x = -Math.PI / 2
@@ -4222,8 +4239,8 @@ const outerL = APRON_OUTER_L
     // segment. LineDashed would fight the bed's markings; a thin tube reads at
     // every angle without aliasing.
     this.dZoneRing = new THREE.Mesh(
-      new THREE.TorusGeometry(D_RADIUS, 3.5, 8, 64, Math.PI),
-      new THREE.MeshBasicMaterial({ color: 0xd9f5df, transparent: true, opacity: 0.8, depthWrite: false })
+      new THREE.TorusGeometry(D_RADIUS, 5, 10, 96, Math.PI),
+      new THREE.MeshBasicMaterial({ color: 0xf4fff6, transparent: true, opacity: 0.95, depthWrite: false, toneMapped: false })
     )
     this.dZoneRing.rotation.x = -Math.PI / 2
     // The torus arc runs 0..π counterclockwise from +x. Laid flat as it stands, that is a
@@ -4241,11 +4258,11 @@ const outerL = APRON_OUTER_L
     this.ghostBall = new THREE.Mesh(
       new THREE.SphereGeometry(BALL_RADIUS, 32, 20),
       new THREE.MeshStandardMaterial({
-        color: 0xf4f9ff,
-        roughness: 0.35,
+        color: 0xfff6e4,
+        roughness: 0.16,
         metalness: 0,
         transparent: true,
-        opacity: 0.55,
+        opacity: 0.62,
         depthWrite: false
       })
     )
@@ -4256,9 +4273,8 @@ const outerL = APRON_OUTER_L
   /**
    * Shows or hides ball-in-hand placement overlays.
    *
-   * `inD` is the snapshot's `cueInHandInD`: true only at break-off, where the D
-   * indicator is shown. A mid-frame in-hand shows no D — the whole table is legal
-   * and a stale D highlight would claim otherwise.
+   * `inD` is true for every ball in hand. The D is the only legal area, at the
+   * break-off and after the cue ball leaves the table.
    */
   setPlacementMode(active: boolean, inD: boolean): void {
     this.placementActive = active
@@ -4266,8 +4282,8 @@ const outerL = APRON_OUTER_L
     this.dZoneFill.visible = active && inD
     this.ghostBall.visible = active
     if (!active) return
-    // Park the ghost on the D centre (break-off) or the table centre (mid-frame)
-    // so it is somewhere sensible the first frame before the pointer moves it.
+    // Park the ghost in the D, which is the only legal area, so the first frame
+    // before the pointer moves is already a spot the player may use.
     const start = inD ? { x: BAULK_LINE_X, y: TABLE_WIDTH / 2 } : { x: TABLE_LENGTH / 2, y: TABLE_WIDTH / 2 }
     this.ghostPos.set(start.x, start.y)
     this.ghostBall.position.set(tableX(start.x), BALL_RADIUS, tableZ(start.y))
@@ -4294,7 +4310,7 @@ const outerL = APRON_OUTER_L
     this.ghostBall.position.set(tableX(target.x), BALL_RADIUS, tableZ(target.y))
     const status = placementStatus(target, inD, balls)
     const mat = this.ghostBall.material as THREE.MeshStandardMaterial
-    mat.color.setHex(status.ok ? 0xf4f9ff : 0xff6b6b)
+    mat.color.setHex(status.ok ? 0xfff6e4 : 0xff6b6b)
     return status
   }
 

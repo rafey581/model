@@ -100,11 +100,11 @@ export interface FrameState {
   /**
    * Whether the cue ball in hand may only be placed inside the D.
    *
-   * The D is a break-off restriction and nothing else. It is true for the opening
-   * stroke of a frame and false for every later in-hand — a cue potted mid-frame, an
-   * in-off, any other foul — because in real snooker the incoming player may then spot
-   * the cue ball anywhere on the table. Carried on the frame rather than inferred from
-   * the score, because "has anything been played yet" is the only thing that decides it.
+   * In snooker that is every in-hand: the opening stroke, and any later visit where the
+   * cue ball has been potted or left the table. It is kept equal to `cueInHand`. A foul
+   * that leaves the cue ball on the cloth is not ball in hand, and the striker plays
+   * from where it lies. Carried beside `cueInHand` so a client can draw the D from the
+   * snapshot without re-deriving the rule.
    */
   cueInHandInD: boolean
   winnerIndex?: number

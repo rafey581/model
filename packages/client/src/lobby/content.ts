@@ -134,7 +134,7 @@ export const CONTROLS_SECTIONS: readonly NumberedSection[] = [
   },
   {
     title: 'Cue ball in the D',
-    body: 'At the start of a frame the cue ball must be placed inside the D. After a mid-frame foul that leaves the cue in hand, you may place it anywhere legal on the cloth.'
+    body: 'Place the cue ball inside the D at the break-off, and again whenever it comes back in hand after leaving the table. A foul that leaves the cue ball on the cloth does not let you move it.'
   },
   {
     title: 'Shot timer',
@@ -165,7 +165,7 @@ export const RULES_SECTIONS: readonly NumberedSection[] = [
   },
   {
     title: 'Cue ball in hand',
-    body: 'After certain fouls the next striker places the cue ball. Break-offs must stay in the D; other in-hand placements may go anywhere on the cloth that is clear.'
+    body: 'The cue ball is in hand at the break-off and when it is potted or leaves the table. It may be placed only inside the D. Any other foul is played from where the cue ball lies.'
   }
 ]
 

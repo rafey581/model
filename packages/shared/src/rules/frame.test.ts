@@ -620,6 +620,7 @@ describe('shot playback', () => {
     )
     expect(outcome.sim.cuePotted).toBe(true)
     expect(frame.cueInHand).toBe(true)
+    expect(frame.cueInHandInD, 'an in-off is played from the D').toBe(true)
 
     const cue = frameSnapshot(frame).balls.find((b) => b.id === BALL_IDS.CUE)!
     expect(cue.potted, 'the cue ball must be back in play').toBe(false)
@@ -652,7 +653,7 @@ describe('applyStroke integration', () => {
 })
 
 /**
- * The D is a break-off restriction and nothing else.
+ * Ball in hand is the D, at the break-off and after the cue ball leaves the table.
  *
  * Every test here plays at power 0, which the simulation settles on its first tick, so
  * the cue ball is still exactly where the placement put it afterwards. That makes the
@@ -663,12 +664,11 @@ describe('ball in hand placement', () => {
   const IN_D: Vec2 = vec(600, TABLE_WIDTH / 2)
   /** Well clear of the D, and of every ball and pocket on the table. */
   const ANYWHERE: Vec2 = vec(1200, 1400)
-  const ON_THE_BLUE = vec(TABLE_LENGTH / 2, TABLE_WIDTH / 2)
 
   function place(frame: FrameState, at: { x: number; y: number }): Vec2 {
     // Each placement consumes the in-hand, because playing a stroke clears it. Re-armed
-    // here so one test can assert several placements independently; `cueInHandInD` is
-    // left alone, since which side of the break-off we are on is what is under test.
+    // here so one test can assert several placements independently. Every in-hand is
+    // judged against the D, whether or not the flag was left set.
     frame.cueInHand = true
     applyStroke(frame, frame.turnIndex, { aimAngle: 0, power: 0, spin: { x: 0, y: 0 }, cuePos: at })
     return vec(ball(frame, BALL_IDS.CUE).pos.x, ball(frame, BALL_IDS.CUE).pos.y)
@@ -707,10 +707,11 @@ describe('ball in hand placement', () => {
     expect(place(frame, beyondBaulk)).toEqual(cueStartPosition())
   })
 
-  it('lets a mid-frame ball in hand go anywhere on the table', () => {
+  it('keeps a mid-frame in-off inside the D and nowhere else', () => {
     const frame = midFrameInHand()
-    expect(frame.cueInHandInD, 'the D restriction does not survive the first stroke').toBe(false)
-    expect(place(frame, ANYWHERE)).toEqual(ANYWHERE)
+    expect(frame.cueInHandInD, 'a cue ball off the table is played from the D').toBe(true)
+    expect(place(frame, ANYWHERE)).toEqual(cueStartPosition())
+    expect(place(frame, IN_D)).toEqual(IN_D)
   })
 
   it('still refuses a mid-frame placement that is not on the table', () => {
@@ -732,34 +733,45 @@ describe('ball in hand placement', () => {
   it('still refuses a mid-frame placement overlapping a ball', () => {
     const frame = midFrameInHand()
     frame.balls = frame.balls.filter((b) => b.isCue)
-    // Two reds on the table, so the overlap check has something to reject against.
-    const reds = buildInitialBalls().filter((b) => b.isRed).slice(0, 2)
-    reds[0]!.pos = vec(1200, 400)
-    reds[1]!.pos = vec(1800, 900)
-    for (const red of reds) {
-      red.potted = false
-      red.vel = vec(0, 0)
-      frame.balls.push(red)
-    }
     const before = vec(ball(frame, BALL_IDS.CUE).pos.x, ball(frame, BALL_IDS.CUE).pos.y)
 
-    expect(place(frame, vec(1200, 400)), 'inside a red').toEqual(before)
-    expect(place(frame, ON_THE_BLUE), 'inside a red').toEqual(before)
-    expect(place(frame, vec(1200, 445)), 'a ball a diameter away is still touching').toEqual(before)
-    expect(place(frame, vec(1200, 470)), 'a clear ball-width away is legal').toEqual(vec(1200, 470))
+    // The blocking ball sits inside the D, clear of the cue's own spot, so the refusal
+    // is the overlap and not the baulk line.
+    const blocking = buildInitialBalls().find((b) => b.isRed)!
+    blocking.pos = vec(500, TABLE_WIDTH / 2)
+    blocking.potted = false
+    blocking.vel = vec(0, 0)
+    frame.balls.push(blocking)
+
+    expect(place(frame, vec(500, TABLE_WIDTH / 2)), 'inside a ball in the D').toEqual(before)
+    const touching = vec(500, TABLE_WIDTH / 2 + 45)
+    expect(place(frame, touching), 'a ball a diameter away is still touching').toEqual(before)
+    const clear = vec(500, TABLE_WIDTH / 2 + 80)
+    expect(place(frame, clear), 'a clear spot inside the D is legal').toEqual(clear)
+    expect(place(frame, ANYWHERE), 'outside the D is still refused').toEqual(clear)
   })
 
-  it('carries the restriction through a snapshot round trip', () => {
+  it('carries the D through a snapshot round trip, including an in-off', () => {
     const frame = createFrame(0)
     expect(frameSnapshot(frame).cueInHandInD).toBe(true)
     const restored = frameFromSnapshot(frameSnapshot(midFrameInHand()))
-    expect(restored.cueInHandInD).toBe(false)
+    expect(restored.cueInHand).toBe(true)
+    expect(restored.cueInHandInD).toBe(true)
   })
 
-  it('reads a pre-split snapshot as unrestricted rather than as a break-off', () => {
+  it('reads an in-hand snapshot that omits the flag as the D', () => {
     const legacy = frameSnapshot(createFrame(0))
     delete legacy.cueInHandInD
-    expect(frameFromSnapshot(legacy).cueInHandInD).toBe(false)
+    expect(frameFromSnapshot(legacy).cueInHandInD).toBe(true)
+  })
+
+  it('does not grant the D when the cue ball is not in hand', () => {
+    const down = frameSnapshot(createFrame(0))
+    down.cueInHand = false
+    down.cueInHandInD = true
+    const restored = frameFromSnapshot(down)
+    expect(restored.cueInHand).toBe(false)
+    expect(restored.cueInHandInD).toBe(false)
   })
 })
 
@@ -851,14 +863,21 @@ describe('applyCuePlacement', () => {
 
     it('refuses a break-off placement on the wrong side of the baulk line', () => {
       const frame = createFrame(0)
-      const beyondBaulk = vec(BAULK_LINE_X + 10, TABLE_WIDTH / 2)
+      // Clear of the brown, which sits on the baulk spot: the refusal is the line,
+      // not the ball that occupies the middle of it.
+      const beyondBaulk = vec(BAULK_LINE_X + 10, TABLE_WIDTH / 2 + 90)
       expect(applyCuePlacement(frame, beyondBaulk).reason).toBe('outside-D')
     })
 
-    it('lets a mid-frame ball in hand go anywhere on the table', () => {
+    it('keeps a mid-frame in-off inside the D', () => {
       const frame = midFrameInHand()
-      expect(frame.cueInHandInD).toBe(false)
-      expect(applyCuePlacement(frame, ANYWHERE).placed).toEqual(ANYWHERE)
+      expect(frame.cueInHandInD).toBe(true)
+      const refused = applyCuePlacement(frame, ANYWHERE)
+      expect(refused.ok).toBe(false)
+      expect(refused.reason).toBe('outside-D')
+      expect(frame.cueInHand, 'a refused placement keeps the ball in hand').toBe(true)
+      expect(ball(frame, BALL_IDS.CUE).pos).toEqual(cueStartPosition())
+      expect(applyCuePlacement(frame, IN_D).placed).toEqual(IN_D)
     })
 
     it('refuses a placement off the cloth', () => {
@@ -881,18 +900,16 @@ describe('applyCuePlacement', () => {
     it('refuses a placement overlapping a ball', () => {
       const frame = midFrameInHand()
       frame.balls = frame.balls.filter((b) => b.isCue)
-      const reds = buildInitialBalls().filter((b) => b.isRed).slice(0, 2)
-      reds[0]!.pos = vec(1200, 400)
-      reds[1]!.pos = vec(1800, 900)
-      for (const red of reds) {
-        red.potted = false
-        red.vel = vec(0, 0)
-        frame.balls.push(red)
-      }
-      expect(applyCuePlacement(frame, vec(1200, 400)).reason).toBe('crowded')
-      // A ball a diameter away is still touching; a clear ball-width is legal.
-      expect(applyCuePlacement(frame, vec(1200, 445)).reason).toBe('crowded')
-      expect(applyCuePlacement(frame, vec(1200, 470)).placed).toEqual(vec(1200, 470))
+      const red = buildInitialBalls().find((b) => b.isRed)!
+      red.pos = vec(500, TABLE_WIDTH / 2)
+      red.potted = false
+      red.vel = vec(0, 0)
+      frame.balls.push(red)
+      expect(applyCuePlacement(frame, vec(500, TABLE_WIDTH / 2)).reason).toBe('crowded')
+      // A ball a diameter away is still touching; a clear ball-width inside the D is legal.
+      expect(applyCuePlacement(frame, vec(500, TABLE_WIDTH / 2 + 45)).reason).toBe('crowded')
+      const clear = vec(500, TABLE_WIDTH / 2 + 80)
+      expect(applyCuePlacement(frame, clear).placed).toEqual(clear)
     })
 
     it('refuses a non-finite coordinate rather than placing the ball at NaN', () => {
@@ -949,6 +966,21 @@ describe('the choice after a foul', () => {
   }
   // Straight back towards the baulk cushion, away from every ball, gently.
   const missShot = { aimAngle: Math.PI, power: 0.1, spin: { x: 0, y: 0 } }
+
+  it('does not let the incoming player move a cue ball the foul left on the table', () => {
+    const frame = missFrame()
+    const outcome = applyStroke(frame, 0, missShot)
+    expect(outcome.resolution.foul).toBe(true)
+    expect(frame.cueInHand).toBe(false)
+    expect(frame.cueInHandInD).toBe(false)
+    const cue = frame.balls.find((b) => b.id === BALL_IDS.CUE)!
+    const at = { x: cue.pos.x, y: cue.pos.y }
+    const placed = applyCuePlacement(frame, vec(600, TABLE_WIDTH / 2))
+    expect(placed.alreadyPlaced).toBe(true)
+    expect(placed.placed).toBeNull()
+    expect(cue.pos.x).toBeCloseTo(at.x, 6)
+    expect(cue.pos.y).toBeCloseTo(at.y, 6)
+  })
 
   it('hands the player fouled against the choice', () => {
     const frame = missFrame()
