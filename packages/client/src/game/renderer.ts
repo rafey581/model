@@ -1,4 +1,4 @@
-import { TABLE_LENGTH, TABLE_WIDTH, BALL_RADIUS, pocketPositions } from '@snooker/shared'
+import { BAULK_LINE_X, BALL_RADIUS, D_RADIUS, TABLE_LENGTH, TABLE_WIDTH, pocketPositions } from '@snooker/shared'
 import { computeAimGuide, objectDirection, type AimGuide } from './aim.js'
 import { ballColorHex } from './palette.js'
 
@@ -27,8 +27,8 @@ export interface FrameSnapshotData {
   phase?: string
   cueInHand?: boolean
   /**
-   * Whether the in-hand is still restricted to the D — true only at break-off.
-   * Absent reads as unrestricted, which matches how the HUD treats it.
+   * Whether this in-hand is played from the D. That is every in-hand: the break-off
+   * and a cue ball that has left the table.
    */
   cueInHandInD?: boolean
   /** After a foul: who fouled, and who chooses to play on or make them play again. */
@@ -136,10 +136,13 @@ export function drawTable(
     offsetY + TABLE_WIDTH * scale * 0.5,
     TABLE_LENGTH * scale * 0.75
   )
-  felt.addColorStop(0, 'rgba(40, 150, 85, 0.20)')
-  felt.addColorStop(1, 'rgba(0, 0, 0, 0.5)')
+  felt.addColorStop(0, 'rgba(220, 255, 200, 0.18)')
+  felt.addColorStop(0.45, 'rgba(80, 170, 90, 0.05)')
+  felt.addColorStop(1, 'rgba(0, 24, 8, 0.28)')
   ctx.fillStyle = felt
   ctx.fillRect(offsetX, offsetY, TABLE_LENGTH * scale, TABLE_WIDTH * scale)
+
+  drawClothMarkings(ctx, offsetX, offsetY, scale)
 
   ctx.strokeStyle = '#c9a227'
   ctx.lineWidth = 3
@@ -205,6 +208,44 @@ function resolveHighlight(snapshot: FrameSnapshotData): number | null {
   return null
 }
 
+/**
+ * Baulk line, D and the six spots for the flat fallback view.
+ * The same chalk weight the 3D markings use, drawn with a round cap so the arc
+ * does not stair-step when antialiasing is off.
+ */
+function drawClothMarkings(ctx: CanvasRenderingContext2D, offsetX: number, offsetY: number, scale: number): void {
+  ctx.save()
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  ctx.strokeStyle = 'rgba(255, 248, 238, 0.92)'
+  ctx.lineWidth = Math.max(2.4, 10 * scale)
+  const baulkX = offsetX + BAULK_LINE_X * scale
+  ctx.beginPath()
+  ctx.moveTo(baulkX, offsetY)
+  ctx.lineTo(baulkX, offsetY + TABLE_WIDTH * scale)
+  ctx.stroke()
+  const cy = offsetY + (TABLE_WIDTH / 2) * scale
+  ctx.beginPath()
+  // The half toward the baulk cushion: canvas +x is down the table, so the bow is at angle π.
+  ctx.arc(baulkX, cy, D_RADIUS * scale, Math.PI / 2, -Math.PI / 2, false)
+  ctx.stroke()
+  ctx.fillStyle = 'rgba(255, 248, 238, 0.94)'
+  const spots: Array<[number, number]> = [
+    [BAULK_LINE_X, TABLE_WIDTH / 2 + D_RADIUS],
+    [BAULK_LINE_X, TABLE_WIDTH / 2 - D_RADIUS],
+    [BAULK_LINE_X, TABLE_WIDTH / 2],
+    [TABLE_LENGTH / 2, TABLE_WIDTH / 2],
+    [TABLE_LENGTH * 0.75, TABLE_WIDTH / 2],
+    [TABLE_LENGTH - 324, TABLE_WIDTH / 2]
+  ]
+  for (const [x, y] of spots) {
+    ctx.beginPath()
+    ctx.arc(offsetX + x * scale, offsetY + y * scale, Math.max(2.2, 7.5 * scale), 0, Math.PI * 2)
+    ctx.fill()
+  }
+  ctx.restore()
+}
+
 function drawPocket(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number, radius: number): void {
   ctx.fillStyle = '#0b0b0b'
   ctx.beginPath()
@@ -231,10 +272,11 @@ function drawBall(
     ctx.lineWidth = 3
     ctx.stroke()
   }
-  const gloss = ctx.createRadialGradient(x - r * 0.35, y - r * 0.4, r * 0.1, x, y, r)
-  gloss.addColorStop(0, 'rgba(255,255,255,0.85)')
-  gloss.addColorStop(0.35, 'rgba(255,255,255,0.08)')
-  gloss.addColorStop(1, 'rgba(0,0,0,0.3)')
+  const gloss = ctx.createRadialGradient(x - r * 0.38, y - r * 0.42, r * 0.05, x, y, r)
+  gloss.addColorStop(0, 'rgba(255,255,255,0.96)')
+  gloss.addColorStop(0.18, 'rgba(255,255,255,0.42)')
+  gloss.addColorStop(0.42, 'rgba(255,255,255,0.06)')
+  gloss.addColorStop(1, 'rgba(0,0,0,0.22)')
   ctx.fillStyle = gloss
   ctx.fill()
 }

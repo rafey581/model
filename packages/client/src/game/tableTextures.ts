@@ -446,6 +446,15 @@ function paintFelt(key: string, look: FeltLook): THREE.CanvasTexture {
     ctx.fillRect(x - r, y - r, r * 2, r * 2)
   }
 
+  // A soft satin pool under the canopy, painted in because the bed is not a specular
+  // surface. It is a lift in the middle of the cloth, not a white hotspot.
+  const satin = ctx.createRadialGradient(size * 0.5, size * 0.5, size * 0.02, size * 0.5, size * 0.5, size * 0.46)
+  satin.addColorStop(0, 'rgba(236, 255, 214, 0.11)')
+  satin.addColorStop(0.42, 'rgba(210, 245, 190, 0.04)')
+  satin.addColorStop(1, 'rgba(255, 255, 255, 0)')
+  ctx.fillStyle = satin
+  ctx.fillRect(0, 0, size, size)
+
   tex = new THREE.CanvasTexture(canvas)
   tex.colorSpace = THREE.SRGBColorSpace
   tex.generateMipmaps = CLOTH_MIPMAPS
@@ -491,12 +500,12 @@ export function clothDetailTexture(): THREE.CanvasTexture {
     // Four pixels to a rib, which divides the tile exactly, so it carries across the seam.
     ctx.lineWidth = 1
     for (let c = -size; c < size * 2; c += 4) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.075)'
+      ctx.strokeStyle = 'rgba(255,255,255,0.11)'
       ctx.beginPath()
       ctx.moveTo(c, 0)
       ctx.lineTo(c - size, size)
       ctx.stroke()
-      ctx.strokeStyle = 'rgba(0,0,0,0.085)'
+      ctx.strokeStyle = 'rgba(0,0,0,0.12)'
       ctx.beginPath()
       ctx.moveTo(c + 2, 0)
       ctx.lineTo(c + 2 - size, size)
@@ -523,7 +532,7 @@ export function clothDetailTexture(): THREE.CanvasTexture {
       const y = rand() * size
       const angle = -Math.PI / 5 + (rand() - 0.5) * 1.1
       const length = 1.5 + rand() * 4
-      const alpha = 0.05 + rand() * 0.09
+      const alpha = 0.07 + rand() * 0.12
       ctx.strokeStyle = rand() > 0.5 ? `rgba(255,255,255,${alpha})` : `rgba(0,0,0,${alpha})`
       const ex = Math.cos(angle) * length
       const ey = Math.sin(angle) * length
@@ -631,7 +640,7 @@ export function cushionFeltTexture(): THREE.CanvasTexture {
       }
     }
     // Faint crossed nap, same spacing as the bed so the scale matches.
-    ctx.strokeStyle = 'rgba(0,0,0,0.03)'
+    ctx.strokeStyle = 'rgba(0,0,0,0.055)'
     ctx.lineWidth = 1
     for (let y = 0; y < size; y += 5) {
       ctx.beginPath()
@@ -639,7 +648,7 @@ export function cushionFeltTexture(): THREE.CanvasTexture {
       ctx.lineTo(size, y + 4)
       ctx.stroke()
     }
-    ctx.strokeStyle = 'rgba(255,255,255,0.03)'
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)'
     for (let y = 0; y < size; y += 8) {
       ctx.beginPath()
       ctx.moveTo(0, y + 2)

@@ -398,14 +398,20 @@ describe('ball in hand', () => {
     expect(state.cueInHandInD).toBe(true)
   })
 
-  it('lets a mid-frame in-hand go anywhere on the table', () => {
+  it('keeps a mid-frame in-hand inside the D even when the snapshot flag says otherwise', () => {
     const state = deriveHudState(input({ snapshot: fullTable({ cueInHand: true, cueInHandInD: false }) }))
     expect(state.cueInHand).toBe(true)
-    expect(state.cueInHandInD).toBe(false)
+    expect(state.cueInHandInD).toBe(true)
   })
 
-  it('reads an absent flag as unrestricted rather than as a break-off', () => {
+  it('reads an absent flag as the D when the cue is in hand', () => {
     const state = deriveHudState(input({ snapshot: fullTable({ cueInHand: true }) }))
+    expect(state.cueInHandInD).toBe(true)
+  })
+
+  it('does not announce a placement when the cue ball is on the table', () => {
+    const state = deriveHudState(input({ snapshot: fullTable({ cueInHand: false, cueInHandInD: true }) }))
+    expect(state.cueInHand).toBe(false)
     expect(state.cueInHandInD).toBe(false)
   })
 })

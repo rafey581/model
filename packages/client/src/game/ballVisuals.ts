@@ -8,13 +8,13 @@ import { qualityConfig } from './qualityConfig.js'
  */
 export const CUE_BALL_COLOR = 0xece2cc
 /** Base lacquer roughness under the clearcoat: glossy resin, not rubber. */
-export const CUE_BALL_ROUGHNESS = 0.32
+export const CUE_BALL_ROUGHNESS = 0.18
 /** Phenolic resin is a dielectric: no metalness anywhere on this ball. */
 export const CUE_BALL_METALNESS = 0
 /** Clearcoat film that carries the crisp lamp highlight. */
 export const CUE_BALL_CLEARCOAT = 0.95
 /** Clearcoat roughness: crisp ellipse, not a pinpoint or a plastic smear. */
-export const CUE_BALL_CLEARCOAT_ROUGHNESS = 0.045
+export const CUE_BALL_CLEARCOAT_ROUGHNESS = 0.028
 /** Dielectric specular at a strong but controlled level. */
 export const CUE_BALL_SPECULAR_INTENSITY = 1
 /**
@@ -27,9 +27,9 @@ export const CUE_BALL_ENV_MAP_INTENSITY = 0.65
 export const CUE_BALL_IOR = 1.5
 
 /** Shared phenolic look for every coloured object ball. */
-export const COLOURED_BALL_ROUGHNESS = 0.28
+export const COLOURED_BALL_ROUGHNESS = 0.16
 export const COLOURED_BALL_CLEARCOAT = 1
-export const COLOURED_BALL_CLEARCOAT_ROUGHNESS = 0.045
+export const COLOURED_BALL_CLEARCOAT_ROUGHNESS = 0.026
 export const COLOURED_BALL_ENV_MAP_INTENSITY = 1
 export const COLOURED_BALL_SPECULAR_INTENSITY = 1
 export const COLOURED_BALL_IOR = 1.5
