@@ -4,10 +4,10 @@ import { createAvatarSlot, updateAvatarSubject } from './avatar.js'
 import type { AvatarSlot } from './avatar.js'
 import {
   powerFromPull,
+  powerLevelFromPull,
   pullFromPower,
   pullFromDrag,
   pullShoots,
-  pullQuarter,
   clampPowerLoose,
   easePower,
   powerAdjust,
@@ -626,17 +626,17 @@ export function createHud(): Hud {
   slider.id = 'power-slider'
   slider.tabIndex = 0
   slider.setAttribute('role', 'slider')
-  slider.setAttribute('aria-label', 'Shot power')
+  slider.setAttribute('aria-label', 'Shot power, 1 to 5')
   slider.setAttribute('aria-valuemin', '0')
   slider.setAttribute('aria-valuemax', '100')
   slider.setAttribute('aria-valuenow', '0')
-  slider.setAttribute('aria-valuetext', '0 percent')
+  slider.setAttribute('aria-valuetext', 'Power at rest')
   slider.setAttribute('aria-orientation', 'vertical')
 
-  // The cue in its groove. The groove is the whole hit target; inside it sit the colour
-  // that fills in above the tip as the cue is pulled, the tick marks down its edge, and
-  // the cue itself, which is one SVG moved by a transform. No number is shown anywhere:
-  // the power is read from how far back the cue is and the colour above it.
+  // The stick in its groove. The groove is the whole hit target; inside it sit the colour
+  // that fills in above the tip as the stick is pulled, a tick at each fifth, and the
+  // stick itself, which is one SVG moved by a transform. The 1–5 scale beside it is the
+  // power a player reads; the shot underneath stays the continuous pull.
   const railTrack = el('div', 'cue-slider-groove')
   railTrack.setAttribute('aria-hidden', 'true')
   const railFill = el('div', 'cue-slider-fill')
@@ -647,7 +647,22 @@ export function createHud(): Hud {
   railCue.id = 'power-rail-cue'
   railCue.innerHTML = cueSliderSvg()
   railTrack.append(railFill, railTicks, railCue)
-  rail.append(slider, railTrack)
+  // The 1–5 scale sits beside the groove, on the same fifths as the ticks.
+  // The readout is the level the cue is in right now; the marks are the scale.
+  const scale = el('div', 'cue-power-scale')
+  scale.setAttribute('aria-hidden', 'true')
+  const levelMarks: HTMLElement[] = []
+  for (let level = 1; level <= 5; level++) {
+    const mark = el('span', 'cue-power-mark')
+    mark.dataset.level = String(level)
+    mark.textContent = String(level)
+    scale.appendChild(mark)
+    levelMarks.push(mark)
+  }
+  const readout = el('div', 'cue-power-readout')
+  readout.id = 'power-level-readout'
+  readout.setAttribute('aria-hidden', 'true')
+  rail.append(slider, scale, readout, railTrack)
   // Mounted here, once, into the overlay the game view attaches inside the table
   // frame. This line is the difference between a slider that exists and one that is
   // on the screen: the rail was built complete but never actually hung anywhere, so
@@ -667,8 +682,8 @@ export function createHud(): Hud {
   let dragStartY = 0
   let dragStartPull = 0
   let dragTravelPx = 1
-  /** The quarter mark last reached in this gesture, for the haptic ticks. */
-  let dragQuarter = 0
+  /** The power level last reached in this gesture, for the haptic ticks. */
+  let dragLevel = 0
 
   /** A tick in the hand as the cue passes each quarter, where the device has one to give. */
   function haptic(ms: number): void {
@@ -691,9 +706,17 @@ export function createHud(): Hud {
     aimPowerSetter = sink
   }
 
-  function setAria(percent: number, text: string): void {
-    slider.setAttribute('aria-valuenow', String(percent))
-    slider.setAttribute('aria-valuetext', text)
+  function powerAria(power: number): { now: string; text: string } {
+    const percent = powerPercent(power)
+    const level = powerLevelFromPull(pullFromPower(clampPowerLoose(power)))
+    const text = level === 0 ? 'Power at rest' : `Power ${level} of 5, ${percent} percent`
+    return { now: String(percent), text }
+  }
+
+  function setAria(power: number): void {
+    const aria = powerAria(power)
+    slider.setAttribute('aria-valuenow', aria.now)
+    slider.setAttribute('aria-valuetext', aria.text)
   }
 
   /** Sets the power from the keyboard, where the value asked for is the power itself. */
@@ -701,7 +724,7 @@ export function createHud(): Hud {
     const power = powerFromSliderValue(value)
     aimPowerSetter(power)
     renderRail(power)
-    setAria(powerPercent(power), `${powerPercent(power)} percent`)
+    setAria(power)
   }
 
   /** Sets the power from the cue's position while it is being pulled. */
@@ -709,10 +732,10 @@ export function createHud(): Hud {
     const power = powerFromPull(pull)
     aimPowerSetter(power)
     renderRail(power)
-    setAria(powerPercent(power), `${powerPercent(power)} percent`)
-    const quarter = pullQuarter(pull)
-    if (quarter > dragQuarter) haptic(quarter === 4 ? 15 : 8)
-    dragQuarter = quarter
+    setAria(power)
+    const level = powerLevelFromPull(pull)
+    if (level > dragLevel) haptic(level === 5 ? 15 : 8)
+    dragLevel = level
   }
 
   /** Ends the gesture without a shot and puts the cue back at rest. */
@@ -724,7 +747,7 @@ export function createHud(): Hud {
     aimPowerSetter(0)
     renderRail(0)
     railShown = 0
-    setAria(0, '0 percent')
+    setAria(0)
     powerDragListener?.(false)
   }
 
@@ -744,7 +767,7 @@ export function createHud(): Hud {
     dragTravelPx = Math.max(1, rect.height * CUE_SLIDER_TRAVEL)
     dragStartY = event.clientY
     dragStartPull = pullFromPower(lastRailPower)
-    dragQuarter = pullQuarter(dragStartPull)
+    dragLevel = powerLevelFromPull(dragStartPull)
     // Capture is locked on the groove, so every later move and the release arrive here
     // even when the finger slides off it across the table. Taken last and allowed to
     // fail: a pointer the browser will not capture still drags, it just has to stay
@@ -952,6 +975,8 @@ export function createHud(): Hud {
 
   /** The pull last written to the stylesheet, so a frame that changes nothing writes nothing. */
   let lastRailPull = -1
+  /** The level last written onto the scale. */
+  let lastRailLevel = -1
 
   /** True for the moment after a shot while the cue on the slider is springing back up. */
   let railStriking = false
@@ -980,17 +1005,29 @@ export function createHud(): Hud {
   function renderRail(power: number): void {
     const clamped = clampPowerLoose(power)
     lastRailPower = clamped
-    const pull = railStriking ? 0 : pullFromPower(clamped)
-    if (Math.abs(pull - lastRailPull) > 0.0005) {
+    const shotPull = pullFromPower(clamped)
+    // While the stick springs home the picture returns to rest, but the level
+    // stays on the shot that was just played until that animation ends.
+    const pull = railStriking ? 0 : shotPull
+    const level = powerLevelFromPull(railStriking ? shotPull : pull)
+    if (Math.abs(pull - lastRailPull) > 0.0005 || level !== lastRailLevel) {
       lastRailPull = pull
+      lastRailLevel = level
       // One custom property. The cue's slide and the fill's growth are both transforms
       // read from it in the stylesheet, so a pull never lays anything out.
       rail.style.setProperty('--pull', pull.toFixed(4))
-      const zone = pull >= 0.75 ? 'high' : pull >= 0.4 ? 'mid' : 'low'
+      const zone = level >= 4 ? 'high' : level >= 3 ? 'mid' : 'low'
       if (rail.dataset.zone !== zone) rail.dataset.zone = zone
+      for (const mark of levelMarks) {
+        const n = Number(mark.dataset.level)
+        mark.classList.toggle('is-current', n === level)
+        mark.classList.toggle('is-on', level > 0 && n <= level)
+      }
+      readout.textContent = level > 0 ? String(level) : ''
+      readout.classList.toggle('is-on', level > 0)
     }
     setFlag(rail, 'is-charging', clamped > 0.001)
-    setFlag(rail, 'is-max', pull >= 0.999)
+    setFlag(rail, 'is-max', shotPull >= 0.999)
   }
 
   let sliderResetFrame = 0
@@ -1072,9 +1109,8 @@ export function createHud(): Hud {
       // an eased follow stopped a third of the way after a single tap of an arrow key and
       // the cue barely moved; the cue's own short transition does the smoothing now.
       railShown = power
-      const percent = powerPercent(railShown)
       renderRail(railShown)
-      setAria(percent, `${percent} percent`)
+      setAria(railShown)
     },
     setPowerEnabled: (enabled: boolean) => {
       if (sliderEnabled === enabled) return

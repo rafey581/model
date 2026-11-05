@@ -112,6 +112,10 @@ export class ShotPlayer {
       }
     }
 
+    // Contact samples are written between the regular ones. Sorting keeps a ball's
+    // track in time order if a contact and a regular sample ever land out of sequence.
+    for (const track of this.tracks) track.samples.sort((a, b) => a.t - b.t)
+
     const cue = this.byId.get(BALL_IDS.CUE)?.samples
     let strike = 0
     if (cue && cue.length >= 2) {

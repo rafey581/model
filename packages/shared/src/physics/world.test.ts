@@ -1285,10 +1285,10 @@ describe('playback', () => {
     // A ball is therefore sampled on the keyframe where it comes to rest, so its
     // final sample is its resting place rather than wherever it was still creeping.
     //
-    // The comparison allows the half-millimetre the keyframe format rounds to,
-    // which is a hundredth of a ball radius and cannot be seen. What it does not
-    // allow is the gap this test exists for: a ball still creeping when it stopped
-    // being sampled would be left a whole keyframe short of where it ended up.
+    // The comparison allows the twentieth of a millimetre the keyframe format
+    // rounds to, which cannot be seen. What it does not allow is the gap this
+    // test exists for: a ball still creeping when it stopped being sampled would
+    // be left a whole keyframe short of where it ended up.
     const result = simulateStroke(layoutTableBalls(), breakShot, { maxTicks: 120 * 60, playback: { rate: 30 } })
     const final = new Map<number, { x: number; y: number }>()
     for (const ball of result.balls) final.set(ball.id, ball.pos)
@@ -1303,8 +1303,8 @@ describe('playback', () => {
     for (const [id, sample] of lastSample) {
       if (potted.has(id)) continue
       const settled = final.get(id)!
-      expect(Math.abs(sample.x - settled.x), `ball ${id} last keyframe x`).toBeLessThanOrEqual(0.5)
-      expect(Math.abs(sample.y - settled.y), `ball ${id} last keyframe y`).toBeLessThanOrEqual(0.5)
+      expect(Math.abs(sample.x - settled.x), `ball ${id} last keyframe x`).toBeLessThanOrEqual(0.05 + 1e-6)
+      expect(Math.abs(sample.y - settled.y), `ball ${id} last keyframe y`).toBeLessThanOrEqual(0.05 + 1e-6)
       movedBalls++
     }
     expect(movedBalls).toBeGreaterThan(0)
@@ -1361,6 +1361,25 @@ describe('playback', () => {
     // single bad keyframe cannot read as a teleport.
     const peak = Math.max(...movingSteps)
     for (const step of movingSteps) expect(step).toBeLessThanOrEqual(peak + 1e-6)
+  })
+
+  it('samples a cushion strike on the rubber, not on a chord short of it', () => {
+    // A sample only at the regular interval draws the bounce on the straight
+    // line between the frames either side of it, so a hard ball appears to turn
+    // around well before the cushion. The contact sample has to reach the face.
+    const face = TABLE_WIDTH - BALL_RADIUS
+    const result = simulateStroke(
+      loneCueBall(900, 600),
+      { aimAngle: Math.PI / 2, power: 0.6, spin: { x: 0, y: 0 } },
+      { playback: { rate: 30 } }
+    )
+    expect(result.events.some((event) => event.type === 'CUSHION')).toBe(true)
+    let peakY = 0
+    for (const keyframe of result.keyframes!) {
+      const sample = keyframe.balls.find(([id]) => id === BALL_IDS.CUE)
+      if (sample) peakY = Math.max(peakY, sample[2])
+    }
+    expect(peakY).toBeGreaterThan(face - 1.5)
   })
 
   it('sampling never changes the simulation it is sampling', () => {

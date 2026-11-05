@@ -13,6 +13,10 @@ import {
   CUE_BALL_ENV_MAP_INTENSITY,
   CUE_BALL_IOR,
   CUE_BALL_METALNESS,
+  BALL_LACQUER_COAT_ROUGHNESS,
+  BALL_LACQUER_ROUGHNESS,
+  BALL_LACQUER_SHEEN,
+  BALL_LACQUER_SPECULAR,
   CUE_BALL_ROUGHNESS,
   CUE_BALL_SPECULAR_INTENSITY,
   CUE_SHADOW_OFFSET_MM,
@@ -45,11 +49,15 @@ describe('cue ball material', () => {
     expect(CUE_BALL_COLOR).toBe(0xece2cc)
     expect(material.color.getHex()).toBe(0xffffff)
     expect(material.map).toBeTruthy()
-    expect(material.roughness).toBe(CUE_BALL_ROUGHNESS)
+    expect(material.roughness).toBe(Math.min(CUE_BALL_ROUGHNESS, BALL_LACQUER_ROUGHNESS))
+    expect(material.roughness).toBeLessThan(CUE_BALL_ROUGHNESS)
+    expect(material.roughness).toBeGreaterThan(0.08)
     expect(material.metalness).toBe(CUE_BALL_METALNESS)
     expect(material.clearcoat).toBeGreaterThan(0)
-    expect(material.clearcoatRoughness).toBe(CUE_BALL_CLEARCOAT_ROUGHNESS)
-    expect(material.specularIntensity).toBe(CUE_BALL_SPECULAR_INTENSITY)
+    expect(material.clearcoatRoughness).toBe(Math.min(CUE_BALL_CLEARCOAT_ROUGHNESS, BALL_LACQUER_COAT_ROUGHNESS))
+    expect(material.specularIntensity).toBe(Math.max(CUE_BALL_SPECULAR_INTENSITY, BALL_LACQUER_SPECULAR))
+    expect(material.sheen).toBe(BALL_LACQUER_SHEEN)
+    expect(material.sheen).toBeLessThan(0.35)
     expect(material.envMapIntensity).toBeGreaterThan(0)
     expect(material.ior).toBe(CUE_BALL_IOR)
     expect(material.emissive.getHex()).toBe(0x000000)
@@ -87,9 +95,12 @@ describe('coloured ball material', () => {
   it('uses the shared phenolic lacquer', () => {
     const material = createColouredBallMaterial(0xd91515)
     expect(material.color.getHex()).toBe(0xd91515)
-    expect(material.roughness).toBe(COLOURED_BALL_ROUGHNESS)
+    expect(material.roughness).toBe(Math.min(COLOURED_BALL_ROUGHNESS, BALL_LACQUER_ROUGHNESS))
+    expect(material.roughness).toBeGreaterThan(0.08)
     expect(material.clearcoat).toBeGreaterThan(0)
-    expect(material.clearcoatRoughness).toBe(COLOURED_BALL_CLEARCOAT_ROUGHNESS)
+    expect(material.clearcoatRoughness).toBe(Math.min(COLOURED_BALL_CLEARCOAT_ROUGHNESS, BALL_LACQUER_COAT_ROUGHNESS))
+    expect(material.specularIntensity).toBeGreaterThan(1)
+    expect(material.sheen).toBe(BALL_LACQUER_SHEEN)
     expect(material.envMapIntensity).toBeGreaterThan(0)
     expect(material.ior).toBe(COLOURED_BALL_IOR)
     expect(COLOURED_BALL_CLEARCOAT).toBe(1)
@@ -154,17 +165,17 @@ describe('BallRig material wiring', () => {
   it('gives the cue rig the cue ball material', () => {
     const material = lacquer(new BallRig(BALL_RADIUS, 0xffffff, fakeShadow(), { cue: true }))
     expect(material.map).toBeTruthy()
-    expect(material.roughness).toBe(CUE_BALL_ROUGHNESS)
-    expect(material.clearcoatRoughness).toBe(CUE_BALL_CLEARCOAT_ROUGHNESS)
+    expect(material.roughness).toBe(Math.min(CUE_BALL_ROUGHNESS, BALL_LACQUER_ROUGHNESS))
+    expect(material.clearcoatRoughness).toBe(Math.min(CUE_BALL_CLEARCOAT_ROUGHNESS, BALL_LACQUER_COAT_ROUGHNESS))
     expect(material.envMapIntensity).toBeGreaterThan(0)
     expect(material.clearcoat).toBeGreaterThan(0)
   })
 
   it('leaves the coloured balls on the shared phenolic material', () => {
     const material = lacquer(new BallRig(BALL_RADIUS, 0xd91515, fakeShadow()))
-    expect(material.roughness).toBe(COLOURED_BALL_ROUGHNESS)
+    expect(material.roughness).toBe(Math.min(COLOURED_BALL_ROUGHNESS, BALL_LACQUER_ROUGHNESS))
     expect(material.clearcoat).toBeGreaterThan(0)
-    expect(material.clearcoatRoughness).toBe(COLOURED_BALL_CLEARCOAT_ROUGHNESS)
+    expect(material.clearcoatRoughness).toBe(Math.min(COLOURED_BALL_CLEARCOAT_ROUGHNESS, BALL_LACQUER_COAT_ROUGHNESS))
     expect(material.envMapIntensity).toBeGreaterThan(0)
     expect(material.ior).toBe(COLOURED_BALL_IOR)
     expect(material.color.getHex()).toBe(0xd91515)
@@ -180,7 +191,7 @@ describe('BallRig material wiring', () => {
     expect(ballGlow(cueRig.material)).toBe(0x7a5c10)
     expect(ballGlow(redRig.material)).toBe(0x000000)
     red.roughness = 0.9
-    expect(cue.roughness).toBe(CUE_BALL_ROUGHNESS)
+    expect(cue.roughness).toBe(Math.min(CUE_BALL_ROUGHNESS, BALL_LACQUER_ROUGHNESS))
   })
 
   it('keeps a painted ball free of the stock emissive slot the renderer would look for', () => {

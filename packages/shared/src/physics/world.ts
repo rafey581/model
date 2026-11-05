@@ -63,6 +63,28 @@ const DEFAULT_KEYFRAME_RATE = 30
 const CONTACT_MIN_BALL_SPEED = 90
 const CONTACT_MIN_CUSHION_SPEED = 140
 
+/**
+ * Contacts at least this hard, in mm/s, get their own keyframe.
+ *
+ * At the replay's sample rate a hard bounce is drawn on the straight line
+ * between the sample before it and the sample after it, so the ball appears
+ * to turn around short of the cushion or the ball it hit. Sampling the
+ * contact puts that corner on the rubber. Softer than this, the ball barely
+ * moves between samples and the line is already on the contact.
+ */
+const VISUAL_CONTACT_SPEED = 180
+
+/**
+ * Keyframe positions, in decimal places of a millimetre.
+ *
+ * A whole millimetre is invisible on a ball that is still moving quickly, and
+ * it is not invisible at the end of a roll: under about 30 mm/s the ball sits
+ * on one millimetre for several frames and then ticks forward. A tenth of a
+ * millimetre is still far below what the eye can place, and it is enough that
+ * the last of the run keeps shrinking instead of stuttering to a stop.
+ */
+const KEYFRAME_POS_PLACES = 1
+
 export function simulateStroke(initialBalls: BallState[], shot: SimShot, options: SimOptions = {}): SimResult {
   const balls = initialBalls.map(cloneBall)
   const events: SimEvent[] = []
@@ -131,6 +153,7 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
     const substeps = Math.max(1, Math.ceil((maxSpeed * TICK_DT) / (BALL_RADIUS * 0.25)))
     const subDt = TICK_DT / substeps
     for (let step = 0; step < substeps; step++) {
+      const struckIds = new Set<number>()
       for (const ball of balls) {
         if (ball.potted) continue
         const turning = roll.get(ball)!
@@ -156,6 +179,10 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
             if (cd > 0) closing = Math.abs(((b.vel.x - a.vel.x) * cdx + (b.vel.y - a.vel.y) * cdy) / cd)
           }
           if (!resolveCollisionPair(a, b, subDt)) continue
+          if (keyframes && closing >= VISUAL_CONTACT_SPEED) {
+            struckIds.add(a.id)
+            struckIds.add(b.id)
+          }
           if (contacts && closing >= CONTACT_MIN_BALL_SPEED) {
             contacts.push([
               0,
@@ -188,7 +215,8 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
       // snapped back, which cost a fast ball most of a ball's width of travel.
       for (const ball of balls) {
         if (ball.potted) continue
-        reflectOffCushions(ball, roll.get(ball)!, events, tick, contacts, simTime + subDt * (step + 1))
+        const impact = reflectOffCushions(ball, roll.get(ball)!, events, tick, contacts, simTime + subDt * (step + 1))
+        if (keyframes && impact >= VISUAL_CONTACT_SPEED) struckIds.add(ball.id)
         const pocket = checkPockets(ball, pockets, events, tick)
         if (pocket) {
           stopRoll(roll.get(ball)!)
@@ -197,6 +225,19 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
         }
         if (ball.isCue && ball.potted) {
           cuePotted = true
+        }
+      }
+      if (keyframes && struckIds.size > 0) {
+        // Strictly between the previous sample and this tick's regular sample,
+        // so the replay's line reaches the contact and the times stay in order.
+        const prevT = keyframes.length > 0 ? keyframes[keyframes.length - 1]!.t : 0
+        const nextT = round(simTime + TICK_DT, 3)
+        let t = round(simTime + subDt * (step + 1), 4)
+        if (t <= prevT) t = round(prevT + 0.0001, 4)
+        if (t >= nextT) t = round(nextT - 0.0001, 4)
+        if (t > prevT && t < nextT) {
+          const frame = captureKeyframe(balls, t, [], new Set(), roll, struckIds, 4)
+          if (frame.balls.length > 0) keyframes.push(frame)
         }
       }
     }
@@ -255,10 +296,13 @@ export function simulateStroke(initialBalls: BallState[], shot: SimShot, options
 
 /**
  * Samples the balls that are still in motion, plus any that came to rest on this
- * keyframe. Rounding to whole millimetres costs nothing visually against a 26mm
- * ball and roughly halves the JSON size. A ball that stopped on an earlier
- * keyframe keeps that keyframe's position, which is exactly where it settled, so
- * omitting it from later keyframes does not move it.
+ * keyframe. Positions are kept to a tenth of a millimetre: coarser than that and
+ * a slowing ball ticks. A ball that stopped on an earlier keyframe keeps that
+ * keyframe's position, which is exactly where it settled, so omitting it from
+ * later keyframes does not move it.
+ *
+ * `onlyIds`, when set, samples just those balls. Contact keyframes use it so a
+ * strike is recorded without repeating every other ball that is still rolling.
  *
  * A ball potted in this substep is emitted at its pocket's centre rather than
  * where it crossed the capture radius, so the replay shows it dropping in
@@ -270,14 +314,17 @@ function captureKeyframe(
   t: number,
   justPotted: Array<[number, [number, number]]>,
   newlySettled: Set<number>,
-  roll: Map<BallState, Roll>
+  roll: Map<BallState, Roll>,
+  onlyIds: Set<number> | null = null,
+  timePlaces = 3
 ): SimKeyframe {
   const sampled: SimKeyframe['balls'] = []
   const dropped = justPotted.length ? new Map(justPotted) : null
   for (const ball of balls) {
     const at = dropped?.get(ball.id)
+    if (onlyIds && !onlyIds.has(ball.id) && !at) continue
     if (at) {
-      sampled.push([ball.id, round(at[0]), round(at[1])])
+      sampled.push([ball.id, round(at[0], KEYFRAME_POS_PLACES), round(at[1], KEYFRAME_POS_PLACES)])
       continue
     }
     if (ball.potted) continue
@@ -290,14 +337,14 @@ function captureKeyframe(
     const turning = roll.get(ball)
     sampled.push([
       ball.id,
-      round(ball.pos.x),
-      round(ball.pos.y),
+      round(ball.pos.x, KEYFRAME_POS_PLACES),
+      round(ball.pos.y, KEYFRAME_POS_PLACES),
       round(turning?.x ?? 0),
       round(turning?.y ?? 0),
       round(ball.spin.x * 1000)
     ])
   }
-  return { t: round(t, 3), balls: sampled }
+  return { t: round(t, timePlaces), balls: sampled }
 }
 
 function round(value: number, places = 0): number {
@@ -512,9 +559,10 @@ function reflectOffCushions(
   tick: number,
   contacts: SimContact[] | null = null,
   time = 0
-): void {
+): number {
   const damping = cushionDamping(ball)
   const side = clamp(ball.spin.x, -1, 1)
+  let impact = 0
 
   // Straight cushion faces. Each face only exists over its own span, so a ball
   // that has reached a pocket mouth passes the end of the face instead of being
@@ -527,8 +575,10 @@ function reflectOffCushions(
     const perpVel = face.along === 'x' ? ball.vel.y : ball.vel.x
     const into = face.into < 0 ? perp < face.limit && perpVel < 0 : perp > face.limit && perpVel > 0
     if (!into) continue
+    const perpSpeed = Math.abs(perpVel)
+    impact = Math.max(impact, perpSpeed)
     // Recorded before the bounce, at the speed the ball came into the cushion with.
-    if (contacts && Math.abs(perpVel) >= CONTACT_MIN_CUSHION_SPEED) {
+    if (contacts && perpSpeed >= CONTACT_MIN_CUSHION_SPEED) {
       contacts.push([1, round(time, 3), ball.id, faceIndex, round(Math.abs(perpVel)), round(ball.pos.x), round(ball.pos.y)])
     }
     const rest = face.restitution * damping * cushionPaceScale(Math.abs(perpVel))
@@ -572,6 +622,7 @@ function reflectOffCushions(
     // A pure depenetration leaves a kissing ball untouched; only report a hit
     // when the jaw actually turned it.
     if (!contact.bounced) continue
+    impact = Math.max(impact, intoJaw)
     if (contacts && jawSpeed >= CONTACT_MIN_CUSHION_SPEED) {
       contacts.push([2, round(time, 3), ball.id, jawIndex, round(jawSpeed), round(contact.x), round(contact.y)])
     }
@@ -580,6 +631,7 @@ function reflectOffCushions(
     if (jd > 0) cushionRoll(roll, jx / jd, jy / jd)
     events.push({ type: 'CUSHION', tick, ballId: ball.id })
   }
+  return impact
 }
 
 function cushionDamping(ball: BallState): number {

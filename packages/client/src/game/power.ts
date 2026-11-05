@@ -185,3 +185,60 @@ export function pullShoots(pull: number): boolean {
 export function pullQuarter(pull: number): number {
   return Math.floor(clampUnit(pull) * 4 + 1e-9)
 }
+
+/* ------------------------------------------------------------------ *
+ * Levels 1 to 5.
+ *
+ * The stick's travel is five even slices. The number on the control is which
+ * slice the cue has been pulled into. The shot is still the continuous 0..1
+ * from `powerFromPull` — nothing is snapped — so two pulls that stop on the
+ * same mark send the same shot, and a pull that stops between marks is not
+ * rounded up into a harder one.
+ *
+ * The mark for level n is at pull n/5. Because power is pull^1.35, those
+ * marks are not equal steps of pace. Stopping on the mark sends:
+ *
+ *   1 → pull 0.20 → power 0.114
+ *   2 → pull 0.40 → power 0.290
+ *   3 → pull 0.60 → power 0.502
+ *   4 → pull 0.80 → power 0.740
+ *   5 → pull 1.00 → power 1
+ *
+ * A pull inside a slice sends the power between the previous mark and that
+ * one. Level 5 therefore runs from about 0.74 up to a full hit, which is the
+ * top of the same curve the game has always used.
+ * ------------------------------------------------------------------ */
+
+/** How many power levels the stick shows. */
+export const POWER_LEVELS = 5
+
+/**
+ * The level a pull is in: 0 at rest (inside the dead zone), otherwise 1..5.
+ *
+ * Each level is one fifth of the travel, and the level changes as the cue
+ * reaches that fifth's mark. Just above the dead zone, before the first mark,
+ * the shot already counts as level 1 — that pull will be played, and the
+ * scale should not sit blank while it is.
+ */
+export function powerLevelFromPull(pull: number): number {
+  const p = clampUnit(pull)
+  if (p <= POWER_PULL_DEAD_ZONE) return 0
+  return Math.min(POWER_LEVELS, Math.max(1, Math.ceil(p * POWER_LEVELS - 1e-9)))
+}
+
+/** The level of a shot power: the slice its pull sits in. */
+export function powerLevelFromPower(power: number): number {
+  return powerLevelFromPull(pullFromPower(power))
+}
+
+/**
+ * The shot power at a level's mark.
+ *
+ * Level 1 is the mark at a fifth of the travel, level 5 is full travel.
+ * This is `powerFromPull(level / 5)`, not a second scale.
+ */
+export function powerAtLevel(level: number): number {
+  if (!Number.isFinite(level)) return powerFromPull(1 / POWER_LEVELS)
+  const n = Math.min(POWER_LEVELS, Math.max(1, Math.round(level)))
+  return powerFromPull(n / POWER_LEVELS)
+}

@@ -141,6 +141,34 @@ export function cueBallAlbedoTexture(): THREE.DataTexture {
 }
 
 /**
+ * Lacquer actually drawn on a ball.
+ *
+ * The phenolic constants above stay the shared baseline. The film used on the
+ * table is tightened against that baseline, and clamped so a later edit that
+ * already lowers the baseline cannot stack into a mirror. Roughness stays high
+ * enough that a red is still red outside the lamp's highlight.
+ */
+export const BALL_LACQUER_ROUGHNESS = 0.14
+export const BALL_LACQUER_COAT_ROUGHNESS = 0.02
+export const BALL_LACQUER_SPECULAR = 1.35
+/** A broad, faint second highlight. Stronger than this milks the cloth colour. */
+export const BALL_LACQUER_SHEEN = 0.16
+export const BALL_LACQUER_SHEEN_ROUGHNESS = 0.42
+const BALL_LACQUER_SHEEN_COLOR = 0xfff6ea
+
+function drawnRoughness(base: number): number {
+  return Math.min(base, BALL_LACQUER_ROUGHNESS)
+}
+
+function drawnCoatRoughness(base: number): number {
+  return Math.min(base, BALL_LACQUER_COAT_ROUGHNESS)
+}
+
+function drawnSpecular(base: number): number {
+  return Math.max(base, BALL_LACQUER_SPECULAR)
+}
+
+/**
  * The cue ball's own material, as a fresh instance.
  *
  * One per cue ball, never shared: the rig owns it so the "ball on" highlight can
@@ -151,13 +179,16 @@ export function createCueBallMaterial(): THREE.MeshPhysicalMaterial {
   return new THREE.MeshPhysicalMaterial({
     color: 0xffffff,
     map: cueBallAlbedoTexture(),
-    roughness: CUE_BALL_ROUGHNESS,
+    roughness: drawnRoughness(CUE_BALL_ROUGHNESS),
     metalness: CUE_BALL_METALNESS,
     clearcoat: CUE_BALL_CLEARCOAT * gloss.clearcoat,
-    clearcoatRoughness: CUE_BALL_CLEARCOAT_ROUGHNESS,
-    specularIntensity: CUE_BALL_SPECULAR_INTENSITY,
+    clearcoatRoughness: drawnCoatRoughness(CUE_BALL_CLEARCOAT_ROUGHNESS),
+    specularIntensity: drawnSpecular(CUE_BALL_SPECULAR_INTENSITY),
     envMapIntensity: CUE_BALL_ENV_MAP_INTENSITY * gloss.env,
     ior: CUE_BALL_IOR,
+    sheen: BALL_LACQUER_SHEEN,
+    sheenRoughness: BALL_LACQUER_SHEEN_ROUGHNESS,
+    sheenColor: new THREE.Color(BALL_LACQUER_SHEEN_COLOR),
     emissive: 0x000000
   })
 }
@@ -169,13 +200,16 @@ export function createColouredBallMaterial(color: number): THREE.MeshPhysicalMat
   const gloss = ballGlossScale()
   return new THREE.MeshPhysicalMaterial({
     color,
-    roughness: COLOURED_BALL_ROUGHNESS,
+    roughness: drawnRoughness(COLOURED_BALL_ROUGHNESS),
     metalness: 0,
     clearcoat: COLOURED_BALL_CLEARCOAT * gloss.clearcoat,
-    clearcoatRoughness: COLOURED_BALL_CLEARCOAT_ROUGHNESS,
-    specularIntensity: COLOURED_BALL_SPECULAR_INTENSITY,
+    clearcoatRoughness: drawnCoatRoughness(COLOURED_BALL_CLEARCOAT_ROUGHNESS),
+    specularIntensity: drawnSpecular(COLOURED_BALL_SPECULAR_INTENSITY),
     envMapIntensity: COLOURED_BALL_ENV_MAP_INTENSITY * gloss.env,
     ior: COLOURED_BALL_IOR,
+    sheen: BALL_LACQUER_SHEEN,
+    sheenRoughness: BALL_LACQUER_SHEEN_ROUGHNESS,
+    sheenColor: new THREE.Color(BALL_LACQUER_SHEEN_COLOR),
     emissive: 0x000000
   })
 }
