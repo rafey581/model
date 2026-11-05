@@ -1,130 +1,105 @@
 /**
- * The cue in the power slider, drawn as one inline SVG.
+ * The power stick in the pull-to-hit slider, drawn as one inline SVG.
  *
- * Our own cue, not anybody else's: a maple shaft under a chalked tip and an ivory ferrule,
- * a gold ring at the joint, a walnut forearm with four long cream points running up toward
- * the tip, an ebony butt carrying the SnookerX mark — the gold ring with a dot — and a
- * matte bumper. Vector throughout, so it is sharp at every pixel density and there is no
- * image to download. Built once as a string and never touched again: pulling the cue is a
- * transform on the element that holds it.
+ * A polished silver bar, not a wooden cue: a bright streak down the left of the
+ * cylinder, a cool mid-tone, and a dark edge, so it reads as metal rather than
+ * a flat grey fill. Vector throughout, so it is sharp at every pixel density
+ * and there is no image to download. Built once as a string and never touched
+ * again: pulling the stick is a transform on the element that holds it.
  *
- * Drawn tip-up in a 30 x 600 box. The box is stretched to the element, which is what lets
- * one drawing serve every groove size.
+ * Drawn tip-up in a 30 x 600 box. The box is stretched to the element, which is
+ * what lets one drawing serve every groove size.
  */
 
 const W = 30
 const L = 600
 
-/** Lengths of each part down the cue, top to bottom, in drawing units. */
-const TIP = 9
-const FERRULE = 15
-const SHAFT = 300
-const JOINT = 12
-const FOREARM = 108
-const BUTT = 150
-const BUMPER = L - TIP - FERRULE - SHAFT - JOINT - FOREARM - BUTT
+/** Lengths of each part down the stick, top to bottom, in drawing units. */
+const TIP = 10
+const CAP = 16
+const SHAFT = 404
+const COLLAR = 10
+const BUTT = 140
+const BUMPER = L - TIP - CAP - SHAFT - COLLAR - BUTT
 
-/** Half-widths: a taper from the tip out to the joint, then a gentle swell to the butt. */
-const HALF_TIP = (W * 0.55) / 2
-const HALF_JOINT = (W * 0.8) / 2
+/** Half-widths: a slim tip, then a gentle swell through the grip. */
+const HALF_TIP = (W * 0.5) / 2
+const HALF_SHAFT = (W * 0.72) / 2
 const HALF_BUTT = W / 2
 
 const cx = W / 2
 
-/** A four-sided piece of the cue between two heights, with its own half-widths. */
+/** A four-sided piece of the stick between two heights, with its own half-widths. */
 function slab(y0: number, y1: number, half0: number, half1: number, fill: string): string {
   return `<polygon points="${cx - half0},${y0} ${cx + half0},${y0} ${cx + half1},${y1} ${cx - half1},${y1}" fill="${fill}"/>`
 }
 
-/** The SVG markup for the cue. `id` keeps its gradients apart if two are ever on a page. */
+/** The SVG markup for the power stick. `id` keeps its gradients apart if two are ever on a page. */
 export function cueSliderSvg(id = 'cue-slider'): string {
-  const yFerrule = TIP
-  const yShaft = yFerrule + FERRULE
-  const yJoint = yShaft + SHAFT
-  const yForearm = yJoint + JOINT
-  const yButt = yForearm + FOREARM
+  const yCap = TIP
+  const yShaft = yCap + CAP
+  const yCollar = yShaft + SHAFT
+  const yButt = yCollar + COLLAR
   const yBumper = yButt + BUTT
 
-  // Four cream points let into the walnut, rising toward the tip: two full ones on the
-  // face and a half at each edge, which is how four points read on a round cue.
-  const points: string[] = []
-  const pointTop = yForearm + 6
-  const pointBase = yButt - 2
-  for (const at of [-HALF_JOINT, -HALF_JOINT / 3, HALF_JOINT / 3, HALF_JOINT]) {
-    const half = HALF_JOINT / 3
-    points.push(
-      `<polygon points="${cx + at},${pointTop} ${cx + at + half},${pointBase} ${cx + at - half},${pointBase}" fill="#e8d6b0"/>`,
-      `<polygon points="${cx + at},${pointTop + 16} ${cx + at + half * 0.62},${pointBase} ${cx + at - half * 0.62},${pointBase}" fill="#5a3220"/>`
-    )
+  // A bright wire down the highlight, and a darker one in the shade, so the
+  // cylinder keeps an edge when the gradient is stretched thin on a phone.
+  const wire = (k: number, color: string, opacity: number): string => {
+    const x0 = cx + HALF_TIP * k
+    const x1 = cx + HALF_BUTT * k
+    return `<line x1="${x0}" y1="${yShaft + 4}" x2="${x1}" y2="${yBumper - 4}" stroke="${color}" stroke-opacity="${opacity}" stroke-width="0.7"/>`
   }
-
-  // Three faint straight grain lines down the maple.
-  const grain = [-0.42, 0.08, 0.5]
-    .map((k) => {
-      const x0 = cx + HALF_TIP * k
-      const x1 = cx + HALF_JOINT * k
-      return `<line x1="${x0}" y1="${yShaft + 8}" x2="${x1}" y2="${yJoint - 6}" stroke="#a9793f" stroke-opacity="0.22" stroke-width="0.6"/>`
-    })
-    .join('')
-
-  // Dust on the chalk: a few pale specks.
-  const dust = [
-    [-1.6, 2.5],
-    [1.1, 4.2],
-    [-0.4, 6.4],
-    [2.2, 6.9],
-    [-2.3, 5.2]
-  ]
-    .map(([dx, dy]) => `<circle cx="${cx + dx!}" cy="${dy}" r="0.45" fill="#cfe2fb" fill-opacity="0.75"/>`)
-    .join('')
-
-  const emblemY = yButt + BUTT * 0.56
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${L}" preserveAspectRatio="none" aria-hidden="true" focusable="false">
 <defs>
-  <linearGradient id="${id}-maple" x1="0" x2="1" y1="0" y2="0">
-    <stop offset="0" stop-color="#f3dcaa"/><stop offset="0.5" stop-color="#e2bd7c"/><stop offset="1" stop-color="#c99a5a"/>
+  <linearGradient id="${id}-silver" x1="0" x2="1" y1="0" y2="0">
+    <stop offset="0" stop-color="#5e6872"/>
+    <stop offset="0.16" stop-color="#c5ced6"/>
+    <stop offset="0.3" stop-color="#f7fbfe"/>
+    <stop offset="0.46" stop-color="#d5dee6"/>
+    <stop offset="0.64" stop-color="#8e99a3"/>
+    <stop offset="0.8" stop-color="#e8eef3"/>
+    <stop offset="1" stop-color="#3e474f"/>
   </linearGradient>
-  <linearGradient id="${id}-ebony" x1="0" x2="1" y1="0" y2="0">
-    <stop offset="0" stop-color="#16100c"/><stop offset="0.34" stop-color="#3b2c24"/><stop offset="0.52" stop-color="#16100c"/><stop offset="1" stop-color="#0c0806"/>
+  <linearGradient id="${id}-tip" x1="0" x2="1" y1="0" y2="0">
+    <stop offset="0" stop-color="#8b98a6"/>
+    <stop offset="0.28" stop-color="#ffffff"/>
+    <stop offset="0.55" stop-color="#dbe3ea"/>
+    <stop offset="1" stop-color="#5c6770"/>
   </linearGradient>
-  <linearGradient id="${id}-gold" x1="0" x2="1" y1="0" y2="0">
-    <stop offset="0" stop-color="#b98529"/><stop offset="0.35" stop-color="#ffe3a3"/><stop offset="0.6" stop-color="#d9a441"/><stop offset="1" stop-color="#9c6d1c"/>
+  <linearGradient id="${id}-edge" x1="0" x2="1" y1="0" y2="0">
+    <stop offset="0" stop-color="#fff" stop-opacity="0"/>
+    <stop offset="0.22" stop-color="#fff" stop-opacity="0.55"/>
+    <stop offset="0.4" stop-color="#fff" stop-opacity="0.05"/>
+    <stop offset="0.72" stop-color="#000" stop-opacity="0.08"/>
+    <stop offset="1" stop-color="#000" stop-opacity="0.38"/>
   </linearGradient>
-  <linearGradient id="${id}-round" x1="0" x2="1" y1="0" y2="0">
-    <stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="0.3" stop-color="#fff" stop-opacity="0.28"/><stop offset="0.48" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.28"/>
-  </linearGradient>
-  <clipPath id="${id}-forearm">
-    <polygon points="${cx - HALF_JOINT},${yForearm} ${cx + HALF_JOINT},${yForearm} ${cx + HALF_BUTT * 0.93},${yButt} ${cx - HALF_BUTT * 0.93},${yButt}"/>
-  </clipPath>
 </defs>
-<path d="M ${cx - HALF_TIP} ${TIP} L ${cx - HALF_TIP} 3.4 Q ${cx} -1.4 ${cx + HALF_TIP} 3.4 L ${cx + HALF_TIP} ${TIP} Z" fill="#3d7fd6"/>
-${dust}
-${slab(yFerrule, yShaft, HALF_TIP, HALF_TIP + 0.25, '#efe9dc')}
-<line x1="${cx - HALF_TIP}" y1="${yFerrule}" x2="${cx + HALF_TIP}" y2="${yFerrule}" stroke="#2b2118" stroke-width="0.7"/>
-${slab(yShaft, yJoint, HALF_TIP + 0.25, HALF_JOINT, `url(#${id}-maple)`)}
-${grain}
-${slab(yJoint, yForearm, HALF_JOINT + 0.4, HALF_JOINT + 0.4, `url(#${id}-gold)`)}
-${slab(yForearm, yButt, HALF_JOINT, HALF_BUTT * 0.93, '#5a3220')}
-<g clip-path="url(#${id}-forearm)">${points.join('')}</g>
-${slab(yButt, yBumper, HALF_BUTT * 0.93, HALF_BUTT, `url(#${id}-ebony)`)}
-${slab(yButt + 12, yButt + 17, HALF_BUTT * 0.94, HALF_BUTT * 0.945, `url(#${id}-gold)`)}
-<circle cx="${cx}" cy="${emblemY}" r="6.2" fill="none" stroke="#d9a441" stroke-width="2.2"/>
-<circle cx="${cx}" cy="${emblemY}" r="1.9" fill="#d9a441"/>
-<path d="M ${cx - HALF_BUTT} ${yBumper} L ${cx + HALF_BUTT} ${yBumper} L ${cx + HALF_BUTT - 1.5} ${L - 1.5} Q ${cx} ${L + 1} ${cx - HALF_BUTT + 1.5} ${L - 1.5} Z" fill="#0b0b0b"/>
-${slab(TIP, yBumper, HALF_TIP, HALF_BUTT, `url(#${id}-round)`)}
+<path d="M ${cx - HALF_TIP} ${TIP} L ${cx - HALF_TIP} 2.2 Q ${cx} -1.6 ${cx + HALF_TIP} 2.2 L ${cx + HALF_TIP} ${TIP} Z" fill="url(#${id}-tip)"/>
+${slab(yCap, yShaft, HALF_TIP, HALF_TIP + 0.35, `url(#${id}-tip)`)}
+<line x1="${cx - HALF_TIP}" y1="${yShaft}" x2="${cx + HALF_TIP}" y2="${yShaft}" stroke="#2c343c" stroke-width="0.8"/>
+${slab(yShaft, yCollar, HALF_TIP + 0.35, HALF_SHAFT, `url(#${id}-silver)`)}
+${wire(-0.42, '#ffffff', 0.55)}
+${wire(0.62, '#1c232a', 0.35)}
+${slab(yCollar, yButt, HALF_SHAFT + 0.15, HALF_SHAFT + 0.15, `url(#${id}-tip)`)}
+${slab(yButt, yBumper, HALF_SHAFT, HALF_BUTT, `url(#${id}-silver)`)}
+${slab(yButt + 18, yButt + 23, HALF_BUTT * 0.96, HALF_BUTT * 0.97, `url(#${id}-tip)`)}
+<circle cx="${cx}" cy="${yButt + BUTT * 0.58}" r="5.4" fill="none" stroke="#f4f8fb" stroke-width="1.15" stroke-opacity="0.9"/>
+<circle cx="${cx}" cy="${yButt + BUTT * 0.58}" r="2.1" fill="#f7fbfe"/>
+<path d="M ${cx - HALF_BUTT} ${yBumper} L ${cx + HALF_BUTT} ${yBumper} L ${cx + HALF_BUTT - 1.2} ${L - 1.2} Q ${cx} ${L + 0.8} ${cx - HALF_BUTT + 1.2} ${L - 1.2} Z" fill="#2a3138"/>
+${slab(TIP, yBumper, HALF_TIP, HALF_BUTT, `url(#${id}-edge)`)}
 </svg>`
 }
 
-/** The groove's tick marks: a short one every tenth, a long one at each quarter and the ends. */
+/**
+ * The groove's level marks: one tick at each fifth of the travel.
+ *
+ * 20 is level 1, 100 is level 5. The labels beside the groove use the same
+ * fifths, so a tick and its number sit on one line.
+ */
 export function cueSliderTicksSvg(): string {
-  const marks: string[] = []
-  for (let i = 0; i <= 10; i++) {
-    const quarter = i === 0 || i === 5 || i === 10
-    const y = i * 10
-    marks.push(`<line x1="${quarter ? 0 : 5}" y1="${y}" x2="11" y2="${y}"/>`)
-  }
-  // The other two quarters fall between tenths.
-  for (const y of [25, 75]) marks.push(`<line x1="0" y1="${y}" x2="11" y2="${y}"/>`)
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -1 11 102" preserveAspectRatio="none" aria-hidden="true" focusable="false" stroke="rgba(255,255,255,0.35)" stroke-width="1" vector-effect="non-scaling-stroke">${marks.join('')}</svg>`
+  const marks = [20, 40, 60, 80, 100]
+    .map((y) => `<line x1="0" y1="${y}" x2="11" y2="${y}"/>`)
+    .join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -1 11 102" preserveAspectRatio="none" aria-hidden="true" focusable="false" stroke="rgba(232,238,244,0.72)" stroke-width="1.25" vector-effect="non-scaling-stroke">${marks}</svg>`
 }

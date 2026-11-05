@@ -220,7 +220,45 @@ describe('the cue-stick slider', () => {
   })
 })
 
-import { POWER_ARROW_PULL_STEP, powerAfterArrow } from './power.js'
+import { POWER_ARROW_PULL_STEP, POWER_LEVELS, powerAfterArrow, powerAtLevel, powerLevelFromPower, powerLevelFromPull } from './power.js'
+
+describe('power levels 1 to 5', () => {
+  it('reads the fifth of the travel the cue has reached', () => {
+    expect(POWER_LEVELS).toBe(5)
+    expect(powerLevelFromPull(0)).toBe(0)
+    expect(powerLevelFromPull(POWER_PULL_DEAD_ZONE)).toBe(0)
+    expect(powerLevelFromPull(POWER_PULL_DEAD_ZONE + 0.001)).toBe(1)
+    expect(powerLevelFromPull(0.2)).toBe(1)
+    expect(powerLevelFromPull(0.2001)).toBe(2)
+    expect(powerLevelFromPull(0.4)).toBe(2)
+    expect(powerLevelFromPull(0.6)).toBe(3)
+    expect(powerLevelFromPull(0.8)).toBe(4)
+    expect(powerLevelFromPull(0.8001)).toBe(5)
+    expect(powerLevelFromPull(1)).toBe(5)
+    expect(powerLevelFromPull(4)).toBe(5)
+    expect(powerLevelFromPower(0)).toBe(0)
+    expect(powerLevelFromPower(1)).toBe(5)
+  })
+
+  it('sends the continuous pull curve at each mark, and keeps the shots between marks distinct', () => {
+    // The level is a label on the existing curve, not a second power scale.
+    for (const level of [1, 2, 3, 4, 5]) {
+      const pull = level / 5
+      expect(powerLevelFromPull(pull)).toBe(level)
+      expect(powerAtLevel(level)).toBeCloseTo(powerFromPull(pull), 10)
+    }
+    expect(powerAtLevel(1)).toBeCloseTo(0.1139, 3)
+    expect(powerAtLevel(2)).toBeCloseTo(0.2903, 3)
+    expect(powerAtLevel(3)).toBeCloseTo(0.5018, 3)
+    expect(powerAtLevel(4)).toBeCloseTo(0.7399, 3)
+    expect(powerAtLevel(5)).toBe(1)
+    // A pull halfway between 2 and 3 is a different shot from either mark.
+    const between = powerFromPull(0.5)
+    expect(between).toBeGreaterThan(powerAtLevel(2))
+    expect(between).toBeLessThan(powerAtLevel(3))
+    expect(powerLevelFromPull(0.5)).toBe(3)
+  })
+})
 
 describe('the arrow keys on the cue slider', () => {
   it('moves the cue the same distance on every tap, up and down', () => {
