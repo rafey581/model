@@ -1,5 +1,7 @@
 # Writes a compressed PostgreSQL custom-format dump into ./backups/snooker-<timestamp>.sql.
-# Usage: powershell -File ./scripts/db-backup.ps1  (or pnpm db:backup)
+# `pnpm db:backup` runs scripts/db-backup.mjs (Linux and Windows). This file is the
+# direct PowerShell equivalent.
+# Usage: powershell -File ./scripts/db-backup.ps1
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $compose = Join-Path $root 'docker-compose.yml'

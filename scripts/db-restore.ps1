@@ -1,5 +1,7 @@
-# Restores a custom-format dump produced by db-backup.ps1.
+# Restores a custom-format dump produced by db-backup.
 # DESTRUCTIVE: drops existing objects before restoring (--clean --if-exists).
+# `pnpm db:restore -- -File <path>` runs scripts/db-restore.mjs. This file is the
+# direct PowerShell equivalent.
 # Usage: powershell -File ./scripts/db-restore.ps1 -File .\backups\snooker-20260101-000000.sql
 param(
   [Parameter(Mandatory = $true)][string]$File

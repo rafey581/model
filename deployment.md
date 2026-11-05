@@ -1,5 +1,15 @@
 # Deployment Guide — AWS EC2 + Vercel
 
+> **Current ship path is `DEPLOY.md`** (one EC2 box, Capacitor player APK, Expo staff APK).
+> This file is the older "Vite on Vercel, API on EC2" layout. Where the two disagree, follow `DEPLOY.md`.
+>
+> Concrete corrections if you still read this file:
+> - Use **t3.small or larger**. `t3.micro` (1 GB) runs out of memory during `pnpm build`.
+> - Keep `AUTH_ALLOW_DIRECT_REGISTER=true`. The player app signs up directly. Setting it `false` turns signup off.
+> - Use the systemd unit in `DEPLOY.md` (working directory `packages/server`, so the process finds `.env`).
+> - The nginx site to install is `deploy/nginx/snooker.conf`. It sets `client_max_body_size 12m` so deposit screenshots are not rejected.
+> - Player and staff apps bake an absolute API URL. They do not rely on Vercel rewrites. Vercel does not reliably proxy Socket.IO.
+
 ## Architecture
 
 | Component | Host | Why |
@@ -18,7 +28,7 @@ rewrite `/api/**` and `/socket.io/**` to the EC2 server.
 ### 1.1 Launch instance
 
 - **AMI:** Ubuntu 24.04 LTS (or Amazon Linux 2023)
-- **Instance type:** `t3.micro` (or `t2.micro`) — **1 vCPU, 1 GiB RAM, 750 hrs/month free for 12 months**
+- **Instance type:** `t3.small` or larger. `t3.micro` (1 GiB) runs out of memory during `pnpm build`. `t3.micro` is free-tier eligible but too small for this repo.
 - **Region:** `us-east-1` (safest for free-tier eligibility)
 - **Storage:** 20 GB gp3 (free tier covers 30 GB EBS)
 - **Security Group:**
@@ -109,40 +119,11 @@ curl http://localhost:4000/api/health
 
 ### 1.7 nginx reverse proxy (required for WebSockets)
 
-`/etc/nginx/sites-available/snooker`:
-
-```nginx
-map $http_upgrade $connection_upgrade {
-    default upgrade;
-    ''      close;
-}
-
-server {
-    listen 80;
-    server_name <your-ec2-domain-or-ip>;
-
-    location /api/ {
-        proxy_pass http://127.0.0.1:4000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    location /socket.io/ {
-        proxy_pass http://127.0.0.1:4000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_set_header Host $host;
-        proxy_read_timeout 86400s;
-        proxy_send_timeout 86400s;
-    }
-}
-```
+Install `deploy/nginx/snooker.conf` (API, Socket.IO upgrade, 12 MB body limit for deposit proofs). Set `server_name`, then:
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/snooker /etc/nginx/sites-enabled/
+sudo cp deploy/nginx/snooker.conf /etc/nginx/sites-available/snooker
+sudo ln -sf /etc/nginx/sites-available/snooker /etc/nginx/sites-enabled/snooker
 sudo nginx -t && sudo systemctl reload nginx
 sudo certbot --nginx -d <your-ec2-domain>     # HTTPS (needed for WSS + secure cookies)
 ```
@@ -231,8 +212,8 @@ If you go this route, you can keep Vercel as a preview/staging host only.
 
 | Option | Verdict |
 |---|---|
-| **`t3.micro` (recommended)** | 1 vCPU / 1 GiB, free 750 hrs/mo × 12 mo; better burst credit performance than t2 for Node |
-| `t2.micro` | Also free-tier eligible; older; fine as alternative |
+| **`t3.small` (use this)** | 2 vCPU / 2 GiB. `pnpm build` does not fit in 1 GiB |
+| `t3.micro` / `t2.micro` | Free-tier eligible and too small: the build runs out of memory |
 | `t4g.micro` (Graviton) | NOT free tier — avoid |
 | RDS `db.t3.micro` | Free but unnecessary; local Docker Postgres is simpler and leaves RDS budget unused |
 | Vercel for the server | ❌ Impossible — Socket.IO + in-memory game rooms need a persistent process |
@@ -250,7 +231,7 @@ If you outgrow free tier: next step is `t3.small` (~$15/mo) + RDS or keep Docker
 | WS fails from Vercel | Vercel rewrite doesn't forward upgrade → use EC2-hosted frontend (§3) |
 | Admin cookie not sent | `NODE_ENV=production` not set (needs `secure: true` behind HTTPS) |
 | Verification codes not arriving | SMTP is not configured, so codes go to the server log — set `SMTP_HOST` (plus `SMTP_USER`/`SMTP_PASS`/`SMTP_FROM`) |
-| Anyone can register without a code | `AUTH_ALLOW_DIRECT_REGISTER` is `true` — set it to `false` in production |
+| Signup says registration is disabled | `AUTH_ALLOW_DIRECT_REGISTER` is `false`. The player app signs up directly, so the shipped setting is `true` |
 | DB down | `curl /api/ready` → 503; `docker compose ps`; check `pgdata` volume |
 | Migrations stale | `pnpm db:deploy` + `pnpm db:status` |
 

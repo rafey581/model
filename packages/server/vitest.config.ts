@@ -8,6 +8,8 @@ export default defineConfig({
     fileParallelism: false,
     // The suites create many accounts from one address; security.test.ts turns the
     // limits back on to check them.
-    env: { RATE_LIMIT_ENABLED: 'false' }
+    // Push defaults off in production. The push suite records Expo calls, so tests
+    // turn it on here (config is read once, at import).
+    env: { RATE_LIMIT_ENABLED: 'false', ADMIN_PUSH_ENABLED: 'true' }
   }
 })

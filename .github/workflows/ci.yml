@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: snooker
+          POSTGRES_PASSWORD: snooker
+          POSTGRES_DB: snooker
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U snooker -d snooker"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://snooker:snooker@localhost:5432/snooker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install pnpm
+        run: npm install -g pnpm@9.15.9
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Server env for tests
+        run: cp .env.example packages/server/.env
+      - name: Generate Prisma client
+        run: pnpm --filter @snooker/server exec prisma generate
+      - name: Apply migrations
+        run: pnpm db:deploy
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Test
+        run: pnpm test
+      - name: Build
+        run: pnpm build

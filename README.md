@@ -4,15 +4,20 @@ Online multiplayer snooker gaming platform. Real-time 1v1 matches, 8-player
 knockout tournaments and free robot-AI practice, backed by a server-authoritative
 deterministic physics + rules engine and a ledger-based wallet.
 
-> Balances are held in **USDT at 1:1**: deposits credit exactly what was sent, and
-> stakes/payouts are quoted in USDT. The real-money path (`REAL_MONEY_ENABLED`) stays
-> disabled until legal & licensing setup is complete, so today this is a fully
-> demonstrable, offline bookkeeping economy denominated in USDT.
+> Balances are held in **USDT at 1:1**. Match stakes move that ledger.
+> `REAL_MONEY_ENABLED` stays `false` and only gates the unfinished automatic crypto
+> routes (`/api/crypto/*`, which answer 501). Manual deposits and withdrawals are a
+> separate switch (`DEPOSIT_ENABLED` / `WITHDRAW_ENABLED`, on by default). Those
+> flows move real USDT outside the server — a player sends it to the operator
+> wallet, staff pay withdrawals themselves — and need a legal decision before a
+> public launch that accepts them. Launch notes: `DEPLOY_READINESS.md`.
 
 See also:
+- `DEPLOY.md` — install the server and build the phone apps
+- `DEPLOY_READINESS.md` — launch blockers and the ship checklist
+- `RUNBOOK.md` — boot, migration, backup/restore and monitoring procedures
 - `development_plan.md` — full technical specification
 - `product_showcase_client_review.md` — client-facing product overview
-- `RUNBOOK.md` — boot, migration, backup/restore and monitoring procedures
 
 ## Structure
 
@@ -37,7 +42,8 @@ The stake ceiling is an admin setting (`maxStake`, default 5000). A database set
 the old default of 10 refuses every table above 10 USDT until it is raised in the admin
 app (More → Settings).
 Both use the same virtual ledger freeze and settlement. `REAL_MONEY_ENABLED` stays
-`false`, so crypto deposits and withdrawals stay gated off. A new account still
+`false`, so the automatic crypto routes stay off. Manual deposit and withdrawal
+follow `DEPOSIT_ENABLED` and `WITHDRAW_ENABLED`. A new account still
 starts with 1 USDT; a Master Match needs a balance that covers the stake.
 
 The post-login home hall (not the sign-in screen) cycles its glow through red,
@@ -74,8 +80,9 @@ either way the inviter is recorded on the new account.
   live list of invited players (signed up → first match played), plus the USDT
   earned so far.
 - Anti-abuse: codes are unique, self-referral is refused, bad codes are answered
-  with an error at signup, and signup already demands a unique email address
-  verified by an emailed one-time code.
+  with an error at signup, and signup demands a unique email address. With
+  `AUTH_ALLOW_DIRECT_REGISTER=true` (the shipped setting) that email is not
+  proven by a code; the account is marked verified at signup.
 
 ## Quick Start
 
@@ -125,9 +132,10 @@ cd android && ./gradlew assembleDebug
 ```
 
 `VITE_API_ORIGIN` is baked in at build time. The checked-in `.env.app` points at
-`http://10.0.2.2:4000`, which is the Android emulator's alias for the computer
-running the API. Change that one line and rebuild to aim a handset at another host.
-The API still has to be reachable, and `REAL_MONEY_ENABLED` is unchanged.
+the live API, `http://54.252.128.235:4000`. For the Android emulator against a
+computer running the API, set `http://10.0.2.2:4000` and rebuild. A phone on
+your LAN needs that machine's address (see `.env.wifi`). The API still has to
+be reachable, and `REAL_MONEY_ENABLED` is unchanged.
 
 Graphics quality is automatic: low on weak phones, medium on typical Android,
 high on desktop. Override with `?quality=low|medium|high` or the in-game setting.
@@ -178,6 +186,7 @@ to boot without them. Never commit real secrets. Full reference: `RUNBOOK.md` §
 
 ## License / Compliance
 
-Real-money wagering is regulated activity. The crypto/real-money module is
-built but disabled (`REAL_MONEY_ENABLED=false`) and must not be enabled without
-licensed legal setup in the target jurisdiction.
+Real-money wagering is regulated activity. Keep `REAL_MONEY_ENABLED=false`.
+That flag does not disable manual deposits and withdrawals; those are
+`DEPOSIT_ENABLED` and `WITHDRAW_ENABLED`, and they must not be used to take
+real USDT without licensed legal setup in the target jurisdiction.

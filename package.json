@@ -9,17 +9,17 @@
   "scripts": {
     "dev": "pnpm --filter @snooker/shared build && pnpm --parallel --filter @snooker/server --filter @snooker/client dev",
     "build": "pnpm -r build",
-    "test": "pnpm -r test",
-    "typecheck": "pnpm -r typecheck",
-    "lint": "pnpm -r lint",
+    "test": "pnpm --filter @snooker/shared build && pnpm -r test",
+    "typecheck": "pnpm --filter @snooker/shared build && pnpm -r typecheck",
+    "lint": "pnpm --filter @snooker/shared build && pnpm -r lint",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
     "db:migrate": "pnpm --filter @snooker/server db:migrate",
     "db:deploy": "pnpm --filter @snooker/server db:deploy",
     "db:status": "pnpm --filter @snooker/server db:status",
     "db:seed": "pnpm --filter @snooker/server db:seed",
-    "db:backup": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/db-backup.ps1",
-    "db:restore": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/db-restore.ps1",
+    "db:backup": "node ./scripts/db-backup.mjs",
+    "db:restore": "node ./scripts/db-restore.mjs",
     "e2e": "pnpm --filter @snooker/server exec tsx scripts/e2e.ts"
   },
   "engines": {
