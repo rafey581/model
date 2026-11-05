@@ -10,22 +10,27 @@ import { BAULK_LINE_X, D_RADIUS, TABLE_LENGTH, TABLE_WIDTH } from '@snooker/shar
  * first thing on the screen and the first thing to look cheap. A line that is geometry has
  * no resolution to run out of: it is as sharp at the cue ball as it is at the far cushion.
  *
- * Every edge carries a narrow strip that fades to nothing, so the lines are soft-edged
+ * Every edge carries a narrow strip that fades to nothing, so the lines stay crisp
  * without relying on the renderer's antialiasing, which the lower quality levels switch
- * off. The whole set is one mesh and one draw call, unlit, and covers almost no pixels.
+ * off. The feather is only a pixel or so: the core of the line is solid chalk. The
+ * whole set is one mesh and one draw call, unlit, and covers almost no pixels.
  */
 
-/** Width of the baulk line and the D, in millimetres. Wider than a real chalk line, which a screen cannot hold. */
-export const MARKING_LINE_MM = 6
-/** The fade on each side of a line. */
-const MARKING_FEATHER_MM = 3.5
-export const MARKING_SPOT_RADIUS_MM = 6.5
-/** White, and faint enough to sit in the cloth rather than on it. */
-export const MARKING_OPACITY = 0.5
+/**
+ * Width of the baulk line and the D, in millimetres.
+ * Wider than a real chalk line, which a screen cannot hold, and solid enough to read
+ * from the playing camera instead of dissolving into the cloth.
+ */
+export const MARKING_LINE_MM = 10
+/** The fade on each side of a line. Narrow, so the edge is anti-aliased rather than blurred. */
+const MARKING_FEATHER_MM = 1.6
+export const MARKING_SPOT_RADIUS_MM = 7.5
+/** Chalk white. Tone mapping is off on the material, so this stays white on the green. */
+export const MARKING_OPACITY = 0.9
 /** Just clear of the cloth, so the two never fight for the same depth. */
-const MARKING_HEIGHT_MM = 0.45
-const D_SEGMENTS = 72
-const SPOT_SEGMENTS = 20
+const MARKING_HEIGHT_MM = 0.7
+const D_SEGMENTS = 96
+const SPOT_SEGMENTS = 24
 
 const HALF_L = TABLE_LENGTH / 2
 const HALF_W = TABLE_WIDTH / 2
@@ -121,11 +126,17 @@ export function buildTableMarkings(): THREE.Mesh {
   const mesh = new THREE.Mesh(
     buildTableMarkingsGeometry(),
     new THREE.MeshBasicMaterial({
-      color: 0xffffff,
+      // Warm chalk, not a grey that tone mapping would wash into the cloth.
+      color: 0xfff8ee,
       vertexColors: true,
       transparent: true,
       opacity: MARKING_OPACITY,
       depthWrite: false,
+      // ACES would take this white down to the lamp's colour and the line would go dull.
+      toneMapped: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -2,
       // Seen from above or below alike; the winding of a hand-built strip is not worth a bug.
       side: THREE.DoubleSide
     })

@@ -61,12 +61,11 @@ export function applyStroke(
   }
   applyResolution(frame, resolution, frame.remainingReds)
   if (sim.cuePotted) respotBall(frame, BALL_IDS.CUE)
+  // Ball in hand is only when the cue ball has left the table. In snooker that ball is
+  // played from the D — the break-off and every later in-off alike. A foul that leaves
+  // the cue ball on the cloth does not let anyone pick it up and move it.
   frame.cueInHand = sim.cuePotted
-  // The D restriction belongs to the break-off alone. A stroke has now been played, so
-  // any ball-in-hand this frame produces from here is a mid-frame one and may be placed
-  // anywhere on the table. Cleared after the placement above has run, so the break-off
-  // itself is still judged against the D.
-  frame.cueInHandInD = false
+  frame.cueInHandInD = frame.cueInHand
   const end = maybeEndFrame(frame)
   // A foul hands the opponent the choice of playing on or making the offender play again.
   if (resolution.foul && !end.frameEnded && frame.turnIndex !== shooterIndex) {
@@ -114,7 +113,9 @@ export function applyFoulChoice(frame: FrameState, chooser: number, playAgain: b
       frame.colorsRemaining = new Set(restore.colorsRemaining)
       frame.remainingReds = restore.remainingReds
       frame.cueInHand = restore.cueInHand
-      frame.cueInHandInD = restore.cueInHandInD
+      // An in-hand that is put back is played from the D, including one saved by an
+      // older build that had cleared the flag.
+      frame.cueInHandInD = restore.cueInHand
       frame.phase = frame.remainingReds === 0 && frame.colorsRemaining.size > 0 ? 'COLOURING_UP' : 'PLAYING'
     }
   }
@@ -163,26 +164,21 @@ function alignPlaybackWithFrame(sim: SimResult, frame: FrameState): void {
 /**
  * Where the striker's cue ball may be put down, or null if they may not put it there.
  *
- * Two rules, and they are not the same rule:
+ * Ball in hand is always the D. That is the break-off, and it is also every later
+ * in-hand: the cue ball potted or otherwise off the table. A foul that leaves the cue
+ * ball on the cloth is not ball in hand — the incoming player plays it from where it
+ * lies. There is no placement "anywhere on the table" in snooker.
  *
- *  - The D is a break-off restriction only. At the start of a frame the cue ball has to
- *    go inside the D; every other in-hand during the frame — a cue potted mid-frame, an
- *    in-off, any other foul — may go anywhere on the table, which is what real snooker
- *    does. `frame.cueInHandInD` is what tells the two apart.
- *  - Wherever it goes, the cue ball has to actually be placeable: on the cloth, clear of
- *    the pockets, and not sitting inside another ball.
- *
- * The second rule used to be free. When every legal placement was inside the D, the
- * D test bounded the position for us. Relaxing the D meant the bounds had to become
- * explicit, because otherwise a client could place the cue ball a mile off the table or
- * inside a red, and the simulation would have to cope with it.
+ * Inside the D it still has to be placeable: on the cloth, clear of the pockets, and
+ * not sitting inside another ball. Those bounds are checked before the D so a spot
+ * that fails them is refused for that reason, not described as merely outside the D.
  */
 function resolveCuePlacement(frame: FrameState, cuePos: { x: number; y: number }): Vec2 | null {
   if (!Number.isFinite(cuePos.x) || !Number.isFinite(cuePos.y)) return null
-  if (frame.cueInHandInD && !isInsideD(cuePos)) return null
   if (!isOnTable(cuePos)) return null
   if (isInsideAPocket(cuePos)) return null
   if (isCrowded(frame, cuePos)) return null
+  if (!isInsideD(cuePos)) return null
   return vec(cuePos.x, cuePos.y)
 }
 
@@ -253,10 +249,10 @@ export function applyCuePlacement(frame: FrameState, cuePos: { x: number; y: num
 
   const pos = resolveCuePlacement(frame, cuePos)
   if (!pos) {
-    if (frame.cueInHandInD && !isInsideD(cuePos)) return fail('outside-D')
     if (!isOnTable(cuePos)) return fail('off-table')
     if (isInsideAPocket(cuePos)) return fail('in-pocket')
     if (isCrowded(frame, cuePos)) return fail('crowded')
+    if (!isInsideD(cuePos)) return fail('outside-D')
     return fail('bad-input')
   }
 
@@ -266,10 +262,8 @@ export function applyCuePlacement(frame: FrameState, cuePos: { x: number; y: num
   cue.spin = { x: 0, y: 0 }
   cue.angularVel = 0
   frame.cueInHand = false
-  // The D restriction belongs to the break-off alone, and it is spent either way: a ball
-  // that has been placed at the break and potted again is a mid-frame in-off, and real
-  // snooker lets that one go anywhere on the table. Same rule, and the same reason, as
-  // the clearing that `applyStroke` does after a stroke has been played.
+  // The ball is down. The next in-hand, if the cue leaves the table again, is decided
+  // by that stroke and is played from the D like this one was.
   frame.cueInHandInD = false
   return { ok: true, placed: { x: pos.x, y: pos.y }, reason: null, alreadyPlaced: false }
 }
@@ -439,10 +433,10 @@ export interface FrameSnapshot {
   colorsRemaining: number[]
   cueInHand: boolean
   /**
-   * The client draws "place the cue in the D" against this, so a mid-frame in-hand is
-   * not announced with break-off wording it is no longer subject to. Optional and
-   * defaulting to false, so a snapshot from before the split is read as unrestricted
-   * rather than as a break-off.
+   * True while the cue ball in hand may only be placed in the D. That is every in-hand:
+   * the break-off and a cue ball that has left the table. Kept on the snapshot so a
+   * client can draw the D without re-deriving the rule. An in-hand snapshot that omits
+   * it, or still says otherwise, is read as the D.
    */
   cueInHandInD?: boolean
   winnerIndex?: number
@@ -495,7 +489,7 @@ export function frameFromSnapshot(snapshot: FrameSnapshot): FrameState {
     totalReds: snapshot.totalReds ?? snapshot.balls.filter((b) => isRedId(b.id)).length,
     colorsRemaining: new Set(snapshot.colorsRemaining),
     cueInHand: snapshot.cueInHand,
-    cueInHandInD: snapshot.cueInHandInD ?? false,
+    cueInHandInD: snapshot.cueInHand,
     foulChoice: snapshot.foulChoice ? { ...snapshot.foulChoice } : null,
     winnerIndex: snapshot.winnerIndex ?? undefined
   }

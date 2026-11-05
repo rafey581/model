@@ -194,9 +194,8 @@ function chooseFrom(frame: FrameState, config: BotSkillProfile): Trial {
 }
 
 /**
- * Ball in hand: try a handful of spots and play the best shot from the best of them.
- * At the break-off the spots are inside the D; later in the frame they may be anywhere,
- * so the robot also tries spots set up straight behind a pot.
+ * Ball in hand: try a handful of spots inside the D and play the best shot from the
+ * best of them. The break-off and a later in-off are the same rule.
  */
 function chooseInHand(frame: FrameState, config: BotSkillProfile): Trial {
   const spots = inHandSpots(frame, config)
@@ -227,20 +226,6 @@ function inHandSpots(frame: FrameState, config: BotSkillProfile): Vec[] {
     for (const deg of [180, 135, 225, 100, 260]) {
       const a = (deg * Math.PI) / 180
       consider({ x: D_CENTRE.x + Math.cos(a) * D_RADIUS * r, y: D_CENTRE.y + Math.sin(a) * D_RADIUS * r })
-    }
-  }
-  if (!frame.cueInHandInD) {
-    // Anywhere on the table: line up behind each pot, at a comfortable distance.
-    for (const id of legal) {
-      const target = frame.balls.find((b) => b.id === id && !b.potted)
-      if (!target) continue
-      for (const pocket of pocketPositions()) {
-        const dir = unit(sub(pocket, target.pos))
-        if (!dir) continue
-        for (const back of [260, 480]) {
-          consider({ x: target.pos.x - dir.x * (CONTACT + back), y: target.pos.y - dir.y * (CONTACT + back) })
-        }
-      }
     }
   }
   ranked.sort((a, b) => b.quality - a.quality)
@@ -578,9 +563,4 @@ function sub(a: Vec, b: Vec): Vec {
 
 function len(v: Vec): number {
   return Math.hypot(v.x, v.y)
-}
-
-function unit(v: Vec): Vec | null {
-  const l = len(v)
-  return l < 1e-9 ? null : { x: v.x / l, y: v.y / l }
 }

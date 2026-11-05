@@ -4378,9 +4378,8 @@ function handleSocketEvents(socket: Socket): void {
 
 /**
  * Whether this client is mid-placement: my visit, the cue ball in hand, and the
- * table settled. The frame's `cueInHandInD` says which restriction is in force —
- * the D only at break-off, anywhere mid-frame — and the whole presentation flow
- * (camera, D overlay, ghost) keys off this one question.
+ * table settled. Ball in hand is always played from the D, so the camera, the D
+ * overlay and the ghost all use that one restriction.
  */
 function isPlacing(): boolean {
   return isVisitPlayable() && frame?.cueInHand === true
@@ -4416,14 +4415,14 @@ function declarePlacement(): void {
  * spot. Input is refused in every phase but `PLACING`, which is what stops the player
  * fighting a camera that is still moving.
  *
- * Nothing here decides a rule: the D restriction comes from the snapshot's
- * `cueInHandInD`, and the legality of any given spot comes from `placementStatus`, which
- * mirrors the server's own test. The server still rejects an illegal placement
- * authoritatively.
+ * Nothing here decides a rule. Ball in hand is the D, and the legality of any given
+ * spot comes from `placementStatus`, which mirrors the server's own test. The server
+ * still rejects an illegal placement authoritatively.
  */
 function stepPlacement(canvas: HTMLCanvasElement): void {
   const placing = isPlacing()
-  const inD = frame?.cueInHandInD === true
+  // In hand means the D, including when an older snapshot cleared `cueInHandInD`.
+  const inD = frame?.cueInHand === true || frame?.cueInHandInD === true
   const cameraSettled = scene3d?.isPlacementCameraSettled() ?? true
   // The server has taken the placement once the snapshot stops saying the cue ball is in
   // hand. Nothing else clears it, so a rejected spot cannot be mistaken for a placed one.
@@ -4438,8 +4437,7 @@ function stepPlacement(canvas: HTMLCanvasElement): void {
   if (placementFlow.phase !== previousPhase) {
     if (placementFlow.phase === 'ENTERING') {
       // A fresh placement: nothing is confirmed, the overlays go up, and the camera
-      // starts its flight to the overhead view. The D overlay follows `cueInHandInD`,
-      // so this is the break-off case and only the D is shaded.
+      // starts its flight to the overhead view. The D is shaded for every in-hand.
       placementTarget = null
       placementLegal = false
       placementPendingCommit = null
@@ -4472,10 +4470,8 @@ placementTarget = null
     }
   }
 
-  // The ghost is live only in `PLACING`, and the D flag can change between frames (a
-  // snapshot arriving late), so the overlays follow it live rather than being latched
-  // when the placement began. `cueInHandInD` is true only at break-off, so this is the
-  // one place the D is shaded; a mid-frame in-hand leaves the whole table unshaded.
+  // The ghost is live only in `PLACING`. The D stays shaded for the whole placement:
+  // an in-off is played from the D the same way the break-off is.
   if (handlePlacement) {
     if (placementAllowsGhostInput(placementFlow) && !placementCommitInFlight && scene3d) {
       scene3d.setPlacementMode(true, inD)
@@ -4483,10 +4479,7 @@ placementTarget = null
       if (!handlePos) handlePos = firstHandleSpot(inD, snapshotBalls)
       placementTarget = handlePos
       placementLegal = scene3d.updatePlacementGhost(handlePos, inD, snapshotBalls).ok
-      hintPlacement('Drag to move the cue ball, then tap the table to place it')
-      // Away from the break-off the camera goes with the ball, from behind it, so the
-      // player sees where they are putting it. At the break-off it stays behind the D.
-      if (!inD) scene3d.setPlacementAnchor(handlePos)
+      hintPlacement('Drag inside the D, then tap the table to place the cue ball')
       if (!cueHandle) cueHandle = createCueHandle(moveHandleBall)
       const at = scene3d.tableToScreen(handlePos.x, handlePos.y)
       if (at) {
@@ -4516,7 +4509,7 @@ placementTarget = null
         if (status?.reason) {
           const label =
             status.reason === 'outside-D'
-              ? 'The cue must be placed inside the D at the break-off'
+              ? 'The cue must be placed inside the D'
               : status.reason === 'in-pocket'
                 ? 'Too close to a pocket'
                 : status.reason === 'crowded'
@@ -4730,20 +4723,20 @@ function dragHandleBall(dxClient: number, dyClient: number): void {
   moveHandleBallTo({ x: handlePos.x + (d * px - b * py) / det, y: handlePos.y + (-c * px + a * py) / det })
 }
 
-/** Moves the ball in hand to this point on the table, if the spot is one the server would take. */
+/**
+ * Moves the ball in hand to this point on the table, if the spot is one the server would take.
+ * The finger is clamped to the D, so a drag cannot walk the cue ball out onto the open table.
+ */
 function moveHandleBallTo(point: { x: number; y: number }): void {
   if (!scene3d || !frame || !placementAllowsGhostInput(placementFlow) || placementCommitInFlight) return
-  const inD = frame.cueInHandInD === true
   let at = { x: point.x, y: point.y }
-  if (inD) {
-    at.x = Math.min(at.x, D_CENTRE.x)
-    const dx = at.x - D_CENTRE.x
-    const dy = at.y - D_CENTRE.y
-    const d = Math.hypot(dx, dy)
-    const reach = D_ZONE_RADIUS - 1
-    if (d > reach) at = { x: D_CENTRE.x + (dx / d) * reach, y: D_CENTRE.y + (dy / d) * reach }
-  }
-  if (placementStatus(at, inD, frame.balls).ok) handlePos = at
+  at.x = Math.min(at.x, D_CENTRE.x)
+  const dx = at.x - D_CENTRE.x
+  const dy = at.y - D_CENTRE.y
+  const d = Math.hypot(dx, dy)
+  const reach = D_ZONE_RADIUS - 1
+  if (d > reach && d > 0) at = { x: D_CENTRE.x + (dx / d) * reach, y: D_CENTRE.y + (dy / d) * reach }
+  if (placementStatus(at, true, frame.balls).ok) handlePos = at
 }
 
 /** The frame-rate readout, when the address asked for one with `?perf=1`. */

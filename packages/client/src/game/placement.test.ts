@@ -77,15 +77,15 @@ describe('placementStatus', () => {
   const free = { x: 2000, y: 900 }
   const inD = { x: BAULK_LINE_X - 100, y: TABLE_WIDTH / 2 }
 
-  it('accepts a clear spot in either restriction mode', () => {
-    expect(placementStatus(free, false, []).ok).toBe(true)
+  it('accepts a clear spot inside the D and refuses the rest of the cloth', () => {
     expect(placementStatus(inD, true, []).ok).toBe(true)
+    expect(placementStatus(free, false, []).reason).toBe('outside-D')
   })
 
-  it('names the D as the reason during break-off and stays quiet mid-frame', () => {
+  it('names the D for a spot past the baulk line, even if a caller passes the old unrestricted flag', () => {
     const pastBaulk = { x: BAULK_LINE_X + 400, y: TABLE_WIDTH / 2 }
     expect(placementStatus(pastBaulk, true, []).reason).toBe('outside-D')
-    expect(placementStatus(pastBaulk, false, []).ok).toBe(true)
+    expect(placementStatus(pastBaulk, false, []).reason).toBe('outside-D')
   })
 
   it('reports the right reason for each failure class', () => {
@@ -253,22 +253,20 @@ describe('the placement flow', () => {
     })
   })
 
-  describe('ball in hand over the whole table', () => {
-it('confirms a spot anywhere on the cloth, not just in the D', () => {
-      // The difference between the two scenarios: mid-frame there is no D restriction, so
-      // the whole playing surface is legal and the flow confirms any clear spot on it.
-      // The spots are spread across the table but kept clear of the pockets, which are
-      // not placeable in either scenario.
-      const placing = drive(initialPlacementFlow(), [moving, settled]).flow
+  describe('ball in hand after the break-off', () => {
+    it('refuses a spot anywhere on the cloth outside the D', () => {
+      // An in-off is the same rule as the break. The old unrestricted flag cannot
+      // open the rest of the table: the server will reject those spots.
       for (const spot of [
         { x: BAULK_LINE_X + 300, y: BALL_RADIUS },
         { x: TABLE_LENGTH / 2, y: TABLE_WIDTH / 2 },
         { x: TABLE_LENGTH - 600, y: TABLE_WIDTH - 400 }
       ]) {
         expect(isInsideD(spot)).toBe(false)
-        expect(placementStatus(spot, false, []).ok).toBe(true)
-        expect(confirmPlacement(placing, spot).confirmed).toEqual(spot)
+        expect(placementStatus(spot, false, []).reason).toBe('outside-D')
       }
+      const placing = drive(initialPlacementFlow(), [moving, settled]).flow
+      expect(confirmPlacement(placing, D_SPOT).confirmed).toEqual(D_SPOT)
     })
 
     it('still refuses a spot off the table or inside a pocket mouth', () => {

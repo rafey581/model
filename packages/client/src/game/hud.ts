@@ -80,10 +80,9 @@ export interface HudSnapshot {
   balls: Array<{ id: number; potted: boolean }>
   cueInHand?: boolean
   /**
-   * Whether the in-hand is still subject to the D. The D is a break-off restriction,
-   * so a mid-frame in-hand is free anywhere on the table and the banner has to say so
-   * rather than send the player to the wrong end of the table. Absent reads as
-   * unrestricted, which is the safer of the two to guess.
+   * Whether this in-hand is played from the D. That is every in-hand. The HUD treats
+   * a cue ball in hand as the D even when an older snapshot omitted the flag or
+   * cleared it.
    */
   cueInHandInD?: boolean
 }
@@ -131,7 +130,7 @@ export interface HudState {
    * the 2D canvas only, which meant the 3D table never said it.
    */
   cueInHand: boolean
-  /** True while the D still constrains that placement, i.e. the break-off. */
+  /** True while the cue ball in hand has to be placed inside the D. */
   cueInHandInD: boolean
   /** True when the reds are the ball on, which is what highlights the red dots. */
   redsOn: boolean
@@ -293,7 +292,7 @@ export function deriveHudState(input: HudInput): HudState {
           ? ballColorHex(BALL_IDS.RED_MIN)
           : null,
     cueInHand: Boolean(snapshot?.cueInHand),
-    cueInHandInD: Boolean(snapshot?.cueInHandInD),
+    cueInHandInD: Boolean(snapshot?.cueInHand),
     redsOn: (snapshot?.ballOn ?? 'RED') === 'RED',
     reds: {
       total: totalReds,
@@ -1088,7 +1087,7 @@ export function createHud(): Hud {
         stat.hidden = true
       }
       setHidden(inHand, !state.cueInHand)
-      setText(inHand, state.cueInHandInD ? 'Ball in hand - place the cue in the D' : 'Ball in hand - place the cue anywhere on the table')
+      setText(inHand, 'Ball in hand - place the cue in the D')
 
       const turnText = state.you.active ? 'Your turn' : state.opponent.active ? `${state.opponent.name} to play` : ''
       if (live.textContent !== turnText) live.textContent = turnText
