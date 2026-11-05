@@ -1,7 +1,9 @@
 # Runtime Runbook — Snooker Platform
 
 Operational notes for booting, upgrading, backing up and monitoring the platform.
-Targets the local/docker-compose topology (no cloud deploy yet — see Day 28 gate).
+The live topology is one EC2 instance (API + Docker Postgres). Public-launch
+gaps and the ship checklist are in `DEPLOY_READINESS.md`. Step-by-step install
+is `DEPLOY.md`.
 
 ## 1. Prerequisites
 
@@ -65,14 +67,20 @@ Both are exempt from the maintenance gate so probes stay reachable. Probe
 ## 5. Backup / restore
 
 Data lives entirely in the `pgdata` Docker volume (DB migrations, wallet ledger,
-users, tournaments). Two ways to back up:
+users, tournaments). Back up with:
 
-PowerShell (on this dev host):
+`pnpm db:backup` and `pnpm db:restore` are Node scripts. They run on the Ubuntu
+server and on a Windows dev machine, as long as `docker compose` can see the
+postgres service. Dumps are Postgres custom format under `backups/` (gitignored).
 
 ```bash
-pnpm db:backup        # -> backups/snooker-<timestamp>.sql (Postgres custom format)
-pnpm db:restore -- -File ".\backups\snooker-<timestamp>.sql"
+pnpm db:backup
+pnpm db:restore -- backups/snooker-<timestamp>.sql
+# the previous Windows flag still works:
+pnpm db:restore -- -File .\backups\snooker-<timestamp>.sql
 ```
+
+`scripts/db-backup.ps1` and `scripts/db-restore.ps1` remain for a direct PowerShell call.
 
 Generic \*nix one-liners (same topology):
 
@@ -97,11 +105,12 @@ Restore runs while the server is down (or matches will fight the recreated DB).
 - **Wallets / ledger:** a LedgerEntry exists for every credit/debit; run the e2e
   §8 audit (`pnpm e2e`) or check `ledger.test.ts` invariants after any restore.
 - **Fraud flags:** `packages/server/src/fraud/` flags suspicious activity — surfaced in
-  the admin audit feed; no logs emitted today (see Day 28 gap list).
+  the admin audit feed. Nothing is written to the process log for those flags.
 - **Maintenance mode:** toggle in Admin → Settings; all non-admin HTTP + sockets get 503.
   Persisted in the DB, enforced server-side.
-- **Database:** watch container health (no healthcheck in compose today — add one or
-  probe `/api/ready`), connection pool, and `pgdata` volume free space.
+- **Database:** `docker compose ps` should show postgres `healthy` (`pg_isready`).
+  Probe `/api/ready` from outside (503 when Postgres is down). Watch `pgdata` free space.
+  Postgres and Redis publish on `127.0.0.1` only.
 
 ## 7. Shutdown
 
@@ -114,7 +123,7 @@ Send SIGINT/SIGTERM: server logs `shutting down`, closes HTTP + socket rooms, th
   required and >=16 chars — the server won't start on defaults anymore.
 - `REAL_MONEY_ENABLED` must stay `false` until the legal gate (Day 28 / legal team).
 - The in-game currency is **USDT at 1:1**: balances, stakes and the stake tiers
-  (`1 / 5 / 10 USDT`) are all denominated in USDT, and a new account starts with
+  (open tables 1–100 USDT, Master Match 500–5000 USDT) are all denominated in USDT, and a new account starts with
   `START_BALANCE` (default 1) USDT — the welcome grant is deliberately small
   because the invitation programme, not the grant, is what funds a new player.
   While `REAL_MONEY_ENABLED=false` none of this moves real money — it is
@@ -140,9 +149,13 @@ Send SIGINT/SIGTERM: server logs `shutting down`, closes HTTP + socket rooms, th
 - Turn timers, per-socket + per-user rate limits and shot-input validation are enforced
   server-side (Day 23).
 
-## 9. Known gaps (Day 28 candidates)
+## 9. Known gaps
 
-- No CI (by design, M0), no Dockerfile for the app, no metrics endpoint/prometheus.
-- Postgres has no healthcheck/restart policy; Redis is provisioned but unused.
+- CI runs typecheck, unit tests and the build on pull requests (`.github/workflows/ci.yml`). There is still no Dockerfile for the app and no metrics endpoint.
+- Redis is provisioned (localhost only, with a healthcheck) but unused. Game rooms
+  live in the Node process; a second API instance would not share matches.
 - e2e (`pnpm e2e`) needs a running server and mutates the dev DB — never point it at
-  a shared environment.=
+  a shared environment.
+- `COOKIE_SECRET` is required at boot and is not read anywhere else. Session
+  cookies are not signed with it. `JWT_SECRET` signs player tokens and password-reset
+  tokens. Admin sessions are random ids stored as a hash.=

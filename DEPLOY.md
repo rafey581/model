@@ -10,8 +10,9 @@ both apps have the server's address built in, so the server comes first.
 | Player app "Snooker Stake" (`com.snookerx.game`) | Players' phones (APK) and optionally the web | Vite + Capacitor, built on your PC |
 | Staff app "Snooker Admin" (`com.snookerarena.admin`) | Staff phones (APK) | Expo, built in the cloud by EAS |
 
-All current work is on the branch **`merge/friend-changes`**. Use that branch (or `main`
-once it has been merged there).
+Ship from **`main`**. `merge/friend-changes` currently points at the same commit as
+`main`; open new work as a pull request into `main`. Readiness notes and the
+ordered launch checklist are in `DEPLOY_READINESS.md`.
 
 ---
 
@@ -55,7 +56,7 @@ sudo usermod -aG docker $USER && newgrp docker
 ### 1.3 Get the code and build
 ```bash
 git clone https://github.com/rafey581/model.git snooker && cd snooker
-git checkout merge/friend-changes
+git checkout main
 pnpm install
 pnpm build          # shared -> server (prisma generate + tsc) -> client web build
 ```
@@ -80,12 +81,15 @@ The file **must** be `packages/server/.env`. Set at least:
 | `MAX_ACCOUNTS_PER_DEVICE` | `1` (one account per phone; raise to allow e.g. a shared family phone) |
 | `REQUIRE_DEVICE_ID_FOR_SIGNUP` | `true` (an app too old to send its phone id is told to update before it can sign up) |
 | `ADMIN_ALLOWED_IPS` | **leave empty**: staff phones on mobile data change IP constantly |
-| `ADMIN_PUSH_ENABLED` | `false` (the staff app rings by itself while open; no Firebase or other service) |
-| `REAL_MONEY_ENABLED` | `false` |
+| `ADMIN_PUSH_ENABLED` | `false` (the staff app rings by itself while open; no Firebase or other service). Also the default if the variable is omitted |
+| `DEPOSIT_ENABLED` | `true` only when staff will verify real Solana transfers and credit them. `false` keeps the virtual ledger (welcome grant, stakes, referrals) and rejects new deposit requests |
+| `WITHDRAW_ENABLED` | the same decision as deposits. Approving a withdrawal debits the ledger; staff send the USDT themselves, outside the server |
+| `REAL_MONEY_ENABLED` | `false`. This does **not** turn deposits off. It only blocks the unfinished `/api/crypto/*` routes |
 
 ### 1.5 Database
 ```bash
 pnpm db:up                                        # starts PostgreSQL in Docker
+docker compose ps                                 # postgres should become healthy
 pnpm db:deploy                                    # applies every migration
 SEED_ADMIN_PASSWORD='<a strong password>' pnpm db:seed   # FIRST deploy only: creates admin@snooker.test
 pnpm db:status                                    # should say: up to date
@@ -129,10 +133,14 @@ docker exec -it snooker-postgres psql -U snooker -c "SELECT value FROM \"AppSett
 ```
 
 ### 1.8 Optional: nginx, HTTPS and the web version
-Only needed for a domain with HTTPS, or to offer the game in a browser. Follow
-`deployment.md` §1.7 (proxying `/api` and `/socket.io` to port 4000 with WebSocket
-upgrade) and §3 (serving `packages/client/dist`), then:
+Required before real players should use the apps. Copy `deploy/nginx/snooker.conf`
+(it proxies `/api` and `/socket.io`, raises the body limit so deposit screenshots
+fit, and has a commented block for serving `packages/client/dist`). Then:
 ```bash
+sudo cp deploy/nginx/snooker.conf /etc/nginx/sites-available/snooker
+sudo ln -sf /etc/nginx/sites-available/snooker /etc/nginx/sites-enabled/snooker
+# edit server_name inside the site, then:
+sudo nginx -t && sudo systemctl reload nginx
 sudo certbot --nginx -d api.yourdomain.com
 ```
 Add the web address to `CLIENT_ORIGIN`, restart (`sudo systemctl restart snooker`), and close port 4000.
@@ -144,7 +152,7 @@ pnpm install && pnpm build
 pnpm db:deploy                    # applies new migrations (safe to run every time)
 sudo systemctl restart snooker
 ```
-Back up first: `docker exec snooker-postgres pg_dump -U snooker snooker > backup-$(date +%F).sql`.
+Back up first: `pnpm db:backup` (custom-format dump in `backups/`; works on this Ubuntu server). Plain SQL alternative: `docker exec snooker-postgres pg_dump -U snooker snooker > backup-$(date +%F).sql`.
 
 ---
 
@@ -155,7 +163,7 @@ Built on your own computer.
 ### 2.1 One-time setup
 - Install **Android Studio** (it brings the Android SDK; the app targets SDK 35) and
   Node 20 + pnpm.
-- `git clone https://github.com/rafey581/model.git && cd model && git checkout merge/friend-changes`
+- `git clone https://github.com/rafey581/model.git && cd model && git checkout main`
 
 ### 2.2 Point it at the server
 Edit `packages/client/.env.app` if the server moves. It is set to `http://54.252.128.235:4000`;
@@ -260,8 +268,8 @@ Right now the apps talk to `http://54.252.128.235:4000`: anyone on the same Wi-F
 player can read their password and session as it goes past. To encrypt it:
 1. Buy a domain (any registrar) and point `api.yourdomain.com` (an A record) at
    `54.252.128.235`.
-2. On the server: `sudo apt install -y nginx certbot python3-certbot-nginx`, proxy
-   `/api` and `/socket.io` to port 4000 (deployment.md section 1.7), then
+2. On the server: `sudo apt install -y nginx certbot python3-certbot-nginx`, install
+   `deploy/nginx/snooker.conf` (section 1.8), then
    `sudo certbot --nginx -d api.yourdomain.com`.
 3. In `packages/server/.env` set `TRUST_PROXY=true` (so limits see real addresses), restart.
 4. Change `packages/client/.env.app` to `VITE_API_ORIGIN=https://api.yourdomain.com` and

@@ -176,9 +176,10 @@ const envSchema = z.object({
 
   // Email delivery over SMTP. An empty host keeps email OTP on the console dev
   // channel - the code is logged, never emailed, so a fresh checkout works offline.
-  // Staff phone alerts (Expo push). On by default; the access token is only needed
-  // when "Enhanced push security" is switched on for the Expo project.
-  ADMIN_PUSH_ENABLED: boolFlag(true),
+  // Staff phone alerts (Expo push). Off unless explicitly enabled: the staff app
+  // rings on its own while it is open, and this project does not ship Firebase.
+  // The access token is only needed when Expo "Enhanced push security" is on.
+  ADMIN_PUSH_ENABLED: boolFlag(false),
   EXPO_ACCESS_TOKEN: z.string().default(''),
   SMTP_HOST: z.string().default(''),
   SMTP_PORT: z.coerce.number().default(587),
