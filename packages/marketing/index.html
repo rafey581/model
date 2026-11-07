@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="format-detection" content="telephone=no" />
+    <style>
+      html, body { margin: 0; background: #090b09; color: #f3f0e8; }
+    </style>
+    <script>
+      try {
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          document.documentElement.classList.add('reduce-motion')
+        }
+      } catch (e) { /* preference stays unset; CSS media query still applies */ }
+    </script>
+    <!--head:inject-->
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <!--body:inject-->
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
