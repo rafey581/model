@@ -31,7 +31,7 @@ try {
   const debug = typeof window !== 'undefined' && debugRequested()
   if (typeof window !== 'undefined' && (USE_NEW_SFX || debug)) {
     runtime = startSfx({
-      tier: qualityConfig().name,
+      tier: qualityConfig().name === 'low' ? 'low' : qualityConfig().name === 'medium' ? 'medium' : 'high',
       // The game's own context, so there is still one for its sounds. It is only asked
       // for from inside a user gesture or a play call, never at load.
       context: sharedAudioContext,

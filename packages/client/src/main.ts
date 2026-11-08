@@ -68,7 +68,7 @@ import { createRenderScaler } from './game/renderScale.js'
 import { predictShot } from './game/predictShot.js'
 import { createPerfOverlay } from './game/perfOverlay.js'
 import './tournaments.css'
-import { hasWeakGpu } from './game/qualityConfig.js'
+import { hasWeakGpu, isSharpTier } from './game/qualityConfig.js'
 import { createCueHandle, type CueHandle } from './game/cueHandle.js'
 import { placementStatus, D_CENTRE, D_ZONE_RADIUS } from './game/placement.js'
 import { qualityConfig, qualityPreference } from './game/qualityConfig.js'
@@ -504,7 +504,7 @@ let adaptiveQuality = true
 function fullPixelRatio(): number {
   const device = window.devicePixelRatio || 1
   const tier = qualityConfig()
-  const high = tier.name === 'high'
+  const high = isSharpTier(tier.name)
   const tierCap = tier.name === 'low' ? 1 : tier.name === 'medium' ? 1.5 : dprCeiling
   const oversize = high && device <= 1.25 && hasWeakGpu() ? HIGH_SUPERSAMPLE : 1
   return Math.min(dprCeiling, tierCap, device) * tier.renderScale * oversize
@@ -531,7 +531,7 @@ function storeRenderScale(scale: number): void {
 function dprCeilingForScreen(): number {
   const phone = Math.min(window.innerWidth, window.innerHeight) <= DPR_MOBILE_MAX_EDGE
   if (!phone) return DPR_CAP_DESKTOP
-  return qualityConfig().name === 'high' ? DPR_CAP_MOBILE_HIGH : DPR_CAP_MOBILE
+  return isSharpTier(qualityConfig().name) ? DPR_CAP_MOBILE_HIGH : DPR_CAP_MOBILE
 }
 
 const BALL_NAMES: Record<number, string> = {
@@ -4921,7 +4921,7 @@ function loop(): void {
       // sharpest picture the machine can hold smoothly, not for a slideshow: if frames run
       // long the resolution gives a little, by the same small steps Auto uses and never
       // below the same floor, and comes back when there is room.
-      const watched = adaptiveQuality || qualityConfig().name === 'high'
+      const watched = adaptiveQuality || isSharpTier(qualityConfig().name)
       if (scene3d && watched && renderScaler.step(fdt, now)) {
         const lowered = renderScaler.scale < 1
         applyCanvasSize()

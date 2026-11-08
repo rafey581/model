@@ -1,7 +1,7 @@
 /**
  * QUALITY_TIERS — the one object every renderer and venue cost is read from.
  *
- * Three tiers, one table, one detection rule. The renderer (antialias, shadow map,
+ * Four tiers, one table, one detection rule. The renderer (antialias, shadow map,
  * anisotropy, render scale, FPS cap, ball segments, cloth normal map), the arena
  * (shadow size, stand washes, seat budget) and the crowd all take their numbers from
  * here; nothing outside this file is allowed to invent a quality decision.
@@ -10,14 +10,14 @@
  *   1. `<html data-quality="...">` — set by `public/quality-boot.js` before any module
  *      loads from `?quality=`, then the player's saved Settings choice, then the device
  *      guess. Reading it first is what keeps the 3D scene and the CSS on the same tier.
- *   2. `?quality=low|medium|high` directly, in case the page was loaded without the boot
+ *   2. `?quality=low|medium|high|ultra` directly, in case the page was loaded without the boot
  *      script (a test harness, a bundled preview).
  *   3. The device guess below.
  *
  * The guess ladder and its thresholds are mirrored verbatim in `public/quality-boot.js`
  * — keep the two comment blocks identical when either changes.
  */
-export type QualityTier = 'low' | 'medium' | 'high'
+export type QualityTier = 'low' | 'medium' | 'high' | 'ultra'
 
 export interface QualityTierConfig {
   /** Which tier this is, so a caller can log or display it without a second lookup. */
@@ -47,8 +47,13 @@ export interface QualityTierConfig {
  *      30fps, 24x14 balls. Ball gloss / cloth sheen are softened in scene materials.
  * medium: the table as high draws it (full scale, 2048 shadow, aniso 8, 32x20 balls),
  *      no desktop AA, cloth normal on, crowd nearest-tier, 60fps.
- * high: full scale, MSAA on, 2048 shadow, aniso 8, cloth normal on, full crowd,
+ * high: full scale, MSAA on, 2048 shadow, aniso 16, cloth normal on, full crowd,
  *      60fps, 32x20 balls. Full phenolic clearcoat + env intensity.
+ * ultra: the same pixel budget as high (render scale 1, the same DPR ceiling, the same
+ *      2048 shadow — not a 4K target and not a higher pixel ratio). What it adds is a
+ *      finer ball mesh (48x30) so the silhouette and the spin dots stay round up close.
+ *      Auto selects it only on a desktop with 8+ cores, 8+ GB and a GPU that is not
+ *      integrated or software. Phones stay on low or medium.
  *
  * scene3d.ts reads antialias, anisotropy, clothNormal and ballSegments from here.
  */
@@ -88,13 +93,54 @@ export const QUALITY_TIERS: Record<QualityTier, QualityTierConfig> = {
     crowd: 'full',
     fpsCap: 60,
     ballSegments: [32, 20]
+  },
+  ultra: {
+    name: 'ultra',
+    renderScale: 1,
+    antialias: true,
+    shadowMapSize: 2048,
+    anisotropy: 16,
+    clothNormal: true,
+    crowd: 'full',
+    fpsCap: 60,
+    ballSegments: [48, 30]
   }
 }
 
-const TIERS: readonly QualityTier[] = ['low', 'medium', 'high']
+const TIERS: readonly QualityTier[] = ['low', 'medium', 'high', 'ultra']
 
 export function isQualityTier(value: unknown): value is QualityTier {
-  return value === 'low' || value === 'medium' || value === 'high'
+  return value === 'low' || value === 'medium' || value === 'high' || value === 'ultra'
+}
+
+/** High and Ultra share the sharp pixel budget. Ultra does not raise it. */
+export function isSharpTier(tier: QualityTier): boolean {
+  return tier === 'high' || tier === 'ultra'
+}
+
+export interface QualitySignals {
+  mobileUA: boolean
+  cores: number
+  memGb: number
+  dpr: number
+  smallScreen: boolean
+  weakGpu: boolean
+}
+
+/**
+ * The device ladder, as numbers. `detectQualityTier` and `public/quality-boot.js`
+ * both have to land on this answer.
+ */
+export function qualityTierForSignals(signals: QualitySignals): QualityTier {
+  const { mobileUA, cores, memGb, dpr, smallScreen, weakGpu } = signals
+  if (mobileUA && (cores <= 4 || memGb <= 3)) return 'low'
+  if (mobileUA) return 'medium'
+  if (smallScreen && dpr >= 2) return 'medium'
+  if (cores <= 4 || memGb <= 4) return 'medium'
+  if (weakGpu) return 'medium'
+  if (dpr >= 2.5 && (cores <= 6 || memGb <= 6)) return 'medium'
+  if (cores >= 8 && memGb >= 8) return 'ultra'
+  return 'high'
 }
 
 /**
@@ -111,6 +157,7 @@ export function isQualityTier(value: unknown): value is QualityTier {
  *   - integrated or software GPU ........... medium  (cores say nothing about fill rate)
  *   - dpr >= 2.5 on a <= 6-core or
  *     <= 6GB device ....................... medium  (many pixels on a weak GPU)
+ *   - 8+ cores and 8+ GB, discrete GPU .... ultra
  *   - otherwise ............................ high
  */
 export function detectQualityTier(): QualityTier {
@@ -125,13 +172,14 @@ export function detectQualityTier(): QualityTier {
       ? Math.min(window.screen.width, window.screen.height) < 760
       : false
 
-  if (mobileUA && (cores <= 4 || mem <= 3)) return 'low'
-  if (mobileUA) return 'medium'
-  if (smallScreen && dpr >= 2) return 'medium'
-  if (cores <= 4 || mem <= 4) return 'medium'
-  if (hasWeakGpu()) return 'medium'
-  if (dpr >= 2.5 && (cores <= 6 || mem <= 6)) return 'medium'
-  return 'high'
+  return qualityTierForSignals({
+    mobileUA,
+    cores,
+    memGb: mem,
+    dpr,
+    smallScreen,
+    weakGpu: hasWeakGpu()
+  })
 }
 
 /**
