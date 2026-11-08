@@ -1,0 +1,30 @@
+{
+  "name": "@snooker/marketing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Static marketing and download site for the Snooker Stake Android player app",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fontsource/fraunces": "^5.2.5",
+    "@fontsource/outfit": "^5.2.5",
+    "three": "^0.186.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "@types/three": "^0.186.0",
+    "typescript": "^5.5.4",
+    "vite": "^6.0.3",
+    "vitest": "^2.1.9"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

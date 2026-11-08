@@ -27,7 +27,10 @@ packages/
   server/     Node.js API, Socket.IO game server, wallet/settlement, admin
   client/     Vite browser app (game renderer + UI)
   admin-app/  Expo (React Native) staff app - the only admin surface
+  marketing/  static player download site, deployed on its own (see its README)
 ```
+
+`packages/marketing` does not call the API and does not enable deposits or withdrawals. Domain and APK address are set in `packages/marketing/site.config.json` before a public launch.
 
 ## Stakes
 
