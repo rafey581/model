@@ -927,7 +927,8 @@ return { accepted: true }
       this.armTurnTimer()
       this.broadcast('frame:start', {
         frameIndex: this.match.frameIndex + 1,
-        snapshot: frameSnapshot(nextFrame)
+        snapshot: frameSnapshot(nextFrame),
+        framesWon: [this.match.framesWon[0], this.match.framesWon[1]]
       })
       this.scheduleBotIfNeeded()
     }
@@ -1122,13 +1123,18 @@ return { accepted: true }
   private static readonly TIMED_EVENTS = new Set(['game:update', 'frame:start', 'match:start'])
 
   broadcast(event: string, payload: unknown): void {
-    if (GameRoom.TIMED_EVENTS.has(event) && payload !== null && typeof payload === 'object') {
-      this.callbacks.board
-        .to(`match:${this.matchId}`)
-        .emit(event, { ...(payload as Record<string, unknown>), turn: this.turnTiming() })
+    // Every table message names the match and how far that match has got. A client
+    // that is still joined to a previous room can then drop the message instead of
+    // painting that room's score and balls onto the match in front of it.
+    const body =
+      payload !== null && typeof payload === 'object'
+        ? { ...(payload as Record<string, unknown>), matchId: this.matchId, seq: this.seq }
+        : { matchId: this.matchId, seq: this.seq }
+    if (GameRoom.TIMED_EVENTS.has(event)) {
+      this.callbacks.board.to(`match:${this.matchId}`).emit(event, { ...body, turn: this.turnTiming() })
       return
     }
-    this.callbacks.board.to(`match:${this.matchId}`).emit(event, payload)
+    this.callbacks.board.to(`match:${this.matchId}`).emit(event, body)
   }
 
   dispose(): void {

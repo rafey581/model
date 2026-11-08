@@ -825,6 +825,58 @@ th {
 }
 
 /**
+ * The camera menu, under Leave and the view button, on the left of the top bar.
+ *
+ * It stays in the left column rather than covering the score capsule in the centre.
+ * Two short columns so a landscape phone still has the cloth and the power rail clear.
+ */
+.hud-cam {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.cam-menu {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  width: 148px;
+  padding: 4px;
+  border-radius: 12px;
+  pointer-events: auto;
+}
+
+.cam-menu[hidden] {
+  display: none;
+}
+
+.cam-menu__item {
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.15;
+  min-height: 32px;
+  padding: 6px 4px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.cam-menu__item.is-current {
+  color: var(--turn);
+  border-color: rgba(201, 168, 76, 0.55);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cam-menu,
+  .cam-menu__item {
+    transition: none;
+  }
+}
+
+/**
  * Placement guidance, floating over the table.
  *
  * Same quiet one-liner as before — muted text that appears while a placement is being

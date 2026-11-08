@@ -9,7 +9,7 @@ import { createCueController } from './game/input.js'
 import type { CueController } from './game/input.js'
 import { createHud, computePrizeCredits, describeBallOn, deriveHudState } from './game/hud.js'
 import type { Hud } from './game/hud.js'
-import { frameForHud } from './game/hudFrame.js'
+import { closeMatch, gateTableEvent, hudBoard, openMatch, tableAfterQueuedUpdate, type HudHold, type TableEnvelope } from './game/matchBoard.js'
 import { createShotTimer } from './game/shotTimerView.js'
 import type { TurnTiming } from './game/shotTimer.js'
 import type { FrameState, ShotInput, ShotPlayback } from '@snooker/shared'
@@ -63,7 +63,7 @@ import {
   placementIsOver,
   stepPlacementFlow
 } from './game/placement.js'
-import { PLAYER_CAMERA_MODES, PLACEMENT_TRANSITION_SECONDS, type PlayerCameraMode } from './game/camera.js'
+import { CAMERA_MODE_LABELS, PLAYER_CAMERA_MODES, PLACEMENT_TRANSITION_SECONDS, type PlayerCameraMode } from './game/camera.js'
 import { createRenderScaler } from './game/renderScale.js'
 import { predictShot } from './game/predictShot.js'
 import { createPerfOverlay } from './game/perfOverlay.js'
@@ -188,6 +188,9 @@ let pendingSceneBuildProgress: ((fraction: number) => void) | undefined
  */
 let cameraMode: PlayerCameraMode = 'AIM'
 let cameraToggleEl: HTMLButtonElement | null = null
+let cameraMountEl: HTMLElement | null = null
+let cameraMenuEl: HTMLElement | null = null
+let cameraMenuCloser: ((event: PointerEvent) => void) | null = null
 /** The match screen's menu and pause curtain, rebuilt with each match's HUD. */
 let hudMenu: HudMenu | null = null
 /**
@@ -379,6 +382,15 @@ const shotTimer = createShotTimer({ turnFrame: () => hud?.turnFrame() ?? null })
  * between calls.
  */
 let hudFrame: FrameSnapshotData | null = null
+/** Which match the held HUD board was taken from. A replay from another match cannot use it. */
+let hudHold: HudHold<FrameSnapshotData> = { matchId: null, shown: null }
+/**
+ * How far the active match's table messages have been applied.
+ * `-1` until the first one, so a new match is not blocked by the sequence of the last.
+ */
+let boardSeq = -1
+/** The match a replay on screen belongs to. The "shot finished" note goes back to that match. */
+let shotMatchId: string | null = null
 /** Sticky dismissal of the controls hint, so it does not come back mid-frame. */
 let hintDismissed = false
 /** What the table is worth, read once from the match rather than recomputed. */
@@ -626,9 +638,11 @@ function header(_options: { home?: boolean } = {}): HTMLElement {
 
 /** What each view is called out loud, for the button's own label. */
 const CAMERA_VIEW_NAMES: Record<PlayerCameraMode, string> = {
-  AIM: 'cue ball',
-  BROADCAST: 'broadcast',
+  AIM: 'main',
+  BROADCAST: 'baulk end',
+  END: 'black end',
   SIDE: 'side',
+  FAR: 'far side',
   CLOSE: 'close-up',
   TOP_DOWN: 'overhead'
 }
@@ -683,6 +697,32 @@ const CAMERA_DIAGRAMS: Record<PlayerCameraMode, (ink: string) => string> = {
     '<path d="M6.4 16.3l2.2-2.9 2.2 2.9" fill="none" stroke="' +
     ink +
     '" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>',
+  END: (ink) =>
+    '<rect x="3.6" y="5.2" width="12.8" height="7.8" rx="1.5" fill="none" stroke="' +
+    ink +
+    '" stroke-width="1.3"/>' +
+    '<path d="M6.2 9h7.6" stroke="' +
+    ink +
+    '" stroke-width="1.3" stroke-linecap="round"/>' +
+    '<path d="M10 13v2.3" stroke="' +
+    ink +
+    '" stroke-width="1.3"/>' +
+    '<path d="M7.4 15.9h5.2" stroke="' +
+    ink +
+    '" stroke-width="1.3" stroke-linecap="round"/>',
+  FAR: (ink) =>
+    '<rect x="3.2" y="7.4" width="8.4" height="5.6" rx="1.6" fill="none" stroke="' +
+    ink +
+    '" stroke-width="1.3"/>' +
+    '<path d="M3.2 8.9l-2.2-1.4v6.4l2.2-1.4" fill="none" stroke="' +
+    ink +
+    '" stroke-width="1.3" stroke-linejoin="round"/>' +
+    '<path d="M7.4 13v2.6" stroke="' +
+    ink +
+    '" stroke-width="1.3"/>' +
+    '<path d="M5.2 16.3l2.2-2.9 2.2 2.9" fill="none" stroke="' +
+    ink +
+    '" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>',
   CLOSE: (ink) =>
     '<path d="M5.2 7.7V6.2a1 1 0 0 1 1-1h1.6M14.8 7.7V6.2a1 1 0 0 0-1-1h-1.6M5.2 12.3v1.5a1 1 0 0 0 1 1h1.6M14.8 12.3v1.5a1 1 0 0 1-1 1h-1.6" fill="none" stroke="' +
     ink +
@@ -735,20 +775,50 @@ function cameraSvg(mode: PlayerCameraMode): string {
  * render loop hides it outright when the 2D fallback renderer is drawing, because then
  * there is only one view.
  */
-function buildCameraToggle(): HTMLButtonElement {
+function buildCameraToggle(): HTMLElement {
+  const wrap = el('div', 'hud-cam')
   const btn = el('button', 'hud-tool hud-glass hud-tool--camera') as HTMLButtonElement
   btn.type = 'button'
-  btn.onclick = () => {
-    const index = PLAYER_CAMERA_MODES.indexOf(cameraMode)
-    const next = PLAYER_CAMERA_MODES[(index + 1) % PLAYER_CAMERA_MODES.length]
-    setCameraMode(next ?? 'AIM')
+  btn.setAttribute('aria-haspopup', 'menu')
+  const menu = el('div', 'cam-menu hud-glass')
+  menu.hidden = true
+  menu.setAttribute('role', 'menu')
+  menu.setAttribute('aria-label', 'Camera views')
+  for (const mode of PLAYER_CAMERA_MODES) {
+    const item = el('button', 'cam-menu__item', CAMERA_MODE_LABELS[mode]) as HTMLButtonElement
+    item.type = 'button'
+    item.dataset.mode = mode
+    item.setAttribute('role', 'menuitemradio')
+    item.title = mode === 'AIM' ? 'Main aim view, behind the cue ball' : CAMERA_VIEW_NAMES[mode]
+    item.onclick = (event) => {
+      event.stopPropagation()
+      setCameraMode(mode)
+      menu.hidden = true
+      btn.setAttribute('aria-expanded', 'false')
+    }
+    menu.appendChild(item)
   }
+  btn.onclick = (event) => {
+    event.stopPropagation()
+    if (btn.disabled) return
+    menu.hidden = !menu.hidden
+    btn.setAttribute('aria-expanded', String(!menu.hidden))
+  }
+  if (cameraMenuCloser) document.removeEventListener('pointerdown', cameraMenuCloser)
+  cameraMenuCloser = (event) => {
+    if (menu.hidden || wrap.contains(event.target as Node)) return
+    menu.hidden = true
+    btn.setAttribute('aria-expanded', 'false')
+  }
+  document.addEventListener('pointerdown', cameraMenuCloser)
+  wrap.append(btn, menu)
   // Publish the element before asking it to paint itself. `setCameraMode` writes the glyph
-  // through `cameraToggleEl` and returns early when that is still null, so setting it after
-  // this call left the button built but empty until the player's first click.
+  // through `cameraToggleEl` and returns early when that is still null.
   cameraToggleEl = btn
+  cameraMenuEl = menu
+  cameraMountEl = wrap
   setCameraMode(cameraMode)
-  return btn
+  return wrap
 }
 
 function setCameraMode(mode: PlayerCameraMode): void {
@@ -756,13 +826,16 @@ function setCameraMode(mode: PlayerCameraMode): void {
   const btn = cameraToggleEl
   if (!btn) return
   btn.innerHTML = cameraSvg(mode)
-  // The view's own name in the label, and the state on the element as `data-mode`: five
-  // marks pass through this button, so the glyph cannot be what says which one it is on
-  // focus, and "pressed" would be a lie about four of the five.
   const name = CAMERA_VIEW_NAMES[mode]
-  btn.title = `Camera view: ${name}`
+  btn.title = mode === 'AIM' ? 'Camera: main aim view' : `Camera: ${name}. Choose Main to aim from the cue ball`
   btn.setAttribute('aria-label', `Camera view: ${name}`)
   btn.setAttribute('data-mode', mode)
+  btn.setAttribute('aria-expanded', cameraMenuEl && !cameraMenuEl.hidden ? 'true' : 'false')
+  cameraMenuEl?.querySelectorAll<HTMLButtonElement>('.cam-menu__item').forEach((item) => {
+    const on = item.dataset.mode === mode
+    item.setAttribute('aria-checked', String(on))
+    item.classList.toggle('is-current', on)
+  })
 }
 
 function bellSvg(): string {
@@ -1031,7 +1104,13 @@ async function loadTiers(): Promise<void> {
 }
 
 function leaveGameState(): void {
+  const step = closeMatch({ activeMatchId, lastSeq: boardSeq })
+  if (step.leaveMatchId) releaseMatchSocket(step.leaveMatchId)
   activeMatchId = null
+  boardSeq = step.session.lastSeq
+  hudHold = { matchId: null, shown: null }
+  hudFrame = null
+  shotMatchId = null
   frame = null
   mySeat = undefined
   // Any replay still queued belonged to the match being left, and the drawn ball
@@ -1050,6 +1129,13 @@ function leaveGameState(): void {
   chatLogEl = null
   scene3d?.dispose()
   scene3d = null
+  if (cameraMenuCloser) {
+    document.removeEventListener('pointerdown', cameraMenuCloser)
+    cameraMenuCloser = null
+  }
+  cameraToggleEl = null
+  cameraMenuEl = null
+  cameraMountEl = null
   cueController?.destroy()
   cueController = null
 }
@@ -1137,7 +1223,9 @@ function updateHud(): void {
   if (!hud) return
   // While a replay is on screen the HUD keeps describing the frame that replay started
   // from, so nothing it shows gives the shot away before it has been watched.
-  hudFrame = frameForHud({ replayRunning: shotPlayer !== null || predictedShot !== null, shown: hudFrame, authoritative: frame })
+  const held = hudBoard(hudHold, activeMatchId, shotPlayer !== null || predictedShot !== null, frame)
+  hudHold = { matchId: held.matchId, shown: held.shown }
+  hudFrame = held.board
   hud.update(
     deriveHudState({
       snapshot: hudFrame,
@@ -1215,6 +1303,7 @@ async function loadMatchMeta(matchId: string): Promise<void> {
     // top bar can show what the table is worth from the first frame. Prisma hands
     // decimals back as strings, hence the Number on both. A zero stake is a practice
     // match, which is what gates the prize on and off without a second flag.
+    if (activeMatchId !== matchId) return
     const stake = Number(data.stakePerPlayer ?? 0)
     const feePct = Number(data.platformFeePct ?? 0)
     matchPrizeCredits = stake > 0 ? computePrizeCredits(stake, feePct) : 0
@@ -3223,8 +3312,40 @@ async function warmMatchAudioBuffers(): Promise<void> {
   }
 }
 
+/**
+ * Tells the match being left that this page is done with it.
+ *
+ * The shot acknowledgement goes out first, while the replay token still belongs to
+ * that match, so a robot waiting on it is not held until the backstop. The leave is
+ * what takes this socket out of that room. Both happen before the page forgets the
+ * replay, because forgetting it clears the token.
+ */
+function releaseMatchSocket(matchId: string): void {
+  try {
+    const socket = getSocket()
+    if (shotInFlight) socket.emit('shot:done', { matchId, token: playedToken })
+    socket.emit('match:leave', { matchId })
+  } catch {
+    // No socket yet: there is no room joined to leave.
+  }
+}
+
+/** A table message may change the score and the balls only when it is this match, and not late. */
+function acceptTable(event: TableEnvelope, reset = false): boolean {
+  const decision = gateTableEvent({ activeMatchId, lastSeq: boardSeq }, event, reset)
+  if (!decision.accept) return false
+  boardSeq = decision.lastSeq
+  return true
+}
+
 function enterMatch(matchId: string, isPractice = false): void {
-  activeMatchId = matchId
+  const step = openMatch({ activeMatchId, lastSeq: boardSeq }, matchId)
+  if (step.leaveMatchId) releaseMatchSocket(step.leaveMatchId)
+  activeMatchId = step.session.activeMatchId
+  boardSeq = step.session.lastSeq
+  hudHold = { matchId: null, shown: null }
+  hudFrame = null
+  shotMatchId = null
   // A new match has no last shot yet, and no recap left over from the one before.
   lastShotRecap = null
   pendingHighlight = null
@@ -3232,6 +3353,9 @@ function enterMatch(matchId: string, isPractice = false): void {
   skipHighlight?.()
   recapPlayer = null
   recapDone = null
+  // The previous match's replay must not stay "in flight", or the new match's first
+  // snapshot queues behind it and the table keeps the old balls.
+  abandonPlayback()
   activeMatchIsPractice = isPractice
   clearTournamentTimer()
   mySeat = undefined
@@ -3759,11 +3883,14 @@ function renderGame(): void {
   hud?.setPower(0)
 }
 
-interface GameUpdatePayload {
+interface GameUpdatePayload extends TableEnvelope {
   frame: FrameSnapshotData
   events?: Array<{ type: string; data: unknown }>
   playback?: ShotPlayback
   turn?: TurnTiming
+  /** Present on a frame change, applied with the snapshot rather than ahead of its replay. */
+  frameIndex?: number
+  framesWon?: [number, number]
 }
 
 /**
@@ -3787,6 +3914,7 @@ function applyTurnTiming(turn: TurnTiming | null | undefined): void {
 }
 
 function handleGameUpdate(data: GameUpdatePayload): void {
+  if (!acceptTable(data)) return
   // A shot has to be watched to the end. If another update lands while one is
   // still animating, it waits its turn instead of cutting the replay short, so the
   // balls are never seen to jump by two shots' worth of movement at once.
@@ -4009,6 +4137,11 @@ function abandonPlayback(): void {
 function applyGameUpdate(data: GameUpdatePayload): void {
   const previous = frame
   frame = data.frame
+  if (typeof data.frameIndex === 'number') frameIndex = data.frameIndex
+  if (data.framesWon && data.framesWon.length === 2) {
+    framesWon = [data.framesWon[0], data.framesWon[1]]
+  }
+  shotMatchId = activeMatchId
   const wasMyTurn = myTurn
   myTurn = mySeat !== undefined && data.frame.turnIndex === mySeat
   // Every new visit starts with no power charged. Firing already empties the bar, so
@@ -4219,8 +4352,12 @@ function handleSocketEvents(socket: Socket): void {
     void preloadTableModel().then(() => enterMatch(payload.matchId, false))
   })
 
-  socket.on('match:joined', (data: { matchId: string; seat: number; snapshot: FrameSnapshotData | null; turn?: TurnTiming }) => {
+  socket.on('match:joined', (data: { matchId: string; seat: number; snapshot: FrameSnapshotData | null; turn?: TurnTiming; seq?: number; framesWon?: [number, number] }) => {
+    // A join for a match this page has already left, or that lost the race with a
+    // newer one, must not replace the seat, the score or the balls.
+    if (!acceptTable(data, true)) return
     mySeat = data.seat
+    if (data.framesWon && data.framesWon.length === 2) framesWon = [data.framesWon[0], data.framesWon[1]]
     // A join is the server's authoritative word on the table, so anything in flight
     // is abandoned rather than finished: after a reconnect there is no replay left
     // to watch and the settled state is the truth. The turn clock comes with it,
@@ -4230,12 +4367,13 @@ function handleSocketEvents(socket: Socket): void {
     // the update is what applies a clock and a message with no timing attached means
     // no clock. Setting it first and then applying the snapshot would take the clock
     // straight back down again.
-    if (data.snapshot) applyGameUpdate({ frame: data.snapshot, turn: data.turn })
+    if (data.snapshot) applyGameUpdate({ frame: data.snapshot, turn: data.turn, matchId: data.matchId, seq: data.seq, framesWon: data.framesWon })
     else applyTurnTiming(data.turn)
     // No note in the corner: the scoreboard already names both players.
     updateHud()
   })
-  socket.on('match:start', (data: { snapshot: FrameSnapshotData; frameIndex: number; turn?: TurnTiming }) => {
+  socket.on('match:start', (data: { snapshot: FrameSnapshotData; frameIndex: number; turn?: TurnTiming; matchId?: string; seq?: number }) => {
+    if (!acceptTable(data)) return
     frameIndex = data.frameIndex
     emitSfx({ type: 'frameStart' })
     // A new match replaces the table outright, so any replay in flight is void.
@@ -4250,30 +4388,39 @@ function handleSocketEvents(socket: Socket): void {
     applyTurnTiming(data.turn)
     updateHud()
   })
-  socket.on('frame:start', (data: { frameIndex: number; snapshot: FrameSnapshotData; turn?: TurnTiming }) => {
-    frameIndex = data.frameIndex
+  socket.on('frame:start', (data: { frameIndex: number; snapshot: FrameSnapshotData; turn?: TurnTiming; matchId?: string; seq?: number; framesWon?: [number, number] }) => {
     emitSfx({ type: 'frameStart' })
     // The frame change usually lands straight after the shot that won it, while that
     // shot is still animating, so it queues behind the replay rather than cutting it
-    // off. Only the announcement is immediate. The turn timing rides along: it is
-    // adopted when the update applies, which is after the replay, when the new frame's
-    // table is actually shown.
-    handleGameUpdate({ frame: data.snapshot, turn: data.turn })
+    // off. Only the announcement is immediate. The frame number, the frames score and
+    // the balls wait with the snapshot, so the label does not name the next frame
+    // while the last shot of this one is still on the table.
+    handleGameUpdate({
+      frame: data.snapshot,
+      turn: data.turn,
+      matchId: data.matchId,
+      seq: data.seq,
+      framesWon: data.framesWon,
+      frameIndex: data.frameIndex
+    })
   })
   socket.on('game:update', (data: GameUpdatePayload) => handleGameUpdate(data))
   // The clock's own channel. The room also changes its clock between table broadcasts
   // — a fresh turn the moment a replay is released, a stop when the striker goes away
   // — and those moments carry no frame of their own, so they are announced here and
   // adopted like any other timing.
-  socket.on('opponent:aim', (data: { seat: number; angle: number; power: number }) => {
+  socket.on('opponent:aim', (data: { seat: number; angle: number; power: number; matchId?: string }) => {
+    if (!acceptTable(data)) return
     if (data.seat === mySeat || !Number.isFinite(data.angle) || !Number.isFinite(data.power)) return
     scene3d?.setOpponentLiveAim(data.angle, data.power)
   })
-  socket.on('turn:clock', (data: { turn?: TurnTiming }) => {
+  socket.on('turn:clock', (data: { turn?: TurnTiming; matchId?: string; seq?: number }) => {
+    if (!acceptTable(data)) return
     applyTurnTiming(data.turn ?? null)
     markTableReleased()
   })
-  socket.on('match:end', (data: { winnerSeat: number; reason?: string; framesWon?: [number, number] }) => {
+  socket.on('match:end', (data: { winnerSeat: number; reason?: string; framesWon?: [number, number]; matchId?: string; seq?: number }) => {
+    if (!acceptTable(data)) return
     stopOpponentCountdown()
     opponentGone = false
     updateOpponentGone()
@@ -4288,26 +4435,30 @@ function handleSocketEvents(socket: Socket): void {
     updateHud()
     void finishMatch(data.winnerSeat, data.reason)
   })
-  socket.on('opponent:disconnected', (data: { seat: number }) => {
+  socket.on('opponent:disconnected', (data: { seat: number; matchId?: string; seq?: number }) => {
+    if (!acceptTable(data)) return
     if (data.seat === mySeat) return
     opponentGone = true
     updateOpponentGone()
     toast('Opponent disconnected — waiting for reconnect')
   })
-  socket.on('opponent:countdown', (data: { seats?: number[]; seconds?: number }) => {
+  socket.on('opponent:countdown', (data: { seats?: number[]; seconds?: number; matchId?: string; seq?: number }) => {
+    if (!acceptTable(data)) return
     // Only the player still here is shown it; a seat that is itself counted down is gone.
     if (mySeat === undefined || (data.seats ?? []).includes(mySeat) || activeMatchIsPractice) return
     opponentGone = true
     startOpponentCountdown(Number(data.seconds) || 30)
   })
-  socket.on('opponent:reconnected', (data: { seat: number }) => {
+  socket.on('opponent:reconnected', (data: { seat: number; matchId?: string; seq?: number }) => {
+    if (!acceptTable(data)) return
     if (data.seat === mySeat) return
     opponentGone = false
     stopOpponentCountdown()
     updateOpponentGone()
     toast('Opponent reconnected')
   })
-  socket.on('match:chat', (data: { seat: number; phraseId: string }) => {
+  socket.on('match:chat', (data: { seat: number; phraseId: string; matchId?: string; seq?: number }) => {
+    if (!acceptTable(data)) return
     const text = matchChatPhraseText(data.phraseId)
     if (!text) return
     const sender =
@@ -4322,7 +4473,10 @@ function handleSocketEvents(socket: Socket): void {
       // stand.
     }
   )
-  socket.on('error', (data: { code?: string }) => {
+  socket.on('error', (data: { code?: string; matchId?: string }) => {
+    // A refusal from a match this page has left must not take back a shot or a
+    // placement that belongs to the match now on screen.
+    if (data.matchId && data.matchId !== activeMatchId) return
     // A choice the server would not take (the table was not quite settled, say) can be
     // made again rather than leaving both buttons dead.
     if (foulChoiceSent && myFoulChoicePending()) foulChoiceSent = false
@@ -4830,13 +4984,13 @@ function loop(): void {
                   : predictedShot.player.time
                 : null
         )
+        if (cameraMountEl) cameraMountEl.hidden = false
         if (cameraToggleEl) {
-          cameraToggleEl.hidden = false
-          // The toggle is one of the player's normal controls, so it goes away with the
-          // rest of them during a placement. The scene already ignores the mode while the
-          // placement view is up, but a button that still reads as live and changes its
-          // own label while doing nothing is worse than one that is plainly unavailable.
-          cameraToggleEl.disabled = !canAim
+          // Placement owns the camera. Every other moment, including a replay, the menu
+          // stays available so the player can pick an angle or return to the aim view.
+          const placing = placementFlow.phase !== 'IDLE'
+          cameraToggleEl.disabled = placing
+          if (placing && cameraMenuEl) cameraMenuEl.hidden = true
         }
         const perfStart = perfOverlay ? performance.now() : 0
         scene3d.update(shown, renderOptions)
@@ -4850,7 +5004,7 @@ function loop(): void {
       } else {
         // The fallback renderer draws one fixed view, so there is nothing to switch
         // between and the button would be offering a choice that does not exist.
-        if (cameraToggleEl) cameraToggleEl.hidden = true
+        if (cameraMountEl) cameraMountEl.hidden = true
         drawTable(canvas, shown, renderOptions)
       }
     }
@@ -4878,8 +5032,11 @@ function finishShot(): void {
   if (!shotInFlight) return
   shotInFlight = false
   // The token identifies the replay that was just watched, so an acknowledgement that
-  // arrives after the server has moved on cannot release a newer hold.
-  if (activeMatchId) getSocket().emit('shot:done', { matchId: activeMatchId, token: playedToken })
+  // arrives after the server has moved on cannot release a newer hold. It is sent to
+  // the match the replay belongs to, which is still that match if the page has since
+  // opened another one.
+  const ackMatch = shotMatchId ?? activeMatchId
+  if (ackMatch) getSocket().emit('shot:done', { matchId: ackMatch, token: playedToken })
   if (!tableReleased && releaseWaitTimer === null) releaseWaitTimer = window.setTimeout(markTableReleased, RELEASE_WAIT_MS)
   syncMusicDuck()
 }
@@ -4975,6 +5132,9 @@ function stepShotPlayback(target: FrameSnapshotData, dtSeconds: number): FrameSn
       // already empty, so this recurses at most once more.
       return stepShotPlayback(frame, 0)
     }
+    // A new frame, a respot or the balls put back: the score already reads `frame`.
+    // The balls have to as well, on this paint, not one frame later.
+    return tableAfterQueuedUpdate(target, frame)
   }
   return target
 }

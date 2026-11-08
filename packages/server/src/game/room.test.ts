@@ -1191,3 +1191,17 @@ describe('red count', () => {
     expect(room.snapshot()!.totalReds).toBe(15)
   })
 })
+
+describe('table broadcasts name their match', () => {
+  it('stamps the match id and a sequence on every message', () => {
+    const { room, cbs } = seatedRoom()
+    room.broadcast('game:update', { frame: { scores: { player0: 4, player1: 0 } } })
+    room.broadcast('turn:clock', { turn: null })
+    expect(cbs.broadcasts.length).toBeGreaterThanOrEqual(2)
+    for (const message of cbs.broadcasts) {
+      expect(message.payload.matchId).toBe(MATCH_ID)
+      expect(typeof message.payload.seq).toBe('number')
+    }
+    expect(cbs.broadcasts[0]!.payload.frame.scores).toEqual({ player0: 4, player1: 0 })
+  })
+})

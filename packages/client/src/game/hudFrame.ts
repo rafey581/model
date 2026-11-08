@@ -1,5 +1,3 @@
-import type { FrameSnapshotData } from './renderer.js'
-
 /**
  * The frame the HUD is allowed to describe.
  *
@@ -15,13 +13,13 @@ import type { FrameSnapshotData } from './renderer.js'
  * for one reason: the scores are not the exception to the rule, they are the reason for
  * it.
  */
-export function frameForHud(options: {
+export function frameForHud<T>(options: {
   /** True while a replay is on screen. */
   replayRunning: boolean
   /** The frame the HUD is showing now. */
-  shown: FrameSnapshotData | null
+  shown: T | null
   /** The server's latest snapshot, authoritative and already carrying the shot's result. */
-  authoritative: FrameSnapshotData | null
-}): FrameSnapshotData | null {
+  authoritative: T | null
+}): T | null {
   return options.replayRunning ? options.shown : options.authoritative
 }
