@@ -13,11 +13,39 @@ import {
   START_STEPS,
   type Step
 } from './content'
+import { siteFooter, siteHeader, type SitePage } from './chrome'
 import { renderDownload, type DownloadVariant } from './download-view'
 import { escapeHtml, safeJsonLd } from './html'
+import { renderLedgerBody, renderPoliciesBody, renderRulesBody } from './pages'
 import type { SiteConfig } from './site-config'
 
 const SHARE_ALT = 'Snooker Stake wordmark over a green snooker table on charcoal, for the Android game.'
+
+const PAGE_META: Record<SitePage, { path: string; title: string; description: string }> = {
+  home: {
+    path: '/',
+    title: PAGE_TITLE,
+    description: PAGE_DESCRIPTION
+  },
+  rules: {
+    path: '/rules.html',
+    title: 'Rules of the table — Snooker Stake',
+    description:
+      'How Snooker Stake actually plays: 6 or 10 reds, ball values, fouls from 4 to 7, the D, the shot clock, and a dropped connection. Not a full official rulebook.'
+  },
+  ledger: {
+    path: '/ledger.html',
+    title: 'Virtual balance — Snooker Stake',
+    description:
+      'Snooker Stake keeps an in-app virtual balance. This website does not take deposits or pay withdrawals. Real-money play is not offered here.'
+  },
+  policies: {
+    path: '/policies.html',
+    title: 'Draft policies — Snooker Stake',
+    description:
+      'Draft notes on accounts, fair play, privacy, and terms for Snooker Stake. The legal entity, licence, and contact details are still open.'
+  }
+}
 
 function steps(items: readonly Step[], className: string, level: 'h3' | 'h4'): string {
   const lis = items
@@ -116,7 +144,18 @@ function tableFallback(): string {
   </div>`
 }
 
-function structuredData(config: SiteConfig): unknown {
+function structuredData(config: SiteConfig, page: SitePage): unknown {
+  if (page !== 'home') {
+    const meta = PAGE_META[page]
+    const webPage: Record<string, unknown> = {
+      '@context': 'https://schema.org',
+      '@type': 'WebPage',
+      name: meta.title,
+      description: meta.description
+    }
+    if (config.siteUrl) webPage.url = `${config.siteUrl}${meta.path}`
+    return webPage
+  }
   const app: Record<string, unknown> = {
     '@type': 'SoftwareApplication',
     name: APP_NAME,
@@ -145,11 +184,12 @@ function structuredData(config: SiteConfig): unknown {
   }
 }
 
-export function renderHead(config: SiteConfig): string {
-  const title = escapeHtml(PAGE_TITLE)
-  const description = escapeHtml(PAGE_DESCRIPTION)
+export function renderHead(config: SiteConfig, page: SitePage = 'home'): string {
+  const meta = PAGE_META[page]
+  const title = escapeHtml(meta.title)
+  const description = escapeHtml(meta.description)
   const canonical = config.siteUrl
-    ? `<link rel="canonical" href="${escapeHtml(config.siteUrl)}/">`
+    ? `<link rel="canonical" href="${escapeHtml(`${config.siteUrl}${meta.path}`)}">`
     : '<!-- Indexing stays off until siteUrl is set in site.config.json. See README. -->'
   const robots = config.siteUrl
     ? 'index, follow, max-image-preview:large'
@@ -164,7 +204,7 @@ export function renderHead(config: SiteConfig): string {
     <meta name="twitter:image" content="${escapeHtml(image)}">
     <meta name="twitter:image:alt" content="${escapeHtml(SHARE_ALT)}">`
     : `<meta name="twitter:card" content="summary">`
-  const ogUrl = config.siteUrl ? `<meta property="og:url" content="${escapeHtml(config.siteUrl)}/">` : ''
+  const ogUrl = config.siteUrl ? `<meta property="og:url" content="${escapeHtml(`${config.siteUrl}${meta.path}`)}">` : ''
   return `<title>${title}</title>
     <meta name="description" content="${description}">
     <meta name="robots" content="${robots}">
@@ -182,7 +222,7 @@ export function renderHead(config: SiteConfig): string {
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-    <script type="application/ld+json">${safeJsonLd(structuredData(config))}</script>`
+    <script type="application/ld+json">${safeJsonLd(structuredData(config, page))}</script>`
 }
 
 export function renderBody(config: SiteConfig): string {
@@ -194,31 +234,10 @@ export function renderBody(config: SiteConfig): string {
     (faq) =>
       `<details><summary>${escapeHtml(faq.question)}</summary><p>${escapeHtml(faq.answer)}</p></details>`
   ).join('')
-  return `<a class="skip" href="#content">Skip to content</a>
-    <div class="scroll-cue" aria-hidden="true"><span></span></div>
+  return `<div class="scroll-cue" aria-hidden="true"><span></span></div>
     <div class="vignette" aria-hidden="true"></div>
     <div class="page">
-      <header class="site-header">
-        <a class="brand" href="#play">
-          <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
-            <circle cx="16" cy="16" r="12" fill="#0e6b45"/>
-            <circle cx="16" cy="16" r="12" fill="none" stroke="#d5dbe0" stroke-width="1.4"/>
-            <circle cx="20" cy="13" r="3" fill="#d32632"/>
-          </svg>
-          <span>Snooker Stake</span>
-        </a>
-        <nav class="nav" aria-label="On this page">
-          <button type="button" class="menu-btn" aria-expanded="false" aria-controls="site-nav">Menu</button>
-          <div id="site-nav" class="nav-links">
-            <a href="#table">The table</a>
-            <a href="#ways">Ways to play</a>
-            <a href="#how">How to play</a>
-            <a href="#install">Install</a>
-            <a href="#faq">Questions</a>
-          </div>
-        </nav>
-        ${slot('header', config)}
-      </header>
+      ${siteHeader(config, 'home')}
       <main id="content">
         <section class="hero scene-window" id="play" data-scene="0">
           ${tableFallback()}
@@ -226,6 +245,7 @@ export function renderBody(config: SiteConfig): string {
             <p class="eyebrow">Android player app</p>
             <h1>A full frame,<br><em>in your pocket.</em></h1>
             <p class="lede">Snooker Stake is a 3D snooker game for Android. Aim along the cloth, set the power, put spin on the cue ball, and the server plays the shot back. Practise against a robot, invite a friend, or offer the table to whoever is online.</p>
+            <blockquote class="pull"><p>Play snooker. Sharpen your skills. Own the table.</p></blockquote>
             ${slot('hero', config, true)}
             <p class="fine">Package ${escapeHtml(PACKAGE_ID)}. Stakes inside the app are a virtual balance. This site does not take payments.</p>
           </div>
@@ -267,7 +287,7 @@ export function renderBody(config: SiteConfig): string {
                 <p>A tournament starts when the eighth person joins, then plays quarters, semis, and a final. New tournaments default to best of 3 and an entry of zero. Bots cannot take a seat.</p>
               </div>
             </article>
-            <p class="aside">This website does not accept deposits, process withdrawals, or pay cash. An in-app balance is for play inside Snooker Stake. Do not read it as money you can cash out from here.</p>
+            <p class="aside">This website does not accept deposits, process withdrawals, or pay cash. An in-app balance is for play inside Snooker Stake. The conditional manual flow, and why it is not offered here, is on the <a href="/ledger.html">balance page</a>.</p>
           </div>
         </section>
 
@@ -293,7 +313,7 @@ export function renderBody(config: SiteConfig): string {
           </div>
           <div class="wrap block">
             <h3 class="subhead">The rules this table plays</h3>
-            <p>Written for this game, including what it does not do. A free ball is not part of the table.</p>
+            <p>Written for this game, including what it does not do. A free ball is not part of the table. The longer version is on the <a href="/rules.html">rules page</a>.</p>
             ${steps(RULES, 'sheet rules', 'h4')}
           </div>
         </section>
@@ -322,26 +342,40 @@ export function renderBody(config: SiteConfig): string {
           <div class="wrap closing-copy">
             <p class="eyebrow">Download</p>
             <h2>Take the table with you.</h2>
-            <p class="lede">The same aim, power, and spin, on Android. When a player file is published, the button is that APK and nothing else.</p>
+            <p class="lede">Your next great break starts here. The same aim, power, and spin, on Android. When a player file is published, the button is that APK and nothing else.</p>
             ${slot('final', config, true)}
           </div>
         </section>
       </main>
-      <footer class="site-footer">
-        <div class="wrap footer-row">
-          <p><strong>${escapeHtml(APP_NAME)}</strong> · player app <span class="mono">${escapeHtml(PACKAGE_ID)}</span></p>
-          <p>Virtual in-app play. This site does not take payments or pay winnings.</p>
-        </div>
-      </footer>
+      ${siteFooter()}
     </div>
     <div class="sticky-cta" data-download-slot="sticky" data-sig="${escapeHtml(config.apkUrl ? `ready:${config.apkUrl}` : 'unavailable')}">${renderDownload(config, 'sticky')}</div>`
 }
 
-export function applyTemplate(shell: string, config: SiteConfig): string {
+export function pageFromFilename(filename: string, path = ''): SitePage {
+  const id = `${filename} ${path}`
+  if (id.includes('rules.html')) return 'rules'
+  if (id.includes('ledger.html')) return 'ledger'
+  if (id.includes('policies.html')) return 'policies'
+  return 'home'
+}
+
+export function renderPageBody(page: SitePage, config: SiteConfig): string {
+  if (page === 'rules') return renderRulesBody(config)
+  if (page === 'ledger') return renderLedgerBody(config)
+  if (page === 'policies') return renderPoliciesBody(config)
+  return renderBody(config)
+}
+
+export function applyDocument(shell: string, page: SitePage, config: SiteConfig): string {
   if (!shell.includes('<!--head:inject-->') || !shell.includes('<!--body:inject-->')) {
-    throw new Error('index.html is missing inject markers')
+    throw new Error('page shell is missing inject markers')
   }
-  return shell.replace('<!--head:inject-->', renderHead(config)).replace('<!--body:inject-->', renderBody(config))
+  return shell.replace('<!--head:inject-->', renderHead(config, page)).replace('<!--body:inject-->', renderPageBody(page, config))
+}
+
+export function applyTemplate(shell: string, config: SiteConfig): string {
+  return applyDocument(shell, 'home', config)
 }
 
 export function robotsTxt(config: SiteConfig): string {
@@ -353,12 +387,18 @@ export function robotsTxt(config: SiteConfig): string {
 export function sitemapXml(config: SiteConfig, now = new Date()): string | null {
   if (!config.siteUrl) return null
   const day = now.toISOString().slice(0, 10)
+  const paths = ['/', '/rules.html', '/ledger.html', '/policies.html']
+  const urls = paths
+    .map(
+      (path) => `  <url>
+    <loc>${config.siteUrl}${path}</loc>
+    <lastmod>${day}</lastmod>
+  </url>`
+    )
+    .join('\n')
   return `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url>
-    <loc>${config.siteUrl}/</loc>
-    <lastmod>${day}</lastmod>
-  </url>
+${urls}
 </urlset>
 `
 }

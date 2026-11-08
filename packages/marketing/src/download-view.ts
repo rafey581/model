@@ -16,7 +16,7 @@ function apkLink(config: SiteConfig, label: string, className: string): string {
 export function renderDownload(config: SiteConfig, variant: DownloadVariant): string {
   const ready = Boolean(config.apkUrl)
   if (variant === 'header') {
-    if (!ready) return `<a class="btn btn-small" href="#install">Install</a>`
+    if (!ready) return `<a class="btn btn-small" href="/#install">Install</a>`
     return apkLink(config, 'Download', 'btn btn-small')
   }
   if (variant === 'sticky') {

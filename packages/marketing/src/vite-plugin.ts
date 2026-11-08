@@ -1,6 +1,6 @@
 import type { Plugin } from 'vite'
 import { loadSiteConfig } from './load-config'
-import { applyTemplate, robotsTxt, sitemapXml } from './render'
+import { applyDocument, pageFromFilename, robotsTxt, sitemapXml } from './render'
 import { publicConfigJson } from './site-config'
 
 /** Injects crawlable HTML and writes robots, sitemap, and site-config.json. */
@@ -10,8 +10,9 @@ export function sitePlugin(): Plugin {
     name: 'snooker-site',
     transformIndexHtml: {
       order: 'pre',
-      handler(html) {
-        return applyTemplate(html, config)
+      handler(html, ctx) {
+        const page = pageFromFilename(ctx.filename, ctx.path)
+        return applyDocument(html, page, config)
       }
     },
     generateBundle() {

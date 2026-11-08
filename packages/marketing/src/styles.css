@@ -215,8 +215,11 @@ html.has-webgl .vignette { display: block; }
 
   .nav-links {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     align-items: center;
-    gap: 8px 20px;
+    gap: 4px 16px;
+    max-width: 46rem;
   }
 }
 
@@ -589,9 +592,100 @@ html.has-webgl .closing-window { background: transparent; }
   font-size: 0.95rem;
 }
 
-.footer-row p { margin: 0 0 0.35rem; }
+.footer-grid {
+  display: grid;
+  gap: 1rem;
+}
 
-.footer-row strong { color: var(--ivory); font-weight: 600; }
+@media (min-width: 800px) {
+  .footer-grid { grid-template-columns: 1.4fr 1fr; align-items: start; }
+}
+
+.footer-grid p { margin: 0 0 0.35rem; }
+
+.footer-grid strong { color: var(--ivory); font-weight: 600; }
+
+.footer-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.footer-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--ivory);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.pull {
+  margin: 0.4rem 0 1rem;
+  padding: 0;
+  border: 0;
+}
+
+.pull p {
+  margin: 0;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+  font-size: clamp(1.45rem, 3vw, 2rem);
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  color: #f6efe4;
+}
+
+.doc-hero {
+  padding: calc(var(--header) + 2.2rem) 0 2.4rem;
+  background:
+    radial-gradient(ellipse at 85% 0%, rgba(14, 107, 69, 0.5), transparent 52%),
+    #090b09;
+}
+
+.doc-hero h1 { max-width: 16ch; }
+
+.doc {
+  padding-bottom: 4rem;
+}
+
+.doc section { margin: 0 0 2.2rem; }
+
+.doc h2 {
+  font-size: clamp(1.8rem, 4vw, 2.6rem);
+  margin-bottom: 0.7rem;
+}
+
+.doc a { color: var(--brass); }
+
+.banner {
+  margin: 0 0 2rem;
+  padding: 0.9rem 1rem;
+  border-left: 3px solid var(--brass);
+  background: #171a16;
+  color: var(--ivory);
+}
+
+.tag {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  background: #0e3d32;
+  color: var(--ivory);
+  font-family: var(--font-body);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.tag-draft { background: #5c4630; color: #f6efe4; }
+
+.doc ul { margin: 0 0 1rem; padding-left: 1.2rem; color: var(--silver-dim); }
+.doc li { margin: 0.35rem 0; }
 
 .sticky-cta {
   display: none;

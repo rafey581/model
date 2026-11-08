@@ -166,6 +166,7 @@ motionQuery.addEventListener('change', () => {
 void refreshDownload()
 
 function scheduleMount(): void {
+  if (!document.querySelector('[data-scene]')) return
   const start = (): void => {
     void mount()
   }

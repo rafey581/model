@@ -68,3 +68,15 @@ Do not point the canonical at a temporary preview host.
 The table is drawn in the browser with three.js and is not required to read the page. The HTML already contains the copy. The scene is skipped when WebGL is missing, when the visitor uses data-saver, when `navigator.deviceMemory` is 2 GB or less, or when the URL has `?static=1`. `prefers-reduced-motion` still draws one frame and does not animate it. The loop pauses while the tab is hidden or the table is off screen. The canvas does not receive taps, so the page scrolls normally.
 
 Rails use the birch and pocket-leather textures from the player client (`public/textures/`).
+
+## Rules, balance, and draft policies
+
+Three more crawlable pages ship with the home page:
+
+- `rules.html` — the table as the app plays it, including where that differs from a full official rulebook.
+- `ledger.html` — the in-app virtual balance, and the manual deposit and withdrawal procedure as a conditional workflow. This website does not offer it, does not publish a wallet address, and does not ask anyone to send funds.
+- `policies.html` — account, fair-play, privacy, and terms notes. Implemented behaviour is labeled as such. Anything that needs a lawyer or a business decision is labeled **Draft**.
+
+Before a public launch the owner still has to decide: the legal entity and jurisdiction, any licence, a player contact, data-retention periods, whether real-money deposits or withdrawals will be offered, responsible-play tools, and how a dispute or payout deadline would work. Those items are listed on the policies page. They are not invented here.
+
+The home page does not use “play snooker, earn money.” The lines on the site are about skill at the table. Real-money public play is not offered.
