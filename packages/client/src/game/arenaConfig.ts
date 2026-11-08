@@ -565,14 +565,16 @@ function isArenaQuality(value: unknown): value is ArenaQuality {
 export function pickArenaQuality(): ArenaQuality {
   try {
     const requested = requestedQualityTier()
-    if (requested) return requested
+    // Ultra is a sharper ball mesh, not a bigger crowd. The stand stays on the high budget.
+    if (requested) return requested === 'ultra' ? 'high' : requested
     const stored = globalThis.localStorage?.getItem(QUALITY_STORAGE_KEY)
     if (isArenaQuality(stored)) return stored
   } catch {
     // Storage refused, or there is no location at all (the unit tests). Either way the
     // guess below needs neither, so there is nothing to fall back from.
   }
-  return detectQualityTier()
+  const guessed = detectQualityTier()
+  return guessed === 'ultra' ? 'high' : guessed
 }
 
 /** What each quality asks of the stand washes; the shadow map comes from qualityConfig. */

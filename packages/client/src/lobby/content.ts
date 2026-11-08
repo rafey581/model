@@ -92,7 +92,8 @@ export const SETTINGS_COPY = {
     { value: 'auto', label: 'Auto', hint: 'Recommended' },
     { value: 'low', label: 'Low', hint: 'Fastest' },
     { value: 'medium', label: 'Medium', hint: 'Balanced' },
-    { value: 'high', label: 'High', hint: 'Sharpest' }
+    { value: 'high', label: 'High', hint: 'Sharp' },
+    { value: 'ultra', label: 'Ultra', hint: 'Finest balls' }
   ],
   musicLabel: 'Music',
   musicHint: 'Slow background music. It lowers during a shot and pauses when you leave the app.',

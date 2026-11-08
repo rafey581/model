@@ -617,7 +617,7 @@ export function feltNormalTexture(): THREE.CanvasTexture {
  * neutral is what guarantees the cushion and the bed share one hue exactly.
  */
 export function cushionFeltTexture(): THREE.CanvasTexture {
-  const sizeByName: Record<string, number> = { low: 256, medium: 1024, high: 1024 }
+  const sizeByName: Record<string, number> = { low: 256, medium: 1024, high: 1024, ultra: 1024 }
   const size = sizeByName[qualityConfig().name] ?? 512
   return canvasTexture(`cushion-felt-${size}`, () => {
     const { canvas, ctx } = newScratchCanvas(size)
@@ -746,7 +746,7 @@ function worley(pu: number, pv: number, cells: number, seed: number): { f1: numb
 }
 
 export function leatherNormalTexture(): THREE.CanvasTexture {
-  const sizeByName: Record<string, number> = { low: 0, medium: 512, high: 512 }
+  const sizeByName: Record<string, number> = { low: 0, medium: 512, high: 512, ultra: 512 }
   const size = sizeByName[qualityConfig().name] ?? 256
   return canvasTexture('leather-normal', () => {
     if (!size) return { canvas: newScratchCanvas(4).canvas }
@@ -785,7 +785,7 @@ export function leatherNormalTexture(): THREE.CanvasTexture {
 }
 
 export function leatherRoughnessTexture(): THREE.CanvasTexture {
-  const sizeByName: Record<string, number> = { low: 0, medium: 256, high: 256 }
+  const sizeByName: Record<string, number> = { low: 0, medium: 256, high: 256, ultra: 256 }
   const size = sizeByName[qualityConfig().name] ?? 256
   return canvasTexture('leather-rough', () => {
     if (!size) return { canvas: newScratchCanvas(4).canvas }
