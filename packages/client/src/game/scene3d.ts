@@ -107,6 +107,7 @@ import {
   type PocketShot,
   stepSpectatorTransition
 } from './spectatorCamera.js'
+import { coverageTransitionSeconds, televisionCoverage } from './broadcastCoverage.js'
 import {
   ballRadiusPx,
   ndcToPixel,
@@ -1706,6 +1707,15 @@ export class Scene3D implements VenueHost {
   private pocketShot: PocketShot | null = null
   /** How far into its replay the shot on screen is, in simulated seconds, or null with none on screen. */
   private shotTime: number | null = null
+  /** How long the replay on screen lasts, in simulated seconds. Zero when there is none. */
+  private shotDuration = 0
+  /**
+   * Which television picture is up: a coverage mode, the pocket, or the resting
+   * spectator view. A change of this is what starts the move to the next camera.
+   */
+  private coverageMode: string | null = null
+  /** The last wide angle a replay used, held for a moment after the balls stop. */
+  private coverageHold: 'BROADCAST' | 'SIDE' | 'END' | null = null
   /** The timed move into or out of the spectator view. Never blocks input. */
   private spectatorTransition: PlacementTransition = noPlacementTransition()
   /** The fitted spectator pose and the canvas shape it was fitted for, so a resize refits. */
@@ -4985,14 +4995,77 @@ const outerL = APRON_OUTER_L
    * eases between them — so this can be called as often as the button is pressed.
    */
   setCameraMode(mode: PlayerCameraMode): void {
-    // A different view from the one being shown is the player pressing the button: the
-    // next frame goes straight there. This is called every frame with the same mode, and
-    // that changes nothing.
+    // A different view from the one being shown is the player pressing the button.
+    // The rig eases across. Reduced motion and a low-performance device cut instead,
+    // so the table does not travel under a finger that is trying to aim.
+    // This is called every frame with the same mode, and that changes nothing.
     if (mode !== this.cameraMode) {
-      this.viewEaseUntil = performance.now() + VIEW_TRANSITION_SECONDS * 1600
+      if (this.playbackCalm()) {
+        this.cameraCut = true
+        this.viewEaseUntil = 0
+      } else {
+        this.viewEaseUntil = performance.now() + VIEW_TRANSITION_SECONDS * 1600
+      }
       if (this.rig.velocity) this.rig = { pose: this.rig.pose, yaw: this.rig.yaw }
+      this.coverageMode = null
     }
     this.cameraMode = mode
+  }
+
+  /** One fixed picture for a replay, instead of a move, when motion should stay quiet. */
+  private playbackCalm(): boolean {
+    if (qualityConfig().name === 'low') return true
+    try {
+      return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Where a watched shot is seen from.
+   *
+   * The player's chosen view is used as it stands unless they are on Main, in which
+   * case a replay is covered from fixed television cameras. The pocket still gets the
+   * close picture for the moment a ball is dropping. Nothing here runs while they are
+   * aiming: the caller only asks once the spectator view is up.
+   */
+  private watchPose(cue: { x: number; y: number } | null): { pose: CameraPose; signature: string } {
+    const aspect = this.cvw / Math.max(1, this.cvh)
+    const fixed = (mode: 'BROADCAST' | 'SIDE' | 'END', signature: string) => ({
+      signature,
+      pose: resolveCameraTarget({
+        mode,
+        aspect,
+        cue,
+        aimAngle: 0,
+        latch: initialHeadingLatch(0),
+        focus: null
+      })
+    })
+    const pot = this.potCamera()
+    if (pot && this.liveReplay) return { pose: pot, signature: 'pot' }
+    // The balls have just stopped. Stay on the angle that saw them stop, long enough
+    // to read the result, then the spectator view or the aim view takes back over.
+    if (!this.liveReplay && this.restSeconds < SPECTATOR_CAM.settleSeconds && this.coverageHold) {
+      return fixed(this.coverageHold, this.coverageHold)
+    }
+    const progress = this.shotDuration > 0 && this.shotTime !== null ? this.shotTime / this.shotDuration : 0
+    const covered =
+      this.liveReplay && this.cameraMode === 'AIM'
+        ? televisionCoverage({
+            replaying: true,
+            inputActive: false,
+            selected: 'AIM',
+            calm: this.playbackCalm(),
+            progress
+          })
+        : null
+    if (covered === 'BROADCAST' || covered === 'SIDE' || covered === 'END') {
+      this.coverageHold = covered
+      return fixed(covered, covered)
+    }
+    return { pose: this.spectatorPose(), signature: 'spectator' }
   }
 
   /**
@@ -5168,17 +5241,27 @@ const outerL = APRON_OUTER_L
       this.spectatorTransition = stepped.transition
       this.rig = { pose: stepped.pose, yaw: this.rig.yaw }
       this.aimViewSettled = false
-    } else if ((this.recapCamera || this.liveReplay) && !this.spectating && this.potCamera()) {
+    } else if (this.cameraMode === 'AIM' && (this.recapCamera || this.liveReplay) && !this.spectating && this.potCamera()) {
       // A recap's pot, or a live shot watched from its pocket when the table view is not
       // up: cut to the pocket, remembering where the picture was.
       if (!this.recapSavedPose) this.recapSavedPose = this.rig.pose
       this.rig = { pose: this.potCamera()!, yaw: this.rig.yaw }
       this.aimViewSettled = false
     } else if (this.spectating) {
-      // Held. Read through the fit each frame so a resize or a turned phone refits it.
-      // While a ball is on its way into a pocket the picture cuts to that pocket, and cuts
-      // back when it has gone.
-      this.rig = { pose: this.potCamera() ?? this.spectatorPose(), yaw: this.rig.yaw }
+      // Held. A replay on Main moves between the fixed television cameras as the shot
+      // goes; the opponent's visit at rest stays on the one fitted spectator view.
+      // A change of picture eases. The same picture is held, including across a resize.
+      const watch = this.watchPose(cue)
+      if (watch.signature !== this.coverageMode) {
+        this.coverageMode = watch.signature
+        this.spectatorTransition = beginSpectatorTransition(
+          this.rig.pose,
+          watch.pose,
+          coverageTransitionSeconds(this.playbackCalm())
+        )
+      } else if (!this.spectatorTransition.active) {
+        this.rig = { pose: watch.pose, yaw: this.rig.yaw }
+      }
       this.aimViewSettled = false
     } else {
       // Back from a recap's pocket camera: straight back to the picture it cut away from.
@@ -5439,6 +5522,7 @@ const outerL = APRON_OUTER_L
     if (cueRig && playback) cueRig.fresh = false
     this.pocketShot = null
     this.shotTime = null
+    this.shotDuration = playback?.duration ?? 0
     if (!playback) return
     // Most shots, pot or not, are watched from the pocket the ball is heading for (see
     // planPocketShot); a recap's pot always is.
@@ -5448,7 +5532,10 @@ const outerL = APRON_OUTER_L
   /** How far into its replay the shot on screen is, in simulated seconds; null when there is none. */
   setShotTime(time: number | null): void {
     this.shotTime = time
-    if (time === null) this.pocketShot = null
+    if (time === null) {
+      this.pocketShot = null
+      this.shotDuration = 0
+    }
   }
 
   /** The pocket camera, while this shot's ball is on its way to its pocket; otherwise null. */
@@ -5486,7 +5573,7 @@ const outerL = APRON_OUTER_L
     // player to have seen where their shot finished.
     this.restSeconds = this.liveReplay || this.immediate ? 0 : this.restSeconds + dt
     const placementActive = this.placementViewHeld || this.placementTransition.active
-    const next = nextSpectating(this.spectating, {
+    let next = nextSpectating(this.spectating, {
       enabled: SPECTATOR_CAM.enabled,
       seatKnown: this.liveSeatKnown,
       liveOpponentTurn: this.liveOpponentTurn,
@@ -5497,13 +5584,20 @@ const outerL = APRON_OUTER_L
       presentationHeld: this.presentationLeft > 0 || this.presentationQueue.length > 0,
       placementActive
     })
+    // A view the player picked — an end, a side, overhead — stays that view. Coverage
+    // from the other cameras is only while Main is selected, and the aim itself is
+    // never one of the pictures that gets replaced underneath a shot they are lining up.
+    if (this.cameraMode !== 'AIM') next = false
     if (next === this.spectating) return
     this.spectating = next
     this.venue?.setSpectator(next, SPECTATOR_CAM.cueThicknessScale, SPECTATOR_CAM.cueAimSeconds)
     // The rails take their deeper finish while the table is seen from high above.
     if (this.texturedTable) setRailFinish(this.texturedTable, next)
     if (next) {
-      this.spectatorTransition = beginSpectatorTransition(this.rig.pose, this.spectatorPose(), SPECTATOR_CAM.enterSeconds)
+      const watch = this.watchPose(cue)
+      this.coverageMode = watch.signature
+      const seconds = this.liveReplay ? coverageTransitionSeconds(this.playbackCalm()) : SPECTATOR_CAM.enterSeconds
+      this.spectatorTransition = beginSpectatorTransition(this.rig.pose, watch.pose, seconds)
       return
     }
     if (placementActive) {
@@ -5516,6 +5610,8 @@ const outerL = APRON_OUTER_L
     // heading is put there too, so it does not swing round after the move has landed.
     const yaw = latchedCameraYaw(this.latch)
     this.rig = { pose: this.rig.pose, yaw }
+    this.coverageMode = null
+    this.coverageHold = null
     this.spectatorTransition = beginSpectatorTransition(
       this.rig.pose,
       resolveCameraTarget({
@@ -5526,7 +5622,7 @@ const outerL = APRON_OUTER_L
         latch: this.latch,
         focus: null
       }),
-      SPECTATOR_CAM.exitSeconds
+      this.playbackCalm() ? SPECTATOR_CAM.exitSeconds : coverageTransitionSeconds(false)
     )
   }
 

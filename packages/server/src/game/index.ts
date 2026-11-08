@@ -1,9 +1,10 @@
-import { Server } from 'socket.io'
+import { Server, type Socket } from 'socket.io'
 import type { Server as HttpServer } from 'node:http'
 import type { FastifyInstance } from 'fastify'
 import { prisma } from '../db/index.js'
 import { config } from '../config.js'
 import { GameRoom } from './room.js'
+import { foreignMatchRooms, matchIdFromRoom } from './matchRooms.js'
 import type { GameUpdateEvent, ShotInputDto } from './room.js'
 import { ShotEnforcement } from './throttle.js'
 import { noteRejectedShot, recordFraudFlag } from '../fraud/index.js'
@@ -265,6 +266,31 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
     return null
   }
 
+  /**
+   * Drops this socket out of one match room.
+   *
+   * A practice match is retired as well: the human has left, and the robot would
+   * otherwise keep playing into a room the page is no longer watching, then deliver
+   * that table the next time the socket was still joined. A staked match is only
+   * unsubscribed. Unregistering it would start the disconnect grace and can award
+   * the stake; the seat stays until the socket itself disconnects, which is the
+   * rule it already had.
+   */
+  function detachMatch(socket: Socket, userId: string, matchId: string): void {
+    socket.leave(`match:${matchId}`)
+    const room = rooms.get(matchId)
+    if (!room || room.matchType !== 'PRACTICE') return
+    const seat = room.getSeat(userId)
+    room.unregisterSocket(userId, socket.id)
+    if (seat !== undefined && room.started && room.isSeatDisconnected(seat)) startGraceTimer(matchId, room)
+  }
+
+  function detachForeignMatches(socket: Socket, userId: string, keepMatchId: string | null): void {
+    for (const roomName of foreignMatchRooms(socket.rooms, keepMatchId)) {
+      detachMatch(socket, userId, matchIdFromRoom(roomName))
+    }
+  }
+
   io.on('connection', (socket) => {
     const userId = socket.data.userId as string
     socket.join(`user:${userId}`)
@@ -272,26 +298,30 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
     socket.on('match:join', (payload: { matchId: string }) => {
       const { matchId } = payload ?? {}
       if (!matchId) {
-        socket.emit('error', { code: 'bad_request' })
+        socket.emit('error', { matchId, code: 'bad_request' })
         return
       }
+      // Before the database round-trip. A shot from the match being left can
+      // otherwise land while this join is still loading and be applied to it.
+      detachForeignMatches(socket, userId, matchId)
       void runExclusive(matchId, async () => {
         const match = await prisma.match.findUnique({
           where: { id: matchId },
           include: { players: true }
         })
         if (!match) {
-          socket.emit('error', { code: 'match_not_found' })
+          socket.emit('error', { matchId, code: 'match_not_found' })
           return
         }
         const entry = match.players.find((p) => p.userId === userId)
         if (!entry) {
-          socket.emit('error', { code: 'not_in_match' })
+          socket.emit('error', { matchId, code: 'not_in_match' })
           return
         }
         if (['PRIZE_SETTLED', 'REFUNDED', 'MATCH_COMPLETED'].includes(match.status)) {
           const winnerSeat = match.winnerId ? match.players.find((p) => p.userId === match.winnerId)?.seat ?? undefined : undefined
           socket.emit('match:end', {
+            matchId,
             winnerSeat,
             reason: (match.resultJson as { reason?: string } | null)?.reason ?? 'settled'
           })
@@ -320,7 +350,14 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
         // A client that was away missed those, and the deadline it was last told
         // about has long since passed; without this it would come back to a clock
         // that says expired, or to no clock at all while the room was still counting.
-        socket.emit('match:joined', { matchId, seat: entry.seat, snapshot: current, turn: room.turnTiming() })
+        socket.emit('match:joined', {
+          matchId,
+          seat: entry.seat,
+          snapshot: current,
+          turn: room.turnTiming(),
+          seq: room.currentSeq(),
+          framesWon: [room.match.framesWon[0], room.match.framesWon[1]] as [number, number]
+        })
         const missStart = room.deliveredSeqForUser(userId) + 1
         const untilSeq = room.currentSeq()
         if (missStart <= untilSeq) {
@@ -343,6 +380,12 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
       })
     })
 
+    socket.on('match:leave', (payload: { matchId?: string }) => {
+      const matchId = payload?.matchId
+      if (!matchId) return
+      detachMatch(socket, userId, matchId)
+    })
+
     const signalAbuse = (code: string): void => {
       const signal = noteRejectedShot(userId, code)
       if (signal) void recordFraudFlag(signal, userId)
@@ -359,33 +402,33 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
       // nothing; once the replay clears, the bucket applies to this shot again.
       const pacing = getOrCreateRoom(matchId)?.pacingRejection(userId)
       if (pacing) {
-        socket.emit('error', { code: pacing })
+        socket.emit('error', { matchId, code: pacing })
         return
       }
       if (!shots.take(socket.id, userId)) {
-        socket.emit('error', { code: 'rate_limited' })
+        socket.emit('error', { matchId, code: 'rate_limited' })
         signalAbuse('rate_limited')
         return
       }
       const valid = shots.validate(input)
       if (!valid.ok) {
-        socket.emit('error', { code: valid.reason })
+        socket.emit('error', { matchId, code: valid.reason })
         signalAbuse(valid.reason)
         return
       }
       if (shots.isReplay(socket.id, input)) {
-        socket.emit('error', { code: 'duplicate_shot' })
+        socket.emit('error', { matchId, code: 'duplicate_shot' })
         signalAbuse('duplicate_shot')
         return
       }
       const room = getOrCreateRoom(matchId)
       if (!room) {
-        socket.emit('error', { code: 'match_not_found' })
+        socket.emit('error', { matchId, code: 'match_not_found' })
         return
       }
       const result = room.handleShot(userId, input)
       if (!result.accepted) {
-        socket.emit('error', { code: result.error ?? 'rejected' })
+        socket.emit('error', { matchId, code: result.error ?? 'rejected' })
         return
       }
       shots.recordAccepted(socket.id, input)
@@ -404,31 +447,31 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
     socket.on('foul:choice', (payload: { matchId: string; playAgain: boolean }) => {
       const { matchId, playAgain } = payload ?? {}
       if (!matchId || typeof playAgain !== 'boolean') {
-        socket.emit('error', { code: 'bad_request' })
+        socket.emit('error', { matchId, code: 'bad_request' })
         return
       }
       const room = getOrCreateRoom(matchId)
       if (!room) {
-        socket.emit('error', { code: 'match_not_found' })
+        socket.emit('error', { matchId, code: 'match_not_found' })
         return
       }
       const result = room.handleFoulChoice(userId, playAgain)
-      if (!result.accepted) socket.emit('error', { code: result.error ?? 'rejected' })
+      if (!result.accepted) socket.emit('error', { matchId, code: result.error ?? 'rejected' })
     })
 
     socket.on('placement:begin', (payload: { matchId: string }) => {
       const { matchId } = payload ?? {}
       if (!matchId) {
-        socket.emit('error', { code: 'bad_request' })
+        socket.emit('error', { matchId, code: 'bad_request' })
         return
       }
       const room = getOrCreateRoom(matchId)
       if (!room) {
-        socket.emit('error', { code: 'match_not_found' })
+        socket.emit('error', { matchId, code: 'match_not_found' })
         return
       }
       const result = room.handlePlacementBegin(userId)
-      if (!result.accepted) socket.emit('error', { code: result.error ?? 'rejected' })
+      if (!result.accepted) socket.emit('error', { matchId, code: result.error ?? 'rejected' })
     })
 
     // The striker puts the cue ball down where it chose. This is the placement that used
@@ -444,12 +487,12 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
       (payload: { matchId: string; cuePos: { x: number; y: number } }) => {
         const { matchId, cuePos } = payload ?? {}
         if (!matchId) {
-          socket.emit('error', { code: 'bad_request' })
+          socket.emit('error', { matchId, code: 'bad_request' })
           return
         }
         const room = getOrCreateRoom(matchId)
         if (!room) {
-          socket.emit('error', { code: 'match_not_found' })
+          socket.emit('error', { matchId, code: 'match_not_found' })
           return
         }
         // Bounds are checked here so a malformed coordinate is refused before it can
@@ -457,11 +500,11 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
         // the shape of the message.
         const shape = shots.validate({ aimAngle: 0, power: 0, spin: { x: 0, y: 0 }, cuePos })
         if (!shape.ok) {
-          socket.emit('error', { code: shape.reason })
+          socket.emit('error', { matchId, code: shape.reason })
           return
         }
         const result = room.handlePlacementConfirm(userId, cuePos)
-        if (!result.accepted) socket.emit('error', { code: result.error ?? 'rejected' })
+        if (!result.accepted) socket.emit('error', { matchId, code: result.error ?? 'rejected' })
       }
     )
 
@@ -480,16 +523,16 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
     socket.on('placement:done', (payload: { matchId: string }) => {
       const { matchId } = payload ?? {}
       if (!matchId) {
-        socket.emit('error', { code: 'bad_request' })
+        socket.emit('error', { matchId, code: 'bad_request' })
         return
       }
       const room = getOrCreateRoom(matchId)
       if (!room) {
-        socket.emit('error', { code: 'match_not_found' })
+        socket.emit('error', { matchId, code: 'match_not_found' })
         return
       }
       const result = room.handlePlacementDone(userId)
-      if (!result.accepted) socket.emit('error', { code: result.error ?? 'rejected' })
+      if (!result.accepted) socket.emit('error', { matchId, code: result.error ?? 'rejected' })
     })
 
     // A client reports that a shot has finished animating. The room holds the next
@@ -514,13 +557,13 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
     socket.on('concede', (payload: { matchId: string }) => {
       const { matchId } = payload ?? {}
       if (!matchId) {
-        socket.emit('error', { code: 'bad_request' })
+        socket.emit('error', { matchId, code: 'bad_request' })
         return
       }
       void runExclusive(matchId, async () => {
         const room = getOrCreateRoom(matchId)
         if (!room) {
-          socket.emit('error', { code: 'match_not_found' })
+          socket.emit('error', { matchId, code: 'match_not_found' })
           return
         }
         room.handleConcede(userId)
@@ -548,32 +591,32 @@ export function createGameServer(app: FastifyInstance, httpServer: HttpServer): 
       const seat = room?.canShowAim(userId)
       if (seat === null || seat === undefined) return
       lastAimAt = now
-      socket.to(`match:${matchId}`).emit('opponent:aim', { seat, angle, power })
+      socket.to(`match:${matchId}`).emit('opponent:aim', { matchId, seat, angle, power })
     })
 
     socket.on('match:chat', (payload: { matchId: string; phraseId: string }) => {
       const { matchId, phraseId } = payload ?? {}
       if (!matchId || typeof phraseId !== 'string' || phraseId.length === 0) {
-        socket.emit('error', { code: 'bad_request' })
+        socket.emit('error', { matchId, code: 'bad_request' })
         return
       }
       if (!isMatchChatPhrase(phraseId)) {
-        socket.emit('error', { code: 'bad_phrase' })
+        socket.emit('error', { matchId, code: 'bad_phrase' })
         return
       }
       const room = getOrCreateRoom(matchId)
       if (!room) {
-        socket.emit('error', { code: 'match_not_found' })
+        socket.emit('error', { matchId, code: 'match_not_found' })
         return
       }
       const seat = room.getSeat(userId)
       if (seat === undefined) {
-        socket.emit('error', { code: 'not_in_match' })
+        socket.emit('error', { matchId, code: 'not_in_match' })
         return
       }
       const last = lastChatAt.get(userId) ?? 0
       if (Date.now() - last < MATCH_CHAT_COOLDOWN_MS) {
-        socket.emit('error', { code: 'chat_rate_limited' })
+        socket.emit('error', { matchId, code: 'chat_rate_limited' })
         return
       }
       if (lastChatAt.size > 5000) lastChatAt.clear()

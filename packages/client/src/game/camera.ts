@@ -245,18 +245,31 @@ export const VISIBLE_HALF_WIDTH = HALF_W + POCKET_RADIUS_CORNER + 45
  * it runs. That is what stops a placement cutting to a different camera and back again -
  * there is only ever the one rig and one pose.
  */
-export type CameraMode = 'AIM' | 'TOP_DOWN' | 'TRACK' | 'PLACEMENT_TOP_DOWN' | 'BROADCAST' | 'SIDE' | 'CLOSE'
+export type CameraMode = 'AIM' | 'TOP_DOWN' | 'TRACK' | 'PLACEMENT_TOP_DOWN' | 'BROADCAST' | 'END' | 'SIDE' | 'FAR' | 'CLOSE'
 
 /**
- * The views the player may choose between, in the order the toggle walks them.
+ * The views the player may choose between.
  *
- * `AIM` is the low camera behind the cue ball. `SIDE` is the low side-on table camera.
- * `TOP_DOWN` is the static overhead of the whole bed. The wide and close television
- * poses still exist for the rig; they are not stops on the button.
+ * `AIM` is the main view: the low camera behind the cue ball, and the one a shot
+ * returns to. `BROADCAST` and `END` are the two ends of the table, the wide television
+ * cameras. `SIDE` and `FAR` are the two long sides. `TOP_DOWN` is the overhead of the
+ * whole bed. `CLOSE` still exists for the rig; it is not a choice, because a camera
+ * that follows the cue ball fights the aim.
  */
-export type PlayerCameraMode = 'AIM' | 'BROADCAST' | 'SIDE' | 'CLOSE' | 'TOP_DOWN'
+export type PlayerCameraMode = 'AIM' | 'BROADCAST' | 'END' | 'SIDE' | 'FAR' | 'CLOSE' | 'TOP_DOWN'
 
-export const PLAYER_CAMERA_MODES: readonly PlayerCameraMode[] = ['AIM', 'SIDE', 'TOP_DOWN']
+export const PLAYER_CAMERA_MODES: readonly PlayerCameraMode[] = ['AIM', 'BROADCAST', 'END', 'SIDE', 'FAR', 'TOP_DOWN']
+
+/** What each choice is called in the camera menu. */
+export const CAMERA_MODE_LABELS: Record<PlayerCameraMode, string> = {
+  AIM: 'Main',
+  BROADCAST: 'Baulk',
+  END: 'Black',
+  SIDE: 'Side',
+  FAR: 'Far',
+  CLOSE: 'Close',
+  TOP_DOWN: 'Overhead'
+}
 
 /**
  * How long a change of view takes to settle, in seconds.
@@ -695,17 +708,34 @@ export function broadcastPose(aspect: number, orbit: number = 0): CameraPose {
   }
 }
 
+/**
+ * How high the side cameras stand on a narrow canvas.
+ *
+ * From the side the length of the table is the wide thing in the picture. A landscape
+ * frame holds it at the low lens. A portrait phone does not: the corners leave the
+ * sides of the screen, and standing further back would walk out of the room. Raising
+ * the lens foreshortens the length back into the frame instead.
+ */
+function sideLift(aspect: number): { height: number; fov: number } {
+  const narrow = Math.max(0, 1.05 - aspect)
+  return {
+    height: SIDE_HEIGHT_MM + Math.min(1800, narrow * 4200),
+    fov: Math.min(MAX_FOV_DEG, wideFovDeg(SIDE_FOV_DEG, aspect) + narrow * 8)
+  }
+}
+
 /** The side-on table camera: the whole bed across the frame, from beyond the near cushion. */
 export function sidePose(aspect: number, orbit: number = 0): CameraPose {
   const offset = rotateOffset(0, -(HALF_W + SIDE_BACK_MM), orbit)
+  const framed = sideLift(aspect)
   return {
     x: TABLE_CENTRE.x + offset.x,
     y: TABLE_CENTRE.y + offset.y,
-    height: SIDE_HEIGHT_MM,
+    height: framed.height,
     lookX: TABLE_CENTRE.x,
     lookY: TABLE_CENTRE.y,
     lookHeight: SIDE_LOOK_HEIGHT_MM,
-    fov: wideFovDeg(SIDE_FOV_DEG, aspect)
+    fov: framed.fov
   }
 }
 
@@ -770,11 +800,15 @@ export function resolveCameraTarget(request: CameraRequest): CameraPose {
   if (request.mode === 'TRACK') {
     return request.focus ? trackPose(request.focus, request.aimAngle) : topDownPose(request.aspect)
   }
-  // The three television views are fixed rather than aimed, so they take their heading
+  // The television views are fixed rather than aimed, so they take their heading
   // from the player's look-around alone and ignore the shot line entirely: turning the
-  // cue must not swing a camera that is meant to be bolted to the floor.
+  // cue must not swing a camera that is meant to be bolted to the floor. The black end
+  // and the far side are the same cameras turned to the opposite cushion, not a heading
+  // that keeps rotating.
   if (request.mode === 'BROADCAST') return broadcastPose(request.aspect, request.latch.orbit)
+  if (request.mode === 'END') return broadcastPose(request.aspect, Math.PI + request.latch.orbit)
   if (request.mode === 'SIDE') return sidePose(request.aspect, request.latch.orbit)
+  if (request.mode === 'FAR') return sidePose(request.aspect, Math.PI + request.latch.orbit)
   if (request.mode === 'CLOSE') return closePose(request.cue, request.aspect, request.latch.orbit)
   // With no cue ball there is nothing to sit behind, and a camera that invented one
   // would swing across the table on the first frame. It waits overhead until there is.

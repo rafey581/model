@@ -549,8 +549,8 @@ describe("the venue's television cameras", () => {
     }
   }
 
-  it('offers the cue view, a low side camera, and the overhead table', () => {
-    expect([...PLAYER_CAMERA_MODES]).toEqual(['AIM', 'SIDE', 'TOP_DOWN'])
+  it('offers the cue view, both ends, both sides, and the overhead table', () => {
+    expect([...PLAYER_CAMERA_MODES]).toEqual(['AIM', 'BROADCAST', 'END', 'SIDE', 'FAR', 'TOP_DOWN'])
   })
 
   it('opens up on a narrow canvas without touching the landscape framing', () => {
