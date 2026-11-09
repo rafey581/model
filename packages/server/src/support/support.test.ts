@@ -5,6 +5,7 @@ import { prisma } from '../db/index.js'
 import { buildApp } from '../app.js'
 import { signToken } from '../auth/guards.js'
 import { resetLockouts, revokeAllAdminSessions } from '../admin/auth.js'
+import { bindOwnerUserIds } from '../auth/owners.js'
 
 /**
  * Customer support over HTTP. Driven through app.inject() on purpose: the bugs this
@@ -61,17 +62,20 @@ beforeAll(async () => {
   otherPlayerId = b.id
   otherAuth = b.auth
 
-  resetLockouts()
+  bindOwnerUserIds([adminId])
+  await resetLockouts()
   const login = await app.inject({ method: 'POST', url: '/api/admin/auth/login', payload: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD } })
   expect(login.statusCode).toBe(200)
   adminToken = (login.json() as { data: { token: string } }).data.token
 })
 
-beforeEach(() => {
-  resetLockouts()
+beforeEach(async () => {
+  await resetLockouts()
 })
 
 afterAll(async () => {
+  bindOwnerUserIds([])
+  await resetLockouts()
   await revokeAllAdminSessions(adminId)
   await prisma.adminAction.deleteMany({ where: { adminId } })
   await prisma.user.deleteMany({ where: { id: { in: [adminId, playerId, otherPlayerId] } } })

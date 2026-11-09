@@ -1,4 +1,5 @@
 import { config, isEmailDeliveryConfigured } from '../config.js'
+import { ownerConfigWarning } from './owners.js'
 
 /**
  * Boot-time warnings for the auth configuration.
@@ -20,5 +21,7 @@ export function authConfigWarnings(): string[] {
   if (config.ADMIN_ALLOWED_IPS.trim() === '') {
     warnings.push('ADMIN_ALLOWED_IPS is empty: the admin login is reachable from any IP.')
   }
+  const owner = ownerConfigWarning()
+  if (owner) warnings.push(owner)
   return warnings
 }

@@ -8,6 +8,8 @@ import { invalidateSettingsCache } from '../settings/index.js'
 import { listFraudFlags, checkLedgerInvariance } from '../fraud/index.js'
 import { dashboardStats, safeTimeZone, startOfDay } from './stats.js'
 import { threadsAwaitingReply } from '../support/service.js'
+import { isOwnerUser } from '../auth/owners.js'
+import { BOT_USER_EMAIL, PLATFORM_USER_EMAIL } from '../matches/service.js'
 
 const adjustSchema = z.object({
   userId: z.string(),
@@ -15,11 +17,26 @@ const adjustSchema = z.object({
   reason: z.string().max(200)
 })
 
-const userPatchSchema = z.object({
-  userId: z.string(),
-  status: z.enum(['ACTIVE', 'SUSPENDED', 'BANNED']).optional(),
-  role: z.enum(['PLAYER', 'ADMIN']).optional()
-})
+const userPatchSchema = z
+  .object({
+    userId: z.string(),
+    status: z.enum(['ACTIVE', 'SUSPENDED', 'BANNED'])
+  })
+  .strict()
+
+const SERVICE_EMAILS = new Set([PLATFORM_USER_EMAIL, BOT_USER_EMAIL])
+
+async function accountChangeRefusal(actorId: string, userId: string): Promise<string | null> {
+  if (userId === actorId || isOwnerUser(userId)) {
+    return 'This account cannot be changed from the app.'
+  }
+  const target = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } })
+  if (!target) return 'Player not found.'
+  if (target.email && SERVICE_EMAILS.has(target.email)) {
+    return 'This account is part of the game and cannot be changed.'
+  }
+  return null
+}
 
 const settingsPatchSchema = z.object({
   key: z.string(),
@@ -81,6 +98,10 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     else if (filter === 'suspended') where.status = 'SUSPENDED'
     else if (filter === 'banned') where.status = 'BANNED'
     else if (filter === 'staff') where.role = { in: ['ADMIN', 'SUPERADMIN'] }
+    where.AND = [
+      ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+      { OR: [{ email: null }, { email: { notIn: [PLATFORM_USER_EMAIL, BOT_USER_EMAIL] } }] }
+    ]
 
     const orderBy: Prisma.UserOrderByWithRelationInput[] =
       filter === 'active' || filter === 'today' ? [{ lastSeenAt: 'desc' }] : [{ createdAt: 'desc' }]
@@ -120,14 +141,20 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   })
 
   app.patch('/api/admin/users', { config: { public: true }, preHandler: adminGuard }, async (request, reply) => {
-    const parsed = userPatchSchema.safeParse(request.body)
+    const body = request.body
+    if (body && typeof body === 'object' && 'role' in body) {
+      return reply.code(400).send({ ok: false, error: 'Roles cannot be changed.' })
+    }
+    const parsed = userPatchSchema.safeParse(body)
     if (!parsed.success) return reply.code(400).send({ ok: false, error: 'invalid input' })
+    const refusal = await accountChangeRefusal(request.authUser!.id, parsed.data.userId)
+    if (refusal) {
+      const status = refusal === 'Player not found.' ? 404 : 403
+      return reply.code(status).send({ ok: false, error: refusal })
+    }
     const user = await prisma.user.update({
       where: { id: parsed.data.userId },
-      data: {
-        ...(parsed.data.status ? { status: parsed.data.status } : {}),
-        ...(parsed.data.role ? { role: parsed.data.role } : {})
-      }
+      data: { status: parsed.data.status }
     })
     await prisma.adminAction.create({
       data: {
@@ -144,6 +171,11 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/admin/wallet/adjust', { config: { public: true }, preHandler: adminGuard }, async (request, reply) => {
     const parsed = adjustSchema.safeParse(request.body)
     if (!parsed.success) return reply.code(400).send({ ok: false, error: 'invalid input' })
+    const target = await prisma.user.findUnique({ where: { id: parsed.data.userId }, select: { email: true } })
+    if (!target) return reply.code(404).send({ ok: false, error: 'Player not found.' })
+    if (target.email && SERVICE_EMAILS.has(target.email)) {
+      return reply.code(403).send({ ok: false, error: 'This account is part of the game and cannot be changed.' })
+    }
     const result = await runInTransaction(async (tx) => {
       await ledger.adjust(tx, {
         userId: parsed.data.userId,

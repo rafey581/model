@@ -14,15 +14,16 @@
  *   # generate a strong password instead of typing one
  *   pnpm exec tsx scripts/set-admin-password.ts --email admin@snooker.test --generate
  *
- * Deliberately not a general "edit any user" tool: it refuses non-admin accounts
- * and refuses to touch roles or balances, so it cannot be repurposed into a way of
- * minting an admin or moving money.
+ * Deliberately not a general "edit any user" tool: it refuses every account that
+ * is not listed in OWNER_USER_IDS, and it refuses to touch roles or balances, so
+ * it cannot be repurposed into a way of minting an admin or moving money.
+ * Set OWNER_USER_IDS to the account id (see show-user-id.ts) before running it.
  */
 import { randomBytes } from 'node:crypto'
 import bcrypt from 'bcryptjs'
 import { prisma } from '../src/db/index.js'
-
-const ADMIN_ROLES = ['ADMIN', 'SUPERADMIN']
+import { isOwnerUser } from '../src/auth/owners.js'
+import { clearAccountFailures } from '../src/auth/loginThrottle.js'
 
 interface Args {
   email: string | null
@@ -102,10 +103,12 @@ async function main(): Promise<void> {
     console.error(`error: no account with email ${email}`)
     process.exit(1)
   }
-  if (!ADMIN_ROLES.includes(existing.role)) {
-    // Keeps this from being used on a player account, where a password change is
-    // not what an operator reaching for an admin reset expects.
-    console.error(`error: ${email} has role ${existing.role}, not an admin role`)
+  if (!isOwnerUser(existing.id)) {
+    // The id is printed because the operator already named the email and needs
+    // it to fill OWNER_USER_IDS. The password is not printed here.
+    console.error(`error: ${email} is not listed in OWNER_USER_IDS, so this script will not change it.`)
+    console.error('If this is the owner account, set OWNER_USER_IDS to the id below, restart the server, then run this script again.')
+    console.error(`id: ${existing.id}`)
     process.exit(1)
   }
 
@@ -113,7 +116,11 @@ async function main(): Promise<void> {
   const passwordHash = bcrypt.hashSync(password, 10)
 
   await prisma.$transaction(async (tx) => {
-    await tx.user.update({ where: { id: existing.id }, data: { passwordHash } })
+    await tx.user.update({
+      where: { id: existing.id },
+      data: { passwordHash, failedLoginAttempts: 0, lockedUntil: null, tokenVersion: { increment: 1 } }
+    })
+    await tx.session.deleteMany({ where: { userId: existing.id, purpose: 'ADMIN' } })
     await tx.adminAction.create({
       data: {
         adminId: existing.id,
@@ -128,6 +135,9 @@ async function main(): Promise<void> {
       }
     })
   })
+  await clearAccountFailures('staff', `email:${email}`)
+  await clearAccountFailures('player', `email:${email}`)
+  await clearAccountFailures('player', `user:${existing.username.toLowerCase()}`)
 
   console.log(`updated ${email} (${existing.username}, ${existing.role})`)
   if (args.generate) {

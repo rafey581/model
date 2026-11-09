@@ -15,6 +15,15 @@ import { normalizeEmail } from './otp.js'
 import { notify } from '../notifications/service.js'
 import { assertValidReferralCode, pickReferralCode, ReferralError } from '../referrals/service.js'
 import { assertDeviceCanSignUp, DEVICE_ID_PATTERN, DeviceIdRequiredError, DeviceLimitError, recordLoginDevice, recordSignupDevice } from '../devices/service.js'
+import { isOwnerUser } from './owners.js'
+import { passwordMatches } from './passwordCheck.js'
+import {
+  clearAccountFailures,
+  clientIp,
+  cooldownBody,
+  loginBlock,
+  recordLoginFailure
+} from './loginThrottle.js'
 
 /**
  * Player authentication.
@@ -213,45 +222,50 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) return reply.code(400).send({ ok: false, error: 'invalid input' })
 
     const { username, email, password } = parsed.data
+    const accountKey = username
+      ? `user:${username.trim().toLowerCase()}`
+      : `email:${normalizeEmail(email ?? '')}`
+    const ip = clientIp(request)
+    const blocked = await loginBlock('player', ip, accountKey)
+    if (blocked.locked) {
+      return reply.code(429).header('retry-after', String(blocked.retryAfterSec)).send(cooldownBody(blocked.retryAfterSec))
+    }
+
     const user = username
       ? await prisma.user.findFirst({ where: { username: { equals: username, mode: 'insensitive' } } })
       : await prisma.user.findUnique({ where: { email: normalizeEmail(email ?? '') } })
 
-    if (!user) {
+    const passwordOk = passwordMatches(password, user?.passwordHash)
+    if (!user || !passwordOk) {
+      // The public seed password is refused on a real account before it can open
+      // a session. Counting it keeps that well-known string from being an
+      // unlimited guess. Unknown identifiers stay on the same 401 as a wrong
+      // password until the shared limit is reached.
+      if (user && password === 'admin123') {
+        const failure = await recordLoginFailure('player', ip, accountKey)
+        if (failure.locked) {
+          return reply.code(429).header('retry-after', String(failure.retryAfterSec)).send(cooldownBody(failure.retryAfterSec))
+        }
+        return reply.code(403).send({ ok: false, error: 'This password is no longer allowed. Use "Forgot password" to set a new one.' })
+      }
+      const failure = await recordLoginFailure('player', ip, accountKey)
+      if (failure.locked) {
+        return reply.code(429).header('retry-after', String(failure.retryAfterSec)).send(cooldownBody(failure.retryAfterSec))
+      }
       return reply.code(401).send({ ok: false, error: 'invalid credentials' })
     }
 
-    // Check if account is locked
-    if (user.lockedUntil && user.lockedUntil > new Date()) {
-      return reply.code(429).send({ ok: false, error: 'Account temporarily locked due to too many failed login attempts. Try again later.' })
-    }
-
-    // The seed's fallback password is public; an account still on it cannot be used.
     if (password === 'admin123') {
+      const failure = await recordLoginFailure('player', ip, accountKey)
+      if (failure.locked) {
+        return reply.code(429).header('retry-after', String(failure.retryAfterSec)).send(cooldownBody(failure.retryAfterSec))
+      }
       return reply.code(403).send({ ok: false, error: 'This password is no longer allowed. Use "Forgot password" to set a new one.' })
     }
-    if (!user.passwordHash || !bcrypt.compareSync(password, user.passwordHash)) {
-      const attempts = (user.failedLoginAttempts || 0) + 1
-      const maxAttempts = 5
-      if (attempts >= maxAttempts) {
-        const lockMinutes = 15
-        await prisma.user.update({
-          where: { id: user.id },
-          data: {
-            failedLoginAttempts: attempts,
-            lockedUntil: new Date(Date.now() + lockMinutes * 60 * 1000)
-          }
-        })
-        return reply.code(429).send({ ok: false, error: 'Too many failed login attempts. Account locked for 15 minutes.' })
-      }
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { failedLoginAttempts: attempts }
-      })
-      return reply.code(401).send({ ok: false, error: 'invalid credentials' })
-    }
 
-    // Successful login - reset failed attempts
+    await clearAccountFailures('player', accountKey)
+    // Successful login - reset the old per-row counter too, so a lock written
+    // before this table existed cannot linger beside the new one.
     await prisma.user.update({
       where: { id: user.id },
       data: {
@@ -263,7 +277,9 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       }
     })
 
-    if (user.role === 'ADMIN' || user.role === 'SUPERADMIN') {
+    // The configured owner uses the admin app. A role of ADMIN on anyone else
+    // does not: that person is a player, and the game sign-in stays open to them.
+    if (isOwnerUser(user.id)) {
       await prisma.adminAction.create({
         data: {
           adminId: user.id,
@@ -278,7 +294,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     if (user.status !== 'ACTIVE') {
       return reply.code(403).send({ ok: false, error: 'account not active' })
     }
-    if ((await isMaintenance()) && user.role !== 'ADMIN' && user.role !== 'SUPERADMIN') {
+    if (await isMaintenance()) {
       return reply.code(503).send({ ok: false, error: 'maintenance in progress' })
     }
     const deviceId = parsed.data.deviceId && DEVICE_ID_PATTERN.test(parsed.data.deviceId) ? parsed.data.deviceId : undefined
@@ -294,8 +310,8 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
    * Step one of a reset: the player proves who they are with the email, username and
    * phone on the account, and gets back a reset token. The token is what step two needs;
    * it lasts 10 minutes, works once (it is tied to the current password), and is never
-   * issued for a staff account. The same answer is given for "no such account" and for a
-   * staff account, so the form cannot be used to find out which details are real.
+   * issued for an owner account. The same answer is given for "no such account" and for an
+   * owner account, so the form cannot be used to find out which details are real.
    */
   app.post('/api/auth/password/forgot', { config: { public: true, rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
     const schema = z.object({
@@ -321,8 +337,18 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         phone: normalizedPhone
       }
     })
-    const noMatch = () => reply.code(400).send({ ok: false, error: 'No account matches the provided details.' })
-    if (!user || user.role !== 'PLAYER' || user.status !== 'ACTIVE') return noMatch()
+    const noMatch = async () => {
+      const failure = await recordLoginFailure('recovery', clientIp(request), `email:${normalizedEmail}`)
+      if (failure.locked) {
+        return reply.code(429).header('retry-after', String(failure.retryAfterSec)).send(cooldownBody(failure.retryAfterSec))
+      }
+      return reply.code(400).send({ ok: false, error: 'No account matches the provided details.' })
+    }
+    const recoveryBlocked = await loginBlock('recovery', clientIp(request), `email:${normalizedEmail}`)
+    if (recoveryBlocked.locked) {
+      return reply.code(429).header('retry-after', String(recoveryBlocked.retryAfterSec)).send(cooldownBody(recoveryBlocked.retryAfterSec))
+    }
+    if (!user || isOwnerUser(user.id) || user.status !== 'ACTIVE') return noMatch()
     // Every detail has to match, the full name and the date of birth included.
     if (normalizeName(user.name ?? '') !== normalizeName(name)) return noMatch()
     if (!user.dateOfBirth) {
@@ -357,7 +383,18 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       const message = parsed.error.issues.find((i) => i.path[0] === 'password')?.message
       return reply.code(400).send({ ok: false, error: message ?? 'This reset link is not valid. Please start again.' })
     }
-    const expired = () => reply.code(400).send({ ok: false, error: 'This reset has expired or was already used. Please start again.' })
+    const ip = clientIp(request)
+    const resetBlocked = await loginBlock('recovery', ip, null)
+    if (resetBlocked.locked) {
+      return reply.code(429).header('retry-after', String(resetBlocked.retryAfterSec)).send(cooldownBody(resetBlocked.retryAfterSec))
+    }
+    const expired = async () => {
+      const failure = await recordLoginFailure('recovery', ip, null)
+      if (failure.locked) {
+        return reply.code(429).header('retry-after', String(failure.retryAfterSec)).send(cooldownBody(failure.retryAfterSec))
+      }
+      return reply.code(400).send({ ok: false, error: 'This reset has expired or was already used. Please start again.' })
+    }
     let claims: { sub?: string; purpose?: string; pv?: string }
     try {
       claims = jwt.verify(parsed.data.resetToken, config.JWT_SECRET, { algorithms: ['HS256'] }) as typeof claims
@@ -366,7 +403,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     }
     if (claims.purpose !== 'password-reset' || !claims.sub) return expired()
     const user = await prisma.user.findUnique({ where: { id: claims.sub } })
-    if (!user || user.status !== 'ACTIVE' || user.role !== 'PLAYER') return expired()
+    if (!user || user.status !== 'ACTIVE' || isOwnerUser(user.id)) return expired()
     if (claims.pv !== passwordFingerprint(user.passwordHash)) return expired()
 
     const passwordHash = bcrypt.hashSync(parsed.data.password, 12)
@@ -374,6 +411,9 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       where: { id: user.id },
       data: { passwordHash, failedLoginAttempts: 0, lockedUntil: null, tokenVersion: { increment: 1 } }
     })
+    await clearAccountFailures('player', `user:${user.username.toLowerCase()}`)
+    if (user.email) await clearAccountFailures('player', `email:${user.email.toLowerCase()}`)
+    await clearAccountFailures('recovery', `email:${user.email?.toLowerCase() ?? user.id}`)
     reply.clearCookie('token', { path: '/' })
     return reply.send({ ok: true, data: { reset: true } })
   })

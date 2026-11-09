@@ -1,8 +1,16 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
-import bcrypt from 'bcryptjs'
 import { prisma } from '../db/index.js'
 import { adminAllowedIps, config } from '../config.js'
+import { isOwnerUser, ownerUserIds } from '../auth/owners.js'
+import { passwordMatches } from '../auth/passwordCheck.js'
+import {
+  clearAccountFailures,
+  clientIp,
+  loginBlock,
+  recordLoginFailure,
+  resetLoginThrottles
+} from '../auth/loginThrottle.js'
 
 /**
  * Admin authentication: email + password, on a route the public app never
@@ -20,111 +28,22 @@ import { adminAllowedIps, config } from '../config.js'
  *     presented as an admin session.
  *  3. **Opaque at rest.** The cookie carries 32 random bytes; only a SHA-256 hash
  *     is stored, so a database leak yields nothing that can be replayed.
- *  4. **Brute-force resistant.** Failures are counted per account *and* per IP with
- *     a lockout, so neither spraying one account from many IPs nor one IP against
- *     many accounts gets an unlimited number of password guesses.
- *  5. **Audited.** Every attempt, successful or not, lands in `AdminAction`.
+ *  4. **Brute-force resistant.** Failures are counted in the database, per identifier
+ *     and per client address, with a fixed cooldown. The count survives a restart
+ *     and is shared by every process on this database. Guessing does not extend
+ *     a cooldown that is already running.
+ *  5. **Owner only.** A session is accepted only when the account id is in
+ *     `OWNER_USER_IDS`. Role is not consulted. Anyone else's staff session is
+ *     deleted.
+ *  6. **Audited.** Every attempt, successful or not, lands in `AdminAction`.
+ *     Passwords are not written there.
  */
 
 export const ADMIN_COOKIE = 'admin_session'
-const ADMIN_ROLES = new Set(['ADMIN', 'SUPERADMIN'])
 
-/**
- * A real bcrypt hash of a value nobody knows, compared against when the account
- * does not exist. Without it, "no such user" returns in microseconds while a wrong
- * password takes ~100ms of bcrypt work, which is a reliable account-enumeration
- * oracle even though the error message is identical.
- */
-const DUMMY_HASH = '$2b$10$C6UzMDM.H6dfI/f/IKcEe.iaWs1JOwuijCzFvJcF1aF8b5K2PnO7TC'
-
-// ---------------------------------------------------------------------------
-// Lockout tracking
-// ---------------------------------------------------------------------------
-
-interface AttemptState {
-  failures: number
-  lockedUntil: number
-  lastAt: number
-}
-
-const byAccount = new Map<string, AttemptState>()
-const byIp = new Map<string, AttemptState>()
-
-/** Bounded so an attacker cannot grow the map without limit by rotating IPs. */
-const MAX_TRACKED_KEYS = 10_000
-
-function stateFor(map: Map<string, AttemptState>, key: string): AttemptState {
-  let s = map.get(key)
-  if (!s) {
-    if (map.size >= MAX_TRACKED_KEYS) {
-      // Evict the least recently touched rather than refusing to track: silently
-      // dropping a new key would hand an attacker a free reset by flooding.
-      let oldestKey: string | undefined
-      let oldest = Infinity
-      for (const [k, v] of map) {
-        if (v.lastAt < oldest) {
-          oldest = v.lastAt
-          oldestKey = k
-        }
-      }
-      if (oldestKey !== undefined) map.delete(oldestKey)
-    }
-    s = { failures: 0, lockedUntil: 0, lastAt: Date.now() }
-    map.set(key, s)
-  }
-  return s
-}
-
-export function lockoutRemainingMs(key: string, map: Map<string, AttemptState>): number {
-  const s = map.get(key)
-  if (!s) return 0
-  return Math.max(0, s.lockedUntil - Date.now())
-}
-
-export function accountLockRemainingMs(email: string): number {
-  return lockoutRemainingMs(email.toLowerCase(), byAccount)
-}
-
-export function ipLockRemainingMs(ip: string): number {
-  return lockoutRemainingMs(ip, byIp)
-}
-
-function recordFailure(key: string, map: Map<string, AttemptState>, threshold: number): void {
-  const s = stateFor(map, key)
-  s.failures += 1
-  s.lastAt = Date.now()
-  if (s.failures >= threshold) {
-    // Lockout grows with the failure count so a long-running guess is slower than
-    // a first one, instead of every N failures costing the same.
-    const over = s.failures - threshold
-    const minutes = config.ADMIN_LOCKOUT_MIN * (1 + Math.floor(over / threshold))
-    s.lockedUntil = Date.now() + minutes * 60_000
-  }
-}
-
-/**
- * Failures tolerated per IP, which is deliberately several times the per-account
- * budget.
- *
- * An IP is a much weaker signal than an account: it is shared by an office, a
- * mobile carrier or a NAT gateway, so locking an address after as few failures as
- * it takes to lock an account would let one fumbled password lock every admin
- * behind that NAT out of the panel. It still stops the things an IP limit is
- * actually for - a single host spraying many accounts, and hammering one account
- * faster than the account counter reacts.
- */
-function ipThreshold(): number {
-  return config.ADMIN_MAX_FAILED_ATTEMPTS * 3
-}
-
-function clearFailures(key: string, map: Map<string, AttemptState>): void {
-  map.delete(key)
-}
-
-/** Exposed for tests; production never needs to reach in here. */
-export function resetLockouts(): void {
-  byAccount.clear()
-  byIp.clear()
+/** Clears persisted sign-in counters. Tests call this between cases. */
+export async function resetLockouts(): Promise<void> {
+  await resetLoginThrottles()
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +55,10 @@ function normalizeIp(raw: string | undefined): string {
   // ::ffff:127.0.0.1 and 127.0.0.1 must be treated as the same host, or the
   // allowlist silently fails on whichever address form Node happens to report.
   return raw.startsWith('::ffff:') ? raw.slice(7) : raw
+}
+
+function staffAccountKey(email: string): string {
+  return `email:${email.trim().toLowerCase()}`
 }
 
 export function isIpAllowed(ip: string | undefined): boolean {
@@ -188,6 +111,21 @@ export async function purgeExpiredSessions(): Promise<number> {
   return result.count
 }
 
+/**
+ * Ends every staff session that is not on the owner list.
+ *
+ * Called at boot. A session minted while an account was an admin does not survive
+ * a deploy that no longer treats that account as staff, including the case where
+ * no owner is configured yet.
+ */
+export async function revokeNonOwnerAdminSessions(): Promise<number> {
+  const owners = ownerUserIds()
+  const result = await prisma.session.deleteMany({
+    where: owners.length === 0 ? { purpose: 'ADMIN' } : { purpose: 'ADMIN', userId: { notIn: [...owners] } }
+  })
+  return result.count
+}
+
 export interface AdminSessionUser {
   id: string
   username: string
@@ -203,9 +141,14 @@ export async function resolveAdminSession(token: string): Promise<AdminSessionUs
   if (!session) return null
   if (session.purpose !== 'ADMIN') return null
   if (session.expiresAt.getTime() <= Date.now()) return null
-  // Re-read the user every request: demotion or suspension has to take effect on
-  // the next call, not whenever the session happens to expire.
-  if (session.user.status !== 'ACTIVE' || !ADMIN_ROLES.has(session.user.role)) return null
+  // Re-read the account every request. Role is not the gate: only the configured
+  // owner ids are, and a session for anyone else is deleted so it cannot be
+  // reused if the list later changes.
+  if (!isOwnerUser(session.user.id)) {
+    await prisma.session.delete({ where: { id: session.id } }).catch(() => undefined)
+    return null
+  }
+  if (session.user.status !== 'ACTIVE') return null
 
   // Constant-time compare is unnecessary here (both are server-held hashes compared
   // by the database) but the timingSafeEqual keeps the habit honest and costs nothing.
@@ -275,45 +218,45 @@ export async function loginAdmin(
   email: string,
   password: string
 ): Promise<AdminLoginResult> {
-  const ip = normalizeIp(request.ip)
+  const ip = clientIp(request)
   const key = email.trim().toLowerCase()
+  const accountKey = staffAccountKey(key)
 
   if (!isIpAllowed(request.ip)) {
     await audit(request, 'admin.login.ip_blocked', key, {})
     return { ok: false, failure: 'ip_blocked' }
   }
 
-  const accountWait = accountLockRemainingMs(key)
-  const ipWait = ipLockRemainingMs(ip)
-  const waitMs = Math.max(accountWait, ipWait)
-  if (waitMs > 0) {
-    await audit(request, 'admin.login.locked', key, { retryAfterSec: Math.ceil(waitMs / 1000) })
-    return { ok: false, failure: 'locked', retryAfterSec: Math.ceil(waitMs / 1000) }
+  const blocked = await loginBlock('staff', ip, accountKey)
+  if (blocked.locked) {
+    await audit(request, 'admin.login.locked', key, { retryAfterSec: blocked.retryAfterSec })
+    return { ok: false, failure: 'locked', retryAfterSec: blocked.retryAfterSec }
   }
 
-  const user = await prisma.user.findFirst({ where: { email: key, role: { in: ['ADMIN', 'SUPERADMIN'] } } })
+  // Any account with this email, not only rows whose role says admin. Access is
+  // the owner list. Looking up by role would let a non-owner admin be told apart
+  // from everyone else, and would lock the owner out if their role were PLAYER.
+  const user = await prisma.user.findFirst({ where: { email: key } })
+  const passwordOk = passwordMatches(password, user?.passwordHash)
+  const allowed = Boolean(user && passwordOk && user.status === 'ACTIVE' && isOwnerUser(user.id))
 
-  // Always run a bcrypt comparison, even with no user, to keep the timing flat.
-  const passwordOk = bcrypt.compareSync(password, user?.passwordHash ?? DUMMY_HASH)
-
-  if (!user || !passwordOk || user.status !== 'ACTIVE') {
-    recordFailure(key, byAccount, config.ADMIN_MAX_FAILED_ATTEMPTS)
-    recordFailure(ip, byIp, ipThreshold())
+  if (!user || !passwordOk || !allowed) {
+    const failure = await recordLoginFailure('staff', ip, accountKey)
     await audit(request, 'admin.login.failed', key, { reason: 'credentials' })
+    if (failure.locked) return { ok: false, failure: 'locked', retryAfterSec: failure.retryAfterSec }
     return { ok: false, failure: 'invalid' }
   }
 
-  // The seed's fallback password is public (it is in the source). An account still on it
-  // is refused until its password is reset on the server, so a forgotten setting can never
-  // leave the staff app open to anyone who has read the code.
+  // The seed's fallback password is public (it is in the source). An owner account
+  // still on it is refused until its password is reset on the server. This is
+  // checked only after the owner test, so the 403 is not a way to discover which
+  // other accounts exist.
   if (KNOWN_DEFAULT_PASSWORDS.has(password)) {
     await audit(request, 'admin.login.default_password', key, { userId: user.id })
     return { ok: false, failure: 'default_password' }
   }
 
-  // Password verified and the account is active: that is the whole check.
-  clearFailures(key, byAccount)
-  clearFailures(ip, byIp)
+  await clearAccountFailures('staff', accountKey)
   await audit(request, 'admin.login.success', key, { userId: user.id })
   return {
     ok: true,

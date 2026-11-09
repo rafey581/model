@@ -5,6 +5,7 @@ import { prisma } from '../db/index.js'
 import { buildApp } from '../app.js'
 import { signToken } from '../auth/guards.js'
 import { resetLockouts, revokeAllAdminSessions } from '../admin/auth.js'
+import { bindOwnerUserIds } from '../auth/owners.js'
 import { createDeposit } from '../deposits/service.js'
 import { createWithdrawal } from '../withdrawals/service.js'
 import { runInTransaction, ledger } from '../wallet/service.js'
@@ -51,7 +52,8 @@ beforeAll(async () => {
   playerId = player.id
   await runInTransaction((tx) => ledger.creditAvailable(tx, { userId: playerId, amount: 50, type: 'START_BALANCE' }))
   playerAuth = `Bearer ${signToken({ id: player.id, username: player.username, role: 'PLAYER', status: 'ACTIVE' })}`
-  resetLockouts()
+  bindOwnerUserIds([adminId])
+  await resetLockouts()
   const login = await app.inject({ method: 'POST', url: '/api/admin/auth/login', payload: { email: `admin-${TAG}@test.local`, password: PASSWORD } })
   adminAuth = `Bearer ${(login.json() as { data: { token: string } }).data.token}`
 })
@@ -62,6 +64,7 @@ beforeEach(() => {
 })
 
 afterAll(async () => {
+  bindOwnerUserIds([])
   setPushFetcher(null)
   await revokeAllAdminSessions(adminId)
   await prisma.adminDevice.deleteMany({ where: { token: { in: [TOKEN_A, TOKEN_B] } } })

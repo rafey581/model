@@ -1,5 +1,6 @@
 import { prisma } from '../db/index.js'
 import { config } from '../config.js'
+import { ownerUserIds } from '../auth/owners.js'
 
 /**
  * Push alerts to staff phones through the Expo push service.
@@ -13,8 +14,6 @@ import { config } from '../config.js'
  * deposit or withdrawal that triggered it. Tokens Expo reports as no longer
  * registered (app uninstalled, notifications revoked) are deleted.
  */
-
-const ADMIN_ROLES = ['ADMIN', 'SUPERADMIN'] as const
 
 export const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 export const RING_CHANNEL_ID = 'money-requests'
@@ -78,10 +77,12 @@ export async function pushToAdmins(
 ): Promise<number> {
   if (!config.ADMIN_PUSH_ENABLED) return 0
   try {
+    const owners = ownerUserIds()
+    if (owners.length === 0) return 0
     const devices = await prisma.adminDevice.findMany({
       where: {
         ...(onlyUserId ? { userId: onlyUserId } : {}),
-        user: { role: { in: [...ADMIN_ROLES] }, status: 'ACTIVE' }
+        user: { id: { in: [...owners] }, status: 'ACTIVE' }
       },
       select: { token: true }
     })

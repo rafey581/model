@@ -233,12 +233,51 @@ changes. Server-only changes never need an app rebuild.
 
 ## Security
 
-### Staff password
-The staff login refuses the seed's default password (`admin123`), because it is public.
-Set a strong one (12+ characters) on the server:
+### Who can open the admin app
+Only account ids listed in `OWNER_USER_IDS` can sign in or call `/api/admin/*`.
+A role of ADMIN or SUPERADMIN does not grant that, and this release does not
+choose an account for you. If the variable is empty, every staff sign-in fails
+and every existing staff session is deleted on startup. Set it before you restart
+onto this build, or you will be locked out until you set it and restart again.
+
+On the server, look up the account you will use (this does not change anything):
+
 ```bash
 cd ~/snooker/packages/server
-NEW_PASS='Your-strong-password' npx tsx --env-file=.env -e "const bcrypt=require('bcryptjs');const {PrismaClient}=require('@prisma/client');const p=new PrismaClient();(async()=>{const u=await p.user.update({where:{email:'admin@snooker.test'},data:{passwordHash:bcrypt.hashSync(process.env.NEW_PASS,12),failedLoginAttempts:0,lockedUntil:null,status:'ACTIVE'},select:{email:true}});console.log('Password reset for',u.email);await p.\$disconnect()})().catch(e=>{console.error(e.message);process.exit(1)})"
+npx tsx --env-file=.env scripts/show-user-id.ts --email you@example.com
+```
+
+Put the printed id in the server environment as `OWNER_USER_IDS` (comma-separated
+if more than one person should have the app). Restart after it is set. Sign in
+with that account's email and its existing password. That account can no longer
+sign in through the game; use a different account to play.
+
+The Users screen can suspend or ban players. It cannot change roles, and it cannot
+change the owner accounts or the internal house and robot accounts. Balance
+adjustments, deposits, withdrawals, settings and the rest of the app stay available
+to the owner.
+
+Failed sign-ins (game, staff, and password recovery) are counted in the database:
+5 wrong attempts on one identifier, or 15 from one address, then a fixed 15 minute
+cooldown. The cooldown does not grow and does not become a permanent ban. A correct
+password clears that identifier. `TRUST_PROXY` must stay false unless a reverse
+proxy in front of the server overwrites `X-Forwarded-For`. All app processes must
+use the same database or the counters will not be shared.
+
+Apply the new migration (`pnpm db:deploy` from the repo, or the server's usual
+migrate step) before expecting sign-in limits to work. Rebuild and reinstall the
+admin app so the role control is gone. The player app already shows the server's
+cooldown sentence and does not have to be rebuilt for that text.
+
+### Staff password
+The staff login refuses the seed's default password (`admin123`), because it is public.
+Set a strong one (12+ characters) on the server, after `OWNER_USER_IDS` includes that
+account. The script below is the one to use. It refuses anyone who is not an owner,
+ends their staff sessions and game logins, and does not print the password into the
+audit log:
+```bash
+cd ~/snooker/packages/server
+npx tsx --env-file=.env scripts/set-admin-password.ts --email you@example.com --generate
 sudo systemctl restart snooker
 ```
 
@@ -252,7 +291,7 @@ docker exec -it snooker-postgres psql -U snooker -c "UPDATE \"User\" SET status=
 
 ### What the server does
 - Password reset needs a 10-minute, single-use token from the "forgot password" step;
-  staff accounts can never be reset that way. A reset signs the account out everywhere.
+  owner accounts can never be reset that way. A reset signs the account out everywhere.
 - New passwords: 8+ characters, hashed with bcrypt (cost 12).
 - Withdrawals ask for the account password every time.
 - Per-address limits: login 20 per 5 min, sign-up 10 per hour, forgot/reset 5-10 per

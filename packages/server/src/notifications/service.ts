@@ -1,4 +1,5 @@
 import { prisma } from '../db/index.js'
+import { ownerUserIds } from '../auth/owners.js'
 
 export interface NotificationData {
   id: string
@@ -32,18 +33,16 @@ export async function notify(userId: string, kind: string, title: string, body?:
   }
 }
 
-/** Admin roles that receive deposit (and future ops) notifications. */
-const ADMIN_ROLES = ['ADMIN', 'SUPERADMIN'] as const
-
 /**
- * Sends the same notification to every active admin account and returns how many
- * rows were created. Admin users only read these from the admin app (the mobile
- * admin app is wired later) - but writing them here means no other system has to
- * be reachable for a deposit request to raise a flag.
+ * Sends the same notification to every active owner account and returns how many
+ * rows were created. Owner accounts read these from the admin app. Writing them
+ * here means no other system has to be reachable for a deposit request to raise a flag.
  */
 export async function notifyAdmins(kind: string, title: string, body?: string): Promise<number> {
+  const ids = ownerUserIds()
+  if (ids.length === 0) return 0
   const admins = await prisma.user.findMany({
-    where: { role: { in: [...ADMIN_ROLES] }, status: 'ACTIVE' },
+    where: { id: { in: ids }, status: 'ACTIVE' },
     select: { id: true }
   })
   for (const admin of admins) await notify(admin.id, kind, title, body)
