@@ -12,6 +12,7 @@ import {
   revokeAllAdminSessions,
   setAdminCookie
 } from './auth.js'
+import { cooldownBody } from '../auth/loginThrottle.js'
 import { authConfigWarnings } from '../auth/warnings.js'
 
 /**
@@ -70,10 +71,8 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
     }
 
     if (result.failure === 'locked') {
-      return reply
-        .code(429)
-        .header('retry-after', String(result.retryAfterSec ?? 60))
-        .send({ ok: false, error: 'invalid credentials', retryAfterSec: result.retryAfterSec })
+      const retryAfterSec = result.retryAfterSec ?? 60
+      return reply.code(429).header('retry-after', String(retryAfterSec)).send(cooldownBody(retryAfterSec))
     }
     if (result.failure === 'ip_blocked') {
       return reply.code(403).send({ ok: false, error: 'not allowed from this address' })

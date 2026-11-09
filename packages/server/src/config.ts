@@ -144,14 +144,20 @@ const envSchema = z.object({
   WITHDRAW_MATCH_SNAPSHOT_COUNT: z.coerce.number().default(5),
 
   // --- Admin access -------------------------------------------------------
-  // Admin signs in with email + password on a route that is not linked from the
-  // public UI, never with Google. There is no second factor: the account's
-  // defence is the password, the per-account/per-IP lockout and the audit trail.
+  // Staff sign-in is email + password for an account id listed in OWNER_USER_IDS
+  // (see auth/owners.ts). A role name does not grant access. There is no second
+  // factor: the defence is that allowlist, the password, the persisted lockout
+  // and the audit trail.
   // Comma-separated allowlist of CIDR-less IP prefixes. Empty means "anywhere",
   // which is the right answer for local dev and a mistake in production, so boot
   // logs a warning when it is empty.
   ADMIN_ALLOWED_IPS: z.string().default(''),
   ADMIN_SESSION_TTL_MIN: z.coerce.number().default(30),
+  // Failed sign-ins before the identifier is cooled down, and how many minutes
+  // that cooldown lasts. Clamped in loginThrottle.ts (attempts 3–20, cooldown
+  // 1–60). The address limit is three times the attempt limit. The same numbers
+  // apply to player sign-in and password recovery. A cooldown does not grow and
+  // does not become permanent.
   ADMIN_MAX_FAILED_ATTEMPTS: z.coerce.number().default(5),
   ADMIN_LOCKOUT_MIN: z.coerce.number().default(15),
   // Browser origins the mobile admin app is served from. Only the Expo web dev

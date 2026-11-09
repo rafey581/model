@@ -106,23 +106,32 @@ the public UI, and the player app has no route or token that can reach it.
 | Revocable access | Sessions are rows in `Session` with `purpose = 'ADMIN'`, keyed by a SHA-256 hash of a 32-byte random token. Deleting the row ends access immediately — a stateless JWT cannot do this. |
 | Not a player token | A separate cookie (`admin_session`, scoped to `/api/admin`) and a guard that requires `purpose = 'ADMIN'`. A stolen player token is rejected on every admin route. |
 | No account enumeration | Identical response for an unknown address and a wrong password. A dummy bcrypt hash is compared when no user exists, so the timing does not give it away either. |
-| Brute force | Failures counted per account **and** per IP, with a lockout that grows with the count. The IP budget is 3× the account budget — an IP is shared by an office or a carrier, and locking one after as few failures as it takes to lock an account would let one fumbled password lock out everyone behind that NAT. |
-| Audit | Every attempt lands in `AdminAction`; the player login route refusing an admin is recorded too, because that is either a mistake or a probe. |
+| Who is staff | `OWNER_USER_IDS`, a comma-separated list of account ids. Empty means nobody. A role of ADMIN or SUPERADMIN does not grant access, and the server never picks an account by email, age or role. |
+| Brute force | Failures for player sign-in, staff sign-in and password recovery are rows in `LoginThrottle`, so they survive a restart and are shared by every process using the same database. Defaults: 5 failures on the typed identifier and 15 on the client address, then a fixed 15 minute cooldown. The cooldown does not grow and further guesses do not extend it. A correct password clears that identifier only. |
+| Address | The counter uses `request.ip`. `TRUST_PROXY` defaults to false, so a client-supplied `X-Forwarded-For` is ignored. Set it true only behind a proxy that overwrites that header. |
+| Audit | Every staff attempt lands in `AdminAction`. The player login route refusing an owner is recorded too. Passwords are not written there. |
 | Network scoping | Optional `ADMIN_ALLOWED_IPS` allowlist. Empty means any IP, and boot logs a warning while it is empty. |
 
 ### Credentials
 
-Sign-in is **email + password, in one step**. There is no authenticator app and no
-second factor: `POST /api/admin/auth/login` returns the session (cookie and bearer
-token) as soon as the password verifies, and the lockout, IP allowlist and audit
-trail above are the account's protection. A correct password on an admin account is
-also refused by the player login route.
+Sign-in is **email + password, in one step**, and only for an id in `OWNER_USER_IDS`.
+There is no authenticator app and no second factor. `POST /api/admin/auth/login`
+returns the session (cookie and bearer token) when the password verifies and the
+account is on that list. A correct password on any other account gets the same
+`invalid credentials` response as a wrong password. The owner account is refused
+by the player login route. Anyone else, including an account whose role is still
+ADMIN, signs in as a player.
+
+On startup every staff session whose user is not on the list is deleted. A request
+with a leftover token is rejected and that session row is deleted as well.
 
 ## Local setup
 
 The seeded accounts (`admin@snooker.test`, `player@snooker.test`, `player2@snooker.test`)
 use passwords and are seeded by `pnpm db:seed`, which takes `SEED_ADMIN_PASSWORD`.
-The seeded admin signs in with its email and password.
+Seeding does not put anyone on `OWNER_USER_IDS`. The seed prints the admin account
+id so it can be copied into that variable if, and only if, that account is the one
+that should operate the admin app.
 
 With SMTP not configured, verification codes are printed to the server log — search
 the output for the six-digit code. To try real delivery, set `SMTP_HOST`, `SMTP_PORT`,
@@ -136,12 +145,15 @@ cannot be changed by re-seeding or recovered from the database. If it is lost:
 
 ```bash
 cd packages/server
-pnpm exec tsx scripts/set-admin-password.ts --email admin@snooker.test --generate
+pnpm exec tsx scripts/show-user-id.ts --email you@example.com
+# put that id in OWNER_USER_IDS and restart, then:
+pnpm exec tsx scripts/set-admin-password.ts --email you@example.com --generate
 ```
 
-`--generate` prints a 160-bit password once. The script refuses non-admin
-accounts and short passwords and never writes the password or its hash into the
-audit trail.
+`--generate` prints a 160-bit password once. The script refuses any account that
+is not in `OWNER_USER_IDS`, refuses short passwords, ends that account's staff
+sessions and player logins, and never writes the password or its hash into the
+audit trail. It prints the id and changes nothing when the account is not an owner.
 
 ## Internal registration
 

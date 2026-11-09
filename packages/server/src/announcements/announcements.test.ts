@@ -5,6 +5,7 @@ import { prisma } from '../db/index.js'
 import { buildApp } from '../app.js'
 import { signToken } from '../auth/guards.js'
 import { resetLockouts, revokeAllAdminSessions } from '../admin/auth.js'
+import { bindOwnerUserIds } from '../auth/owners.js'
 import { setAnnouncementBroadcaster, type AnnouncementData } from './service.js'
 
 /** Announcements over HTTP: staff send, every player reads, live broadcast, withdraw. */
@@ -33,7 +34,8 @@ beforeAll(async () => {
   })
   playerId = player.id
   playerAuth = `Bearer ${signToken({ id: player.id, username: player.username, role: player.role, status: player.status })}`
-  resetLockouts()
+  bindOwnerUserIds([adminId])
+  await resetLockouts()
   const login = await app.inject({ method: 'POST', url: '/api/admin/auth/login', payload: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD } })
   expect(login.statusCode).toBe(200)
   adminToken = (login.json() as { data: { token: string } }).data.token
@@ -41,6 +43,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  bindOwnerUserIds([])
   setAnnouncementBroadcaster(null)
   await prisma.announcement.deleteMany({ where: { id: { in: created } } })
   await revokeAllAdminSessions(adminId)

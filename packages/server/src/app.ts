@@ -13,8 +13,9 @@ import { registerMatchRoutes } from './matches/routes.js'
 import { registerTournamentRoutes } from './tournaments/routes.js'
 import { registerAdminRoutes } from './admin/routes.js'
 import { registerAdminAuthRoutes } from './admin/auth-routes.js'
-import { purgeExpiredSessions } from './admin/auth.js'
+import { purgeExpiredSessions, revokeNonOwnerAdminSessions } from './admin/auth.js'
 import { authConfigWarnings } from './auth/warnings.js'
+import { ownerAccountWarning } from './auth/owners.js'
 import { registerCryptoRoutes } from './crypto/index.js'
 import { registerFriendRoutes } from './friends/routes.js'
 import { registerChallengeRoutes } from './challenges/routes.js'
@@ -166,10 +167,14 @@ export async function buildApp() {
   // request, so the table reflects only live access.
   const purged = await purgeExpiredSessions()
   if (purged > 0) app.log.info({ count: purged }, 'purged expired admin sessions')
+  const dropped = await revokeNonOwnerAdminSessions()
+  if (dropped > 0) app.log.info({ count: dropped }, 'revoked staff sessions that are not the configured owner')
 
   for (const warning of authConfigWarnings()) {
     app.log.warn(warning)
   }
+  const ownerWarning = await ownerAccountWarning()
+  if (ownerWarning) app.log.warn(ownerWarning)
 
   return app
 }

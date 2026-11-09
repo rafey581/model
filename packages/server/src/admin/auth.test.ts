@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify'
 import { prisma } from '../db/index.js'
 import { buildApp } from '../app.js'
 import { resetLockouts, revokeAllAdminSessions } from './auth.js'
+import { bindOwnerUserIds } from '../auth/owners.js'
 
 /**
  * Admin access, asserted through the real HTTP surface.
@@ -60,17 +61,20 @@ beforeAll(async () => {
     }
   })
   playerId = player.id
+  bindOwnerUserIds([adminId])
 })
 
 // Lockout state is module-global by design (it has to survive across requests), so
 // every test starts from a clean slate. Without this the lockout test would leave
 // 127.0.0.1 locked and take the rest of the suite down with it - which is the
 // behaviour working as intended, just not what these other tests want.
-beforeEach(() => {
-  resetLockouts()
+beforeEach(async () => {
+  await resetLockouts()
 })
 
 afterAll(async () => {
+  bindOwnerUserIds([])
+  await resetLockouts()
   await revokeAllAdminSessions(adminId)
   await prisma.adminAction.deleteMany({ where: { meta: { path: ['email'], equals: ADMIN_EMAIL } } })
   await prisma.user.deleteMany({ where: { id: { in: [adminId, playerId] } } })
@@ -151,17 +155,19 @@ describe('admin login', () => {
 describe('lockout', () => {
   it('locks the account after the configured number of failures', async () => {
     const email = `lock-${TAG}@test.local`
-    let lastStatus = 0
-    for (let i = 0; i < 5; i += 1) {
+    const statuses: number[] = []
+    for (let i = 0; i < 4; i += 1) {
       const res = await app.inject({
         method: 'POST',
         url: '/api/admin/auth/login',
         payload: { email, password: `wrong-${i}` }
       })
-      lastStatus = res.statusCode
+      statuses.push(res.statusCode)
     }
-    expect(lastStatus).toBe(401)
-    // The 6th attempt is refused regardless of the password, with a retry hint.
+    expect(statuses).toEqual([401, 401, 401, 401])
+    // The attempt that reaches the limit is refused, with a retry hint.
+    // The body matches a locked unknown identifier: it does not say whether the
+    // address exists.
     const locked = await app.inject({
       method: 'POST',
       url: '/api/admin/auth/login',
@@ -169,6 +175,13 @@ describe('lockout', () => {
     })
     expect(locked.statusCode).toBe(429)
     expect(locked.headers['retry-after']).toBeDefined()
+    expect(locked.json()).toMatchObject({ code: 'login_cooldown' })
+    const still = await app.inject({
+      method: 'POST',
+      url: '/api/admin/auth/login',
+      payload: { email, password: ADMIN_PASSWORD }
+    })
+    expect(still.statusCode).toBe(429)
   })
 })
 

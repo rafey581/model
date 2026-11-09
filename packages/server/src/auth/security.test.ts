@@ -6,6 +6,8 @@ import { prisma } from '../db/index.js'
 import { buildApp } from '../app.js'
 import { config } from '../config.js'
 import { runInTransaction, ledger } from '../wallet/service.js'
+import { bindOwnerUserIds } from './owners.js'
+import { resetLoginThrottles } from './loginThrottle.js'
 
 /**
  * Account takeover defences, over HTTP.
@@ -49,6 +51,8 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  bindOwnerUserIds([])
+  await resetLoginThrottles()
   await prisma.cryptoWithdrawal.deleteMany({ where: { userId: { in: userIds } } })
   await prisma.user.deleteMany({ where: { id: { in: userIds } } })
   await app.close()
@@ -108,8 +112,9 @@ describe('password reset', () => {
     expect((await login(owner.username, PASSWORD)).statusCode).toBe(401)
   })
 
-  it('never issues a reset for a staff account', async () => {
+  it('never issues a reset for an owner account', async () => {
     const staff = await player('staffer', { role: 'SUPERADMIN' })
+    bindOwnerUserIds([staff.id])
     const forgot = await app.inject({
       method: 'POST',
       url: '/api/auth/password/forgot',
@@ -117,6 +122,7 @@ describe('password reset', () => {
     })
     expect(forgot.statusCode).toBe(400)
     expect(JSON.stringify(forgot.json())).not.toContain('resetToken')
+    bindOwnerUserIds([])
   })
 })
 
@@ -134,9 +140,12 @@ describe('forgot password needs every detail', () => {
     ]
     for (const payload of attempts) {
       const res = await app.inject({ method: 'POST', url: '/api/auth/password/forgot', payload })
-      expect(res.statusCode).toBe(400)
+      expect([400, 429]).toContain(res.statusCode)
       expect(JSON.stringify(res.json())).not.toContain('resetToken')
     }
+    // The mismatches above share one identifier, and five of them start the
+    // recovery cooldown. Clear it so the matching details can still be checked.
+    await resetLoginThrottles()
     // Capitals and extra spaces in the name do not matter.
     const ok = await app.inject({ method: 'POST', url: '/api/auth/password/forgot', payload: { ...all, name: '  test   PERSON ' } })
     expect(ok.statusCode).toBe(200)
@@ -201,9 +210,11 @@ describe('the public default password', () => {
       data: { email: `boss-${TAG}@test.local`, username: `boss${TAG}`.slice(0, 24), passwordHash: bcrypt.hashSync('admin123', 4), role: 'SUPERADMIN', status: 'ACTIVE', wallet: { create: { available: 0 } } }
     })
     userIds.push(staff.id)
+    bindOwnerUserIds([staff.id])
     const asStaff = await app.inject({ method: 'POST', url: '/api/admin/auth/login', payload: { email: staff.email, password: 'admin123' } })
     expect(asStaff.statusCode).toBe(403)
     expect(JSON.stringify(asStaff.json())).not.toContain('token')
+    bindOwnerUserIds([])
     await prisma.adminAction.deleteMany({ where: { adminId: { in: [staff.id] } } })
   })
 })
@@ -239,8 +250,10 @@ describe('rate limits', () => {
         const res = await limited.inject({ method: 'POST', url: '/api/auth/login', payload: { username: `nobody${TAG}`, password: 'wrong' } })
         codes.push(res.statusCode)
       }
-      expect(codes.slice(0, 20).every((c) => c === 401)).toBe(true)
-      expect(codes[21]).toBe(429)
+      // The persisted identifier limit (5) answers before the in-memory route cap.
+      expect(codes.slice(0, 4).every((c) => c === 401)).toBe(true)
+      expect(codes[4]).toBe(429)
+      expect(codes[5]).toBe(429)
     } finally {
       await limited.close()
       vi.unstubAllEnvs()

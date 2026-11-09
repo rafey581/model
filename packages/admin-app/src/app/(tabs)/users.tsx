@@ -4,8 +4,8 @@ import { api } from '@/lib/api'
 import { useAsync } from '@/hooks/useAsync'
 import { formatAmount, formatDate, formatRelative } from '@/lib/format'
 import { deviceTimeZone } from '@/lib/timezone'
-import type { AdminUser, UserRole, UserStatus } from '@/lib/types'
-import { USER_ROLES, USER_STATUSES } from '@/lib/types'
+import type { AdminUser, UserStatus } from '@/lib/types'
+import { USER_STATUSES } from '@/lib/types'
 import { Button, Card, Empty, ErrorState, Loading, Pill, Row, Screen, ScreenTitle } from '@/components/ui'
 import { FilterChips } from '@/components/FilterChips'
 import { AdjustWalletModal } from '@/components/AdjustWalletModal'
@@ -30,8 +30,8 @@ const FILTERS: Array<{ value: UserFilter; label: string }> = [
  *
  * Search and filters run on the server across every account (by username, email,
  * phone or id), settling 300 ms after typing stops so a word is one request, not one
- * per letter. Role and status changes confirm first when they are destructive,
- * because suspending the wrong account is worse than a tap.
+ * per letter. Suspending or banning confirms first, because locking the wrong
+ * account is worse than a tap. Staff access is not granted here.
  */
 export default function UsersScreen() {
   const [query, setQuery] = useState('')
@@ -57,8 +57,8 @@ export default function UsersScreen() {
 
   const filtered = state.data ?? []
 
-  const patch = async (user: AdminUser, change: { status?: UserStatus; role?: UserRole }): Promise<void> => {
-    if (change.status === 'BANNED') {
+  const patch = async (user: AdminUser, status: UserStatus): Promise<void> => {
+    if (status === 'BANNED') {
       const result = await dialog.confirm({
         title: 'Ban this player?',
         message: `${user.username} will not be able to sign in or play until unbanned.`,
@@ -69,7 +69,7 @@ export default function UsersScreen() {
     }
     setBusyId(user.id)
     try {
-      await api('/admin/users', { method: 'PATCH', body: { userId: user.id, ...change } })
+      await api('/admin/users', { method: 'PATCH', body: { userId: user.id, status } })
       toast.show(`${user.username} updated`, 'success')
       state.reload()
     } catch (caught) {
@@ -91,7 +91,7 @@ export default function UsersScreen() {
     <Screen refreshing={state.refreshing} onRefresh={state.reload}>
       <ScreenTitle
         title="Users"
-        subtitle={state.data ? `${filtered.length}${filtered.length >= 200 ? '+' : ''} shown` : 'Loading...'}
+        subtitle={state.data ? `${filtered.length}${filtered.length >= 200 ? '+' : ''} shown. Status only. Staff access is not granted here.` : 'Loading...'}
       />
       <TextInput
         value={query}
@@ -128,17 +128,12 @@ export default function UsersScreen() {
           {user.level !== undefined ? <Row label="Level" value={String(user.level)} /> : null}
           <Row label="Joined" value={formatDate(user.createdAt)} />
 
-          <Text style={styles.groupLabel}>Role</Text>
-          <FilterChips
-            value={user.role as UserRole}
-            options={USER_ROLES.map((role) => ({ value: role, label: role }))}
-            onChange={(role) => void patch(user, { role })}
-          />
+          <Row label="Role" value={user.role} />
           <Text style={styles.groupLabel}>Status</Text>
           <FilterChips
             value={user.status as UserStatus}
-            options={USER_STATUSES.map((status) => ({ value: status, label: status }))}
-            onChange={(status) => void patch(user, { status })}
+            options={USER_STATUSES.map((item) => ({ value: item, label: item }))}
+            onChange={(status) => void patch(user, status)}
           />
 
           <Button

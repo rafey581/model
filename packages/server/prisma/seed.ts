@@ -53,7 +53,13 @@ async function main(): Promise<void> {
   // Two demo players for local testing only. On a live server they would be accounts
   // anyone can log into (they share the seed password), so production gets none.
   if (process.env.NODE_ENV === 'production') {
-    console.log('seeded:', { admin: admin.username, demoPlayers: 'skipped (production)', usesDefaultPassword: seedPassword === 'admin123' })
+    console.log('seeded:', {
+    admin: admin.username,
+    adminId: admin.id,
+    demoPlayers: 'skipped (production)',
+    usesDefaultPassword: seedPassword === 'admin123',
+    staffAccess: 'not granted by this seed. Set OWNER_USER_IDS to adminId only if this account should be the owner, then restart.'
+  })
     return
   }
 
@@ -90,7 +96,14 @@ async function main(): Promise<void> {
   await ensureOpeningLedger(player.id, config.START_BALANCE, 'welcome balance (USDT)')
   await ensureOpeningLedger(player2.id, config.START_BALANCE, 'welcome balance (USDT)')
 
-  console.log('seeded:', { admin: admin.username, player: player.username, player2: player2.username, usesDefaultPassword: seedPassword === 'admin123' })
+  console.log('seeded:', {
+    admin: admin.username,
+    adminId: admin.id,
+    player: player.username,
+    player2: player2.username,
+    usesDefaultPassword: seedPassword === 'admin123',
+    staffAccess: 'not granted by this seed. Set OWNER_USER_IDS to adminId only if this account should be the owner, then restart.'
+  })
 }
 
 main()

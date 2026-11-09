@@ -138,6 +138,23 @@ model Session {
   @@index([expiresAt])
 }
 
+/// Failed sign-in counters. One row per surface (player, staff, recovery),
+/// kind (account or ip) and hashed key. The raw email, username and address
+/// are not stored. A lock is a fixed cooldown, never a permanent ban.
+model LoginThrottle {
+  id          String    @id
+  surface     String
+  kind        String
+  keyHash     String
+  failures    Int       @default(0)
+  windowStart DateTime  @default(now())
+  lockedUntil DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([surface, kind, keyHash])
+  @@index([lockedUntil])
+}
+
 model Wallet {
   id        String   @id @default(cuid())
   userId    String   @unique
